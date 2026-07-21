@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Refuse to push any ref descended from Ristretto's private-history root.
+set -euo pipefail
+
+private_root="${RISTRETTO_PRIVATE_ROOT_COMMIT:-4ebdb7a3919a48cba84bf39ccd424fcdd9221210}"
+zero=0000000000000000000000000000000000000000
+
+# The sentinel is deliberately absent from a history-free public export.
+if ! git cat-file -e "${private_root}^{commit}" 2>/dev/null; then
+  exit 0
+fi
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ -n "${local_sha:-}" ] || continue
+  [ "$local_sha" != "$zero" ] || continue
+  if git merge-base --is-ancestor "$private_root" "$local_sha" 2>/dev/null; then
+    cat >&2 <<'EOF'
+PUSH BLOCKED: this ref contains Ristretto's private Git history.
+
+Never attach a public remote to this repository. Create a fresh history with:
+  scripts/export-public.sh /absolute/path/to/new-public-repo
+
+Then configure a privacy-safe Git identity and push only from that export.
+EOF
+    exit 1
+  fi
+done
+
+exit 0

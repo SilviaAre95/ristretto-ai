@@ -1,0 +1,37 @@
+---
+id: config-in-repo
+title: Config In Repo
+status: implemented  # proposed | in-progress | implemented | deprecated
+created_at: 2026-07-05
+last_modified: 2026-07-17
+owner: project
+depends_on: []
+acceptance_criteria:
+  - Public Hermes baselines, skills, scripts, and examples have canonical sources under `hermes/`
+  - "`~/.hermes/.env` is never committed"
+  - "`git grep xoxb-` is clean"
+non_goals:
+  - NOT committing secrets
+  - NOT versioning the Hermes engine code or runtime state
+---
+
+# Config In Repo
+
+## Summary
+
+Public Hermes baselines and Ristretto behavior are versioned in the repository. The installer copies or links only managed assets while user configuration, credentials, runtime state, and jobs remain local.
+
+## Behavior
+
+`hermes/SOUL.md`, `hermes/config.yaml`, skills, scripts, and `jobs.example.json` are public inputs. Existing user config and persona are never overwritten. Skills are linked as managed code; cron scripts are copied because Hermes requires them inside `~/.hermes/scripts`. Secrets remain only in `~/.hermes/.env`. Live cron state is never tracked.
+
+## Out of scope
+
+- NOT committing secrets: no token, password, or credential is ever added to the repo; `.env` and equivalent files are gitignored and excluded by convention, not just by accident.
+- NOT versioning the Hermes engine code or runtime state: the Hermes Agent runtime itself (the open-source engine) and its runtime/session state are not tracked in this repo — only the config that customizes it.
+
+## Open questions
+
+## Implementation notes (optional)
+
+See the installation section in `README.md`.

@@ -1,0 +1,46 @@
+# Secrets — NEVER commit. Hermes keeps these in ~/.hermes/.env, not here.
+.env
+.env.*
+!.env.example
+*.local
+secrets/
+*.pem
+*.key
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+.ristretto/
+
+# Local planning and agent-run artifacts
+HANDOVER.md
+.superpowers/
+STATE.md
+docs/linear-backfill-draft.md
+docs/superpowers/
+docs/01-plan.md
+docs/02-phase1-setup.md
+docs/04-hermes-config-in-repo.md
+docs/05-durable-work-runbook.md
+docs/features/*.CHANGELOG.md
+
+# Slack/Linear tokens if ever dropped locally
+*xoxb-*
+*xapp-*
+
+# Hermes cron runtime state (locks/heartbeats — not config)
+hermes/cron/.*.lock
+hermes/cron/*.lock
+hermes/cron/ticker_*
+hermes/cron/jobs.json
+
+# OS / editor
+.DS_Store
+.obsidian/
+*.swp
+
+# Hermes cron run output (runtime, not config)
+hermes/cron/output/

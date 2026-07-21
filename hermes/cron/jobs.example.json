@@ -1,0 +1,11 @@
+{
+  "jobs": [
+    {
+      "name": "Morning brief",
+      "schedule": "0 8 * * *",
+      "script": "morning-brief-precheck.py",
+      "deliver": "slack:YOUR_CHANNEL_ID",
+      "prompt": "Use the precheck output as the authoritative Linear snapshot. Reply exactly [SILENT] when it is exactly NO_CHANGES. Otherwise write a short priority-led brief and ask what the user wants to work on. Do not mutate Linear."
+    }
+  ]
+}

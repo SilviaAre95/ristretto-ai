@@ -1,0 +1,61 @@
+# Public Hermes baseline. The installer copies this file into the user's
+# HERMES_HOME; it is never symlinked to live runtime state.
+model:
+  default: qwen3.6:27b
+  provider: custom
+  base_url: http://localhost:11434/v1
+agent:
+  max_turns: 60
+  verbose: false
+  reasoning_effort: medium
+terminal:
+  backend: local
+  cwd: .
+  timeout: 180
+  home_mode: auto
+  lifetime_seconds: 300
+tool_loop_guardrails:
+  warnings_enabled: true
+  hard_stop_enabled: true
+  warn_after:
+    exact_failure: 2
+    same_tool_failure: 3
+    idempotent_no_progress: 2
+  hard_stop_after:
+    exact_failure: 5
+    same_tool_failure: 8
+    idempotent_no_progress: 5
+compression:
+  enabled: true
+  threshold: 0.5
+  target_ratio: 0.2
+  protect_last_n: 20
+  protect_first_n: 3
+memory:
+  memory_enabled: true
+  user_profile_enabled: true
+  memory_char_limit: 2200
+  user_char_limit: 1375
+  nudge_interval: 10
+  flush_min_turns: 6
+session_reset:
+  mode: both
+  idle_minutes: 180
+  at_hour: 4
+group_sessions_per_user: true
+platform_toolsets:
+  cli: [hermes-cli]
+  cron: [no_mcp]
+  slack: [hermes-slack]
+mcp_servers:
+  linear:
+    url: https://mcp.linear.app/mcp
+    auth: oauth
+    enabled: true
+kanban:
+  # Local coding models can saturate a workstation. Increase only after
+  # measuring memory and thermal behavior.
+  max_in_progress: 1
+  # A blocked task requires deliberate user action to resume.
+  auto_decompose: false
+_config_version: 33

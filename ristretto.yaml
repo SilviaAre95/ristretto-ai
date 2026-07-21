@@ -1,0 +1,154 @@
+schema_version: 1
+default_flow: classic
+base_branch: main
+
+# Public, non-secret defaults. A user installation copies this file to
+# ~/.config/ristretto/config.yaml and customizes it there.
+instance:
+  name: Ris
+  linear_team_env: RISTRETTO_LINEAR_TEAM
+  slack_home_channel_env: SLACK_HOME_CHANNEL
+  slack_prs_channel_env: RISTRETTO_SLACK_PRS_CHANNEL
+  slack_alerts_channel_env: RISTRETTO_SLACK_ALERTS_CHANNEL
+  knowledge_vault_env: RISTRETTO_KNOWLEDGE_VAULT
+
+# Map the Linear project names used by your team to local repositories in your
+# user-owned config. Example:
+# repositories:
+#   Example App: ~/code/example-app
+repositories: {}
+
+providers:
+  claude:
+    runner: claude-code
+    model: sonnet
+    fallback: local
+  local:
+    runner: claude-code
+    model: qwen3-coder:30b
+    model_env: RIS_LOCAL_LOOP_MODEL
+    base_url: http://localhost:11434
+    # Non-secret compatibility placeholder required by Ollama's local API.
+    # Real provider credentials must use auth_token_env, never auth_token.
+    auth_token: ollama
+  codex:
+    runner: codex
+
+flows:
+  classic:
+    description: Existing Claude /loop-dev with automatic local fallback.
+    builtin: classic
+
+  balanced:
+    description: Claude plans, a local model builds and repairs, Codex reviews.
+    stages:
+      - id: plan
+        role: plan
+        provider: claude
+        mutates: false
+        output: plan.md
+      - id: build
+        role: build
+        provider: local
+        mutates: true
+        inputs: [plan.md]
+        output: build.md
+      - id: review
+        role: review
+        provider: codex
+        mutates: false
+        inputs: [plan.md, build.md]
+        output: review.md
+      - id: repair
+        role: repair
+        provider: local
+        mutates: true
+        inputs: [plan.md, review.md]
+        output: repair.md
+      - id: verify
+        role: verify
+        provider: builtin
+        mutates: false
+        output: verify.txt
+      - id: finish
+        role: pr
+        provider: claude
+        mutates: true
+        inputs: [plan.md, review.md, repair.md, verify.txt]
+        output: finish.md
+
+  quality:
+    description: Claude plans/builds/repairs and Codex supplies independent review.
+    stages:
+      - id: plan
+        role: plan
+        provider: claude
+        mutates: false
+        output: plan.md
+      - id: build
+        role: build
+        provider: claude
+        mutates: true
+        inputs: [plan.md]
+        output: build.md
+      - id: review
+        role: review
+        provider: codex
+        mutates: false
+        inputs: [plan.md, build.md]
+        output: review.md
+      - id: repair
+        role: repair
+        provider: claude
+        mutates: true
+        inputs: [plan.md, review.md]
+        output: repair.md
+      - id: verify
+        role: verify
+        provider: builtin
+        mutates: false
+        output: verify.txt
+      - id: finish
+        role: pr
+        provider: claude
+        mutates: true
+        inputs: [plan.md, review.md, repair.md, verify.txt]
+        output: finish.md
+
+  local:
+    description: Local-model plan/build/review/repair with deterministic verification.
+    stages:
+      - id: plan
+        role: plan
+        provider: local
+        mutates: false
+        output: plan.md
+      - id: build
+        role: build
+        provider: local
+        mutates: true
+        inputs: [plan.md]
+        output: build.md
+      - id: review
+        role: review
+        provider: local
+        mutates: false
+        inputs: [plan.md, build.md]
+        output: review.md
+      - id: repair
+        role: repair
+        provider: local
+        mutates: true
+        inputs: [plan.md, review.md]
+        output: repair.md
+      - id: verify
+        role: verify
+        provider: builtin
+        mutates: false
+        output: verify.txt
+      - id: finish
+        role: pr
+        provider: local
+        mutates: true
+        inputs: [plan.md, review.md, repair.md, verify.txt]
+        output: finish.md
