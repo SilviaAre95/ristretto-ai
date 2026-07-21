@@ -11,6 +11,9 @@ assistant** built on the open-source Hermes Agent runtime. Ris talks in Slack,
 tracks configured work in Linear, runs supervised coding tasks in durable
 workers, and requests approval before risky actions.
 
+> **New here?** Follow the step-by-step
+> [Getting Started guide](docs/getting-started.md).
+>
 > Pre-release `0.1.0`. See [`docs/project-status.md`](docs/project-status.md)
 > and [`docs/open-source-readiness.md`](docs/open-source-readiness.md).
 
@@ -46,6 +49,7 @@ flowchart LR
 | `ristretto/` | Configuration, CLI, doctor, and multi-stage flow runner. |
 | `hermes/` | Public Hermes baseline, skills, scripts, tests, and cron example. |
 | `slack/` | Generic Slack application manifest. |
+| `docs/getting-started.md` | Step-by-step setup for a new instance. |
 | `docs/features/` | Behavior contracts and explicit non-goals. |
 | `docs/development.md` | Contributor environment and verification. |
 | `docs/releases.md` | Versioning and release procedure. |
