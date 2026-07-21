@@ -7,6 +7,10 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-07-21
+
+Initial open-source release.
+
 ### Security
 
 - Pin `.cc-verify` before model stages and refuse modified verification gates.
@@ -25,7 +29,4 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - User-owned instance and repository configuration with environment overrides.
 - Idempotent Hermes asset/worker/cron installer with explicit service opt-in.
 - Private/public repository split and history-free public snapshot exporter.
-
-## [0.1.0] - TBD
-
-- Initial open-source release.
+- Getting-started guide and illustrated README.
