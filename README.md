@@ -1,24 +1,44 @@
 # ☕ Ristretto AI
 
-Ristretto is a configurable, always-on personal operations assistant built on
-the open-source Hermes Agent runtime. Ris talks in Slack, tracks configured
-work in Linear, runs supervised coding tasks in durable workers, and requests
-approval before risky actions.
+[![CI](https://github.com/SilviaAre95/ristretto-ai/actions/workflows/ci.yml/badge.svg)](https://github.com/SilviaAre95/ristretto-ai/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Python 3.11](https://img.shields.io/badge/python-3.11-blue?logo=python&logoColor=white)](#-development)
+[![Status](https://img.shields.io/badge/status-pre--release_0.1.0-orange)](docs/project-status.md)
+[![Platform](https://img.shields.io/badge/platform-macOS-lightgrey?logo=apple)](docs/development.md)
+
+**Ristretto ("Ris") is a configurable, always-on personal operations
+assistant** built on the open-source Hermes Agent runtime. Ris talks in Slack,
+tracks configured work in Linear, runs supervised coding tasks in durable
+workers, and requests approval before risky actions.
 
 > Pre-release `0.1.0`. See [`docs/project-status.md`](docs/project-status.md)
 > and [`docs/open-source-readiness.md`](docs/open-source-readiness.md).
 
-## Highlights
+## ✨ Highlights
 
-- Local-first orchestrator through Ollama.
-- Slack Socket Mode with an explicit user allowlist.
-- Linear-backed morning brief with unchanged-board suppression.
-- Crash-safe, one-at-a-time coding workers using feature branches and PRs.
-- Named/custom model flows with enforced read-only planning and review.
-- No auto-merge; production, destructive, costly, and secret-bearing actions
-  remain approval-gated.
+- 🏠 **Local-first** orchestrator through Ollama.
+- 💬 **Slack Socket Mode** with an explicit user allowlist.
+- 📋 **Linear-backed morning brief** with unchanged-board suppression.
+- 🔁 **Crash-safe, one-at-a-time coding workers** using feature branches and
+  pull requests.
+- 🧩 **Named/custom model flows** with enforced read-only planning and review.
+- 🔒 **No auto-merge** — production, destructive, costly, and secret-bearing
+  actions remain approval-gated.
 
-## Repository map
+## 🗺️ How it works
+
+```mermaid
+flowchart LR
+    U([You]) <-->|Slack| G["Hermes gateway<br/>(local model via Ollama)"]
+    G <-->|briefs and updates| LIN[Linear]
+    G -->|queues one task at a time| W[Durable coding worker]
+    W -->|plan, build, review, repair, verify| PR[Feature branch and PR]
+    PR -->|milestone| U
+    G -.->|risky action| AP{Approval gate}
+    AP -.->|approve or deny in Slack| U
+```
+
+## 📁 Repository map
 
 | Path | Purpose |
 |---|---|
@@ -34,7 +54,7 @@ approval before risky actions.
 Personal runtime state, issue exports, channel IDs, repository mappings,
 credentials, logs, and knowledge-vault content are deliberately excluded.
 
-## Development
+## 🛠️ Development
 
 ```bash
 make setup
@@ -43,7 +63,7 @@ make check
 make public-check
 ```
 
-## Install the CLI
+## 📦 Install the CLI
 
 ```bash
 make install
@@ -58,7 +78,7 @@ under `$XDG_CONFIG_HOME`) and a managed CLI symlink. It does not touch Hermes,
 credentials, or services. `scripts/uninstall.sh` removes the CLI link and
 preserves configuration unless `--purge-config` is explicitly supplied.
 
-## Configure an instance
+## ⚙️ Configure an instance
 
 ```bash
 ristretto configure \
@@ -75,7 +95,7 @@ tokens and `SLACK_ALLOWED_USERS` belong in `~/.hermes/.env`, never here.
 Custom cloud providers must reference tokens through `auth_token_env`; literal
 credentials in `ristretto.yaml` are rejected.
 
-## Install Hermes assets
+## 🪽 Install Hermes assets
 
 After installing and authenticating Hermes Agent:
 
@@ -93,19 +113,19 @@ install and start the service:
 bash scripts/install-hermes.sh --service
 ```
 
-## Coding flows
+## 🔀 Coding flows
 
-- `classic` (default): existing Claude `/harness:loop-dev`, with local fallback
-  only when Claude is unavailable.
-- `balanced`: Claude plan → local build → Codex review → local repair → verify →
-  Claude PR.
-- `quality`: Claude plan/build/repair → Codex review → verify → Claude PR.
-- `local`: local plan/build/review/repair → verify → local PR.
+| Flow | Pipeline |
+|---|---|
+| `classic` (default) | Existing Claude `/harness:loop-dev`, with local fallback only when Claude is unavailable. |
+| `balanced` | Claude plan → local build → Codex review → local repair → verify → Claude PR. |
+| `quality` | Claude plan/build/repair → Codex review → verify → Claude PR. |
+| `local` | Local plan/build/review/repair → verify → local PR. |
 
 Add custom flows using the validated schema in
 [`docs/features/custom-model-flows.md`](docs/features/custom-model-flows.md).
 
-## Safety and publication
+## 🔐 Safety and publication
 
 `make check` runs deterministic tests, parsers, syntax checks, diff hygiene,
 and credential-pattern scans. `make public-check` additionally rejects live
@@ -123,6 +143,18 @@ local pre-push guard that blocks that history if it is ever present. This
 public repository is a fresh snapshot created by `scripts/export-public.sh`;
 see [`docs/open-source-readiness.md`](docs/open-source-readiness.md).
 
-## License
+## 👋 Author
+
+Built by **Silvia Arellano**. I write about data engineering and AI agents on
+Medium.
+
+[![Website](https://img.shields.io/badge/Website-silviadata.dev-2ea44f)](https://silviadata.dev)
+[![Medium](https://img.shields.io/badge/Medium-%40silvia.datadev-12100E?logo=medium&logoColor=white)](https://medium.com/@silvia.datadev)
+[![LinkedIn](https://img.shields.io/badge/LinkedIn-Silvia%20Arellano-0A66C2?logo=linkedin&logoColor=white)](https://linkedin.com/in/silvia-arellano-de)
+[![GitHub](https://img.shields.io/badge/GitHub-SilviaAre95-181717?logo=github&logoColor=white)](https://github.com/SilviaAre95)
+[![Hugging Face](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-silvia--datadev-FFD21E)](https://huggingface.co/silvia-datadev)
+[![Gumroad](https://img.shields.io/badge/Gumroad-silviadatadev-FF90E8?logo=gumroad&logoColor=white)](https://silviadatadev.gumroad.com)
+
+## 📄 License
 
 MIT — see [`LICENSE`](LICENSE).
