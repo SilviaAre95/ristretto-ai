@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import os
 import uuid
-from pathlib import Path
 
 from .spool import Spool
 
@@ -35,9 +34,11 @@ def decide(payload: dict, spool: Spool, timeout_s: float) -> dict:
 
 def main() -> None:  # pragma: no cover - exercised as a live MCP server
     from mcp.server.fastmcp import FastMCP
+    from .config import load_ops_config
 
-    spool = Spool(Path(os.environ.get("RISTRETTO_OPS_SPOOL", "~/.hermes/ops-spool")).expanduser())
-    timeout_s = float(os.environ.get("RISTRETTO_OPS_APPROVAL_TIMEOUT", "600"))
+    cfg = load_ops_config(os.environ)
+    spool = Spool(cfg.spool_dir)
+    timeout_s = cfg.approval_timeout_s
     server = FastMCP("approve")
 
     @server.tool()

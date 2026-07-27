@@ -19,14 +19,14 @@ class FakeClient:
         self.sent.append(("ack", callback_query_id, text))
 
 
-def make_daemon(tmp, spawn):
+def make_daemon(tmp, spawn, allowed={7, 100, 200}):
     cfg = load_ops_config({"RISTRETTO_OPS_SPOOL": str(tmp / "spool"), "RISTRETTO_OPS_AUDIT": str(tmp / "a.log")})
     client = FakeClient()
     daemon = OpsDaemon(
         client=client,
         repos={"kaffecard": str(tmp / "repo")},
         ops_config=cfg,
-        allowed={7},
+        allowed=allowed,
         spawn=spawn,
     )
     return daemon, client, cfg
@@ -130,11 +130,40 @@ class DaemonTest(unittest.TestCase):
 
     def test_callback_writes_decision(self):
         daemon, client, cfg = make_daemon(self.tmp, lambda *a, **k: None)
+        daemon.sessions.start(5, "R", str(self.tmp / "repo"))
         spool = Spool(cfg.spool_dir)
-        spool.write_request("req1", {"tool_name": "Bash", "tool_input": {"command": "x"}})
+        spool.write_request("req1", {"tool_name": "Bash", "tool_input": {"command": "x"}, "cwd": str(self.tmp / "repo")})
         daemon.handle_callback({"id": "cb", "from": {"id": 7}, "data": "a:req1", "message": {"chat": {"id": 5}}})
         decision = spool.await_decision("req1", timeout_s=1)
         self.assertEqual(decision["permissionDecision"], "allow")
+
+    def test_callback_rejected_from_non_owner(self):
+        (self.tmp / "a").mkdir(exist_ok=True)
+        daemon, client, cfg = make_daemon(self.tmp, lambda *a, **k: None)
+        daemon.sessions.start(100, "A", str(self.tmp / "a"))
+        spool = Spool(cfg.spool_dir)
+        spool.write_request("reqA", {"tool_name": "Bash", "tool_input": {"command": "x"}, "cwd": str(self.tmp / "a")})
+        # chat 200 (also allowed) taps a request owned by chat 100's session
+        daemon.handle_callback({"id": "cb", "from": {"id": 200}, "data": "a:reqA", "message": {"chat": {"id": 200}}})
+        self.assertIsNone(spool.await_decision("reqA", timeout_s=0))  # no decision written
+
+    def test_refuses_repo_already_active_in_another_chat(self):
+        spawned = []
+        daemon, client, _ = make_daemon(self.tmp, lambda *a, **k: spawned.append(a))
+        # chat 100 pins kaffecard (repos maps kaffecard -> tmp/repo, created in setUp)
+        daemon.handle_message({"chat": {"id": 100}, "from": {"id": 100}, "text": "kaffecard"})
+        # chat 200 tries the same repo
+        daemon.handle_message({"chat": {"id": 200}, "from": {"id": 200}, "text": "kaffecard"})
+        self.assertIsNone(daemon.sessions.get(200))
+        self.assertIn("already active", client.sent[-1][1].lower())
+
+    def test_launch_failure_reports_to_chat(self):
+        def boom(*a, **k):
+            raise FileNotFoundError("no such dir")
+        daemon, client, _ = make_daemon(self.tmp, boom)
+        daemon.sessions.start(5, "R", str(self.tmp / "repo"))
+        daemon.handle_message({"chat": {"id": 5}, "from": {"id": 7}, "text": "do it"})
+        self.assertIn("couldn't start", client.sent[-1][1].lower())
 
     def test_ignores_unlisted_callback(self):
         daemon, client, cfg = make_daemon(self.tmp, lambda *a, **k: None)

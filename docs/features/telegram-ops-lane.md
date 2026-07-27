@@ -43,5 +43,6 @@ calls are surfaced to your phone. Timeout parks the action as a deny.
 ## Implementation notes
 
 Package `ristretto.ops_lane`. Secrets (`TELEGRAM_BOT_TOKEN`,
-`TELEGRAM_ALLOWED_USERS`) live only in `~/.hermes/.env`. Outcome summaries post
-to team Slack via `hermes send`.
+`TELEGRAM_ALLOWED_USERS`) live only in `~/.hermes/.env`. Outcome summaries to
+team Slack via `hermes send` and streaming Claude Code's result back to
+Telegram are planned but not yet wired.

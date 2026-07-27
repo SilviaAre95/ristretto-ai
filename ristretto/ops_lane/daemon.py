@@ -28,7 +28,6 @@ class OpsDaemon:
         *,
         session_store: SessionStore | None = None,
         spawn=subprocess.Popen,
-        slack_send=None,
     ) -> None:
         self.client = client
         self.repos = repos
@@ -36,7 +35,6 @@ class OpsDaemon:
         self.allowed = allowed
         self.sessions = session_store or SessionStore()
         self.spawn = spawn
-        self.slack_send = slack_send
         self.spool = Spool(ops_config.spool_dir)
         self._rendered: set[str] = set()
 
@@ -58,6 +56,10 @@ class OpsDaemon:
                 )
                 return
             name, path = resolved
+            existing = self._owner_chat(path)
+            if existing is not None and existing != chat_id:
+                self.client.send_message(chat_id, f"{name} is already active in another session. Try again later.")
+                return
             self.sessions.start(chat_id, name, path)
             self.client.send_message(chat_id, f"Session pinned to {name}. Send your task.")
             return
@@ -66,8 +68,13 @@ class OpsDaemon:
     def _launch(self, chat_id: int, workdir: str, prompt: str) -> None:
         mcp_config = write_mcp_config(self.spool.dir, self.cfg.broker_python)
         argv = build_claude_argv(prompt, mcp_config, claude_bin=self.cfg.claude_bin)
+        try:
+            self.spawn(argv, cwd=workdir)
+        except Exception as exc:
+            audit(self.cfg.audit_path, {"event": "launch_failed", "chat": chat_id, "cwd": workdir, "error": str(exc)})
+            self.client.send_message(chat_id, f"Couldn't start in {Path(workdir).name}: {exc}")
+            return
         audit(self.cfg.audit_path, {"event": "launch", "chat": chat_id, "cwd": workdir})
-        self.spawn(argv, cwd=workdir)
         self.client.send_message(chat_id, f"Running in {Path(workdir).name}. I'll ask before gated actions.")
 
     # --- approvals ------------------------------------------------------
@@ -108,16 +115,23 @@ class OpsDaemon:
         if not is_allowed(user_id, self.allowed):
             return
         verb, request_id = self.decode_callback(callback.get("data", ""))
+        cb_id = callback.get("id", "")
         if verb not in ("a", "d") or not request_id:
-            self.client.answer_callback(callback.get("id", ""), text="ignored")
+            self.client.answer_callback(cb_id, text="ignored")
+            return
+        chat_id = callback.get("message", {}).get("chat", {}).get("id")
+        request = self.spool.read_request(request_id)
+        if request is None:
+            self.client.answer_callback(cb_id, text="expired")
+            return
+        if self._owner_chat(request.get("cwd", "")) != chat_id:
+            self.client.answer_callback(cb_id, text="not your request")
+            audit(self.cfg.audit_path, {"event": "decision_rejected", "request": request_id, "chat": chat_id})
             return
         decision = "allow" if verb == "a" else "deny"
-        self.spool.write_decision(
-            request_id, {"permissionDecision": decision, "reason": "Telegram tap."}
-        )
+        self.spool.write_decision(request_id, {"permissionDecision": decision, "reason": "Telegram tap."})
         audit(self.cfg.audit_path, {"event": "decision", "request": request_id, "decision": decision})
-        self.client.answer_callback(callback.get("id", ""), text=decision)
-        chat_id = callback.get("message", {}).get("chat", {}).get("id")
+        self.client.answer_callback(cb_id, text=decision)
         if chat_id is not None:
             self.client.send_message(chat_id, f"{decision.upper()} — {request_id}")
 

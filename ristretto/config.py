@@ -264,7 +264,7 @@ def repository_path(config: Mapping[str, Any], project: str) -> Path:
 
 def repositories(config: Mapping[str, Any]) -> dict[str, str]:
     repos = config.get("repositories") or {}
-    return {str(name): str(path) for name, path in repos.items()}
+    return {str(name): str(Path(str(path)).expanduser()) for name, path in repos.items()}
 
 
 def write_user_config(config: Mapping[str, Any], path: Path) -> None:

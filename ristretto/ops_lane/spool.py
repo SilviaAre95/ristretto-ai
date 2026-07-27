@@ -71,6 +71,12 @@ class Spool:
     def write_decision(self, request_id: str, decision: dict) -> None:
         self._write_atomic(self._decision_path(request_id), decision)
 
+    def read_request(self, request_id: str) -> dict | None:
+        try:
+            return json.loads(self._request_path(request_id).read_text())
+        except (ValueError, OSError):
+            return None
+
     def await_decision(
         self,
         request_id: str,
