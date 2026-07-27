@@ -34,3 +34,4 @@ public-check:
 doctor:
 	hermes doctor
 	hermes gateway status
+	bash scripts/template-drift.sh
