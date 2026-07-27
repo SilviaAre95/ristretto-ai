@@ -3,7 +3,7 @@ id: autonomous-coding
 title: Autonomous Coding
 status: in-progress  # proposed | in-progress | implemented | deprecated
 created_at: 2026-07-05
-last_modified: 2026-07-18
+last_modified: 2026-07-27
 owner: project
 depends_on: [approval-loop]
 acceptance_criteria:
@@ -17,6 +17,7 @@ non_goals:
   - NOT auto-merging
   - NOT acting on employer systems without confirmed authorization
   - NOT running before the approval loop is proven
+  - NOT executed inline in the ops conversation — queued tasks are worker-only
 ---
 
 # Autonomous Coding
@@ -34,5 +35,6 @@ The selected flow never pushes to the base branch unattended. Risky steps pass t
 - NOT auto-merging: opening the PR is as far as this feature goes — merging is a separate, human decision.
 - NOT acting on employer systems without confirmed authorization: those repositories remain out of scope by default.
 - NOT running before the approval loop is proven: this feature depends on the approval loop being proven first and does not operate until then.
+- NOT executed inline in the ops conversation: a queued task is executed only by its dispatched worker. The ops assistant may report, promote, or (on explicit request) cancel a queued task — it never dequeues one to implement it itself.
 
 ## Open questions

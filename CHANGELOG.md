@@ -7,6 +7,18 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Verified-state reporting: the persona and worker skill now require every
+  status claim (edited, committed, pushed, PR open, merged, deployed) to be
+  derived from a fresh command check at message time, with file paths cited
+  as written — a PR the assistant opened is reported as "open, ready for
+  review", never "merged" (the user merges).
+- Lane discipline for queued work: the producer skill now forbids dequeuing
+  a ready task to implement it inline. A request to hurry a queued task
+  means report state and expected worker pickup; `hermes kanban remove` is
+  reserved for explicit user-requested cancellation.
+
 ## [0.1.0] - 2026-07-21
 
 Initial open-source release.

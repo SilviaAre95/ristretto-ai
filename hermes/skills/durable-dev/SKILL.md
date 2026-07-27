@@ -1,7 +1,7 @@
 ---
 name: durable-dev
 description: Use when the user asks for dev work on a Linear issue ("do PROJ-71", "fix PROJ-42", "work on <issue>", "queue <issue>") — queue it as a durable kanban task instead of running the loop inline. Never run /loop-dev inline; never create deploy tasks.
-version: 1.0.0
+version: 1.1.0
 author: Silvia Arellano
 license: MIT
 metadata:
@@ -63,6 +63,16 @@ flow: classic" \
 ## Guardrails
 
 - NEVER run /loop-dev inline in this conversation — queuing is the point.
+- NEVER dequeue a task to implement it yourself. When the user pushes to
+  start a queued task now ("kick it off now", "why is it queued", "start
+  it"), that means *promote, not absorb*: run `hermes kanban show <task_id>`,
+  report its state and that the dispatcher picks up ready tasks on its next
+  poll, and stop. Implementing the task in this conversation — via the loop,
+  ad-hoc edits, or subagents — is forbidden no matter how the ask is phrased.
+- `hermes kanban remove` is for explicit user-requested cancellation only,
+  never a step toward doing the work inline. If the user truly wants inline
+  work, they must first ask to cancel the task — then confirm before
+  proceeding inline, and the deploy guardrail still applies.
 - NEVER create a deploy task. Deploys stay inline with the user present until the phone-approval gate is proven inside a worker. If asked to queue a deploy, explain that and offer the supervised inline flow.
 - A repeated ask for the same issue reuses the same `--idempotency-key` — one task, no duplicate.
 - Move the Linear issue to In Progress after queuing.
