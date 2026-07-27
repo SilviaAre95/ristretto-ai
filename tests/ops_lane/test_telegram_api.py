@@ -1,7 +1,6 @@
 import io
 import json
 import unittest
-from urllib.error import HTTPError
 
 from ristretto.ops_lane.telegram_api import TelegramClient
 
@@ -24,6 +23,7 @@ class TelegramClientTest(unittest.TestCase):
         updates = client.get_updates(offset=None, timeout_s=1)
         self.assertEqual(updates, [{"update_id": 5}])
         self.assertIn("/botTOKEN/getUpdates", fake.calls[0][0])
+        self.assertEqual(fake.calls[0][2], 11)
 
     def test_send_message_includes_inline_keyboard(self):
         fake = FakeUrlopen([{"ok": True, "result": {"message_id": 9}}])
@@ -34,6 +34,15 @@ class TelegramClientTest(unittest.TestCase):
         self.assertEqual(payload["chat_id"], 42)
         keyboard = payload["reply_markup"]["inline_keyboard"]
         self.assertEqual(keyboard[0][0], {"text": "Approve", "callback_data": "a:1"})
+
+    def test_answer_callback(self):
+        fake = FakeUrlopen([{"ok": True, "result": True}])
+        client = TelegramClient("TOKEN", urlopen=fake)
+        client.answer_callback("cbid", text="ok")
+        self.assertIn("/answerCallbackQuery", fake.calls[0][0])
+        _, data, _ = fake.calls[0]
+        payload = json.loads(data.decode())
+        self.assertEqual(payload["callback_query_id"], "cbid")
 
     def test_api_error_raises(self):
         fake = FakeUrlopen([{"ok": False, "description": "bad"}])
