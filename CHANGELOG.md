@@ -7,6 +7,32 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-27
+
+Reliability release: verified-state reporting, queued-task lane discipline,
+and a real user update path.
+
+### Added
+
+- One-command user update path: `make update` pulls the release
+  (`--ff-only`), re-runs the idempotent installers to refresh symlinked
+  assets, reports template drift, and restarts the gateway. The installer
+  now records which template version seeded the user-owned persona/config
+  (`~/.hermes/.template-seeds`); `scripts/template-drift.sh` reports — and
+  never merges — upstream template changes, acknowledged with `--ack`.
+- Release methodology docs: "Upgrade notes" changelog convention and user
+  update path in `docs/releases.md` and `docs/getting-started.md`; placement
+  rule in `CONTRIBUTING.md` (behavioral guardrails live in skills, which
+  propagate on update; voice/personal context lives in the copy-once
+  persona/config seeds).
+
+### Upgrade notes
+
+- The persona template gained verified-state reporting and queued-task
+  rules this cycle (see *Changed*). Existing installs: run
+  `bash scripts/template-drift.sh`, review the printed diff against
+  `~/.hermes/SOUL.md`, port what applies, then acknowledge with `--ack`.
+
 ### Changed
 
 - Verified-state reporting: the persona and worker skill now require every

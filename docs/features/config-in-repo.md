@@ -3,7 +3,7 @@ id: config-in-repo
 title: Config In Repo
 status: implemented  # proposed | in-progress | implemented | deprecated
 created_at: 2026-07-05
-last_modified: 2026-07-17
+last_modified: 2026-07-27
 owner: project
 depends_on: []
 acceptance_criteria:
@@ -24,6 +24,8 @@ Public Hermes baselines and Ristretto behavior are versioned in the repository. 
 ## Behavior
 
 `hermes/SOUL.md`, `hermes/config.yaml`, skills, scripts, and `jobs.example.json` are public inputs. Existing user config and persona are never overwritten. Skills are linked as managed code; cron scripts are copied because Hermes requires them inside `~/.hermes/scripts`. Secrets remain only in `~/.hermes/.env`. Live cron state is never tracked.
+
+The installer records which template version seeded the user's persona and config (`~/.hermes/.template-seeds`). `make update` pulls the release, re-runs the installers, reports — never merges — template drift via `scripts/template-drift.sh`, and restarts the gateway; the user reviews reported drift against the changelog's Upgrade notes and acknowledges with `--ack`.
 
 ## Out of scope
 

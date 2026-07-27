@@ -137,6 +137,21 @@ own permission settings.
    repo's `.claude/settings.json` (see `docs/examples/claude-settings.repo.json`).
 4. Validate: `ristretto ops-daemon --check`.
 5. Run: `ristretto ops-daemon`. Message the bot, name a repo, give it a task.
+## Updating
+
+When a new release is out, update from your clone with one command:
+
+```bash
+make update
+```
+
+It pulls the release, refreshes the symlinked skills and scripts, and
+restarts the gateway. Your persona (`~/.hermes/SOUL.md`), config,
+credentials, and cron jobs are never touched. If the release changed the
+persona or config *templates*, the update prints a drift notice with the
+diff to review — port what you want, then acknowledge with
+`bash scripts/template-drift.sh --ack`. Check the release's **Upgrade
+notes** in `CHANGELOG.md` for anything that needs action.
 
 ## Where to go next
 

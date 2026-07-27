@@ -15,6 +15,17 @@ feature branches and pull requests — never direct pushes to `main`.
 
 See [docs/development.md](docs/development.md) for the complete setup.
 
+## Where behavior lives
+
+- **Behavioral guardrails and process rules go in skills** (`hermes/skills/`).
+  Skills are symlinked into installs, so every user gets the change on
+  `make update`.
+- **Voice and personal context go in the persona/config templates**
+  (`hermes/SOUL.md`, `hermes/config.yaml`). These are copy-once seeds: they
+  reach new installs only. A template change must ship with an
+  **Upgrade notes** entry in `CHANGELOG.md` telling existing users what to
+  port (see `docs/releases.md`).
+
 ## Commit style
 
 Use concise conventional-style subjects such as:

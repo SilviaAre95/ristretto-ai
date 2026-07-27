@@ -1,4 +1,4 @@
-.PHONY: setup install install-hermes install-push-guard test check public-check doctor
+.PHONY: setup install install-hermes install-push-guard update test check public-check doctor
 
 setup:
 	bash scripts/setup-dev.sh
@@ -12,6 +12,9 @@ install-hermes: install
 install-push-guard:
 	bash scripts/install-private-push-guard.sh
 
+update:
+	bash scripts/update.sh
+
 test:
 	.venv/bin/python -m unittest hermes/tests/ristretto_config_test.py
 	.venv/bin/python -m unittest discover -s tests
@@ -21,6 +24,7 @@ test:
 	bash hermes/tests/run-loop.test.sh
 	bash hermes/tests/morning-brief-precheck.test.sh
 	bash hermes/tests/push-guard.test.sh
+	bash hermes/tests/template-drift.test.sh
 
 check:
 	bash scripts/check.sh
@@ -31,3 +35,4 @@ public-check:
 doctor:
 	hermes doctor
 	hermes gateway status
+	bash scripts/template-drift.sh
