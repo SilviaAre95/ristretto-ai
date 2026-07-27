@@ -27,7 +27,7 @@ first public commit. Details live in
    **Upgrade notes** subsection to that version's changelog section saying
    exactly what to do. Skills and cron propagate automatically on update;
    the persona and config templates are user-owned seeds and never do.
-4. Set the same version in `VERSION`.
+4. Set the same version in `VERSION` and in `pyproject.toml`.
 5. Commit the release metadata through a pull request.
 6. Create and push an annotated tag, for example `v0.1.0`.
 7. GitHub Actions validates the tag and creates a GitHub release with generated
