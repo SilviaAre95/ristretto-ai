@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -58,6 +59,9 @@ def parser() -> argparse.ArgumentParser:
         metavar="PROJECT=PATH",
         help="add or replace a project repository mapping",
     )
+
+    ops = commands.add_parser("ops-daemon", help="run the Telegram ops lane daemon")
+    ops.add_argument("--check", action="store_true", help="validate config and exit")
     return root
 
 
@@ -116,6 +120,16 @@ def main(argv: list[str] | None = None) -> int:
             write_user_config(config, target)
             print(f"configuration updated: {target}")
             return 0
+        if args.command == "ops-daemon":
+            from .config import repositories
+            from .ops_lane.cli import ops_daemon_check, run_ops_daemon
+
+            repos = repositories(config)
+            if args.check:
+                code, msg = ops_daemon_check(os.environ, repos)
+                print(msg)
+                return code
+            return run_ops_daemon(os.environ, repos)
     except ConfigError as exc:
         print(f"ristretto: {exc}", file=sys.stderr)
         return 2

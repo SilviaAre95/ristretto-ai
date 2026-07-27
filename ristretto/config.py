@@ -262,6 +262,11 @@ def repository_path(config: Mapping[str, Any], project: str) -> Path:
     return resolved
 
 
+def repositories(config: Mapping[str, Any]) -> dict[str, str]:
+    repos = config.get("repositories") or {}
+    return {str(name): str(path) for name, path in repos.items()}
+
+
 def write_user_config(config: Mapping[str, Any], path: Path) -> None:
     validate_config(config)
     path.parent.mkdir(parents=True, exist_ok=True)
