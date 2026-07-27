@@ -124,6 +124,20 @@ call, and a morning-brief dry run.
 - Wake management is your choice: Ristretto never changes `pmset`. If the
   machine sleeps, Ris sleeps with it.
 
+## Telegram ops lane (optional)
+
+Drive real Claude Code on this machine from your phone, gated by Claude Code's
+own permission settings.
+
+1. Create a bot with BotFather; put the token in `~/.hermes/.env` as
+   `TELEGRAM_BOT_TOKEN`. Set `TELEGRAM_ALLOWED_USERS` to your numeric Telegram ID.
+2. Install the optional extra: `pip install -e '.[ops]'`.
+3. Set user-level deny rules in `~/.claude/settings.json` (see
+   `docs/examples/claude-settings.user.json`) and per-repo rules in each
+   repo's `.claude/settings.json` (see `docs/examples/claude-settings.repo.json`).
+4. Validate: `ristretto ops-daemon --check`.
+5. Run: `ristretto ops-daemon`. Message the bot, name a repo, give it a task.
+
 ## Where to go next
 
 - [`development.md`](development.md) — contributor environment and checks.

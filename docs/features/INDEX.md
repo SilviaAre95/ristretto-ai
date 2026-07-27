@@ -23,6 +23,7 @@ Source of truth for what this product **does** and **does not** do. Every code c
 | `autonomous-coding` | Autonomous Coding | in-progress | Ris runs a selected coding flow on a branch and opens a PR. | NOT auto-merging; NOT acting on employer systems |
 | `custom-model-flows` | Custom Model Flows | in-progress | Validated stages route planning, coding, review, verification, and PR work. | NOT arbitrary commands; NOT storing credentials; NOT auto-merging |
 | `always-on-service` | Always-On Service | implemented | Gateway runs as launchd service; Lungo holds the wake assertion. | NOT changing pmset without approval; verify Lungo after reboot |
+| `telegram-ops-lane` | Telegram Ops Lane | in-progress | Identity-locked Telegram daemon relays Claude Code's own `ask` prompts to your phone. | NOT a second allowlist system; NOT auto-run; NOT inbound networking |
 
 <!-- Append new rows above this comment. Keep the summary column ≤ 15 words. -->
 

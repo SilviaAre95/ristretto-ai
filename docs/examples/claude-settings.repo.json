@@ -1,0 +1,6 @@
+{
+  "permissions": {
+    "allow": ["Bash(railway status *)", "Bash(railway logs *)"],
+    "ask": ["Bash(gcloud * add-iam-policy-binding *)", "Bash(railway up *)"]
+  }
+}

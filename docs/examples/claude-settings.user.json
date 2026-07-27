@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(gcloud * delete *)",
+      "Bash(gcloud billing *)",
+      "Bash(gcloud iam service-accounts keys create *)",
+      "Bash(rm -rf *)"
+    ]
+  }
+}
