@@ -78,13 +78,55 @@ class DaemonTest(unittest.TestCase):
 
     def test_pump_spool_renders_pending(self):
         daemon, client, cfg = make_daemon(self.tmp, lambda *a, **k: None)
+        daemon.sessions.start(5, "kaffecard", str(self.tmp / "repo"))
         spool = Spool(cfg.spool_dir)
-        spool.write_request("req1", {"tool_name": "Bash", "tool_input": {"command": "gcloud ..."}})
-        daemon.pump_spool(chat_id=5)
+        spool.write_request(
+            "req1",
+            {
+                "tool_name": "Bash",
+                "tool_input": {"command": "gcloud ..."},
+                "cwd": str(self.tmp / "repo"),
+            },
+        )
+        daemon.pump_spool()
         chat_id, text, buttons = client.sent[-1]
         self.assertEqual(chat_id, 5)
         self.assertIn("gcloud", text)
         self.assertEqual({b[1] for b in buttons}, {"a:req1", "d:req1"})
+
+    def test_pump_spool_routes_to_owning_chat(self):
+        daemon, client, cfg = make_daemon(self.tmp, lambda *a, **k: None)
+        (self.tmp / "a").mkdir()
+        (self.tmp / "b").mkdir()
+        daemon.sessions.start(100, "A", str(self.tmp / "a"))
+        daemon.sessions.start(200, "B", str(self.tmp / "b"))
+        spool = Spool(cfg.spool_dir)
+        spool.write_request(
+            "req1",
+            {
+                "tool_name": "Bash",
+                "tool_input": {"command": "gcloud ..."},
+                "cwd": str(self.tmp / "b"),
+            },
+        )
+        daemon.pump_spool()
+        self.assertTrue(client.sent)
+        for chat_id, _text, _buttons in client.sent:
+            self.assertEqual(chat_id, 200)
+
+    def test_pump_spool_skips_unowned(self):
+        daemon, client, cfg = make_daemon(self.tmp, lambda *a, **k: None)
+        spool = Spool(cfg.spool_dir)
+        spool.write_request(
+            "req1",
+            {
+                "tool_name": "Bash",
+                "tool_input": {"command": "gcloud ..."},
+                "cwd": str(self.tmp / "nowhere"),
+            },
+        )
+        daemon.pump_spool()
+        self.assertEqual(client.sent, [])
 
     def test_callback_writes_decision(self):
         daemon, client, cfg = make_daemon(self.tmp, lambda *a, **k: None)
@@ -93,6 +135,26 @@ class DaemonTest(unittest.TestCase):
         daemon.handle_callback({"id": "cb", "from": {"id": 7}, "data": "a:req1", "message": {"chat": {"id": 5}}})
         decision = spool.await_decision("req1", timeout_s=1)
         self.assertEqual(decision["permissionDecision"], "allow")
+
+    def test_ignores_unlisted_callback(self):
+        daemon, client, cfg = make_daemon(self.tmp, lambda *a, **k: None)
+        spool = Spool(cfg.spool_dir)
+        spool.write_request("req1", {"tool_name": "Bash", "tool_input": {"command": "x"}})
+        daemon.handle_callback({"id": "cb", "from": {"id": 999}, "data": "a:req1", "message": {"chat": {"id": 5}}})
+        self.assertEqual(client.sent, [])
+        decision = spool.await_decision("req1", timeout_s=0.1)
+        self.assertIsNone(decision)
+
+    def test_malformed_callback_no_crash(self):
+        daemon, client, cfg = make_daemon(self.tmp, lambda *a, **k: None)
+        spool = Spool(cfg.spool_dir)
+        daemon.handle_callback({"id": "cb", "from": {"id": 7}, "data": "", "message": {"chat": {"id": 5}}})
+        self.assertEqual(len(client.sent), 1)
+        kind, callback_id, text = client.sent[-1]
+        self.assertEqual(kind, "ack")
+        self.assertEqual(text, "ignored")
+        decision = spool.await_decision("req1", timeout_s=0.1)
+        self.assertIsNone(decision)
 
 
 if __name__ == "__main__":

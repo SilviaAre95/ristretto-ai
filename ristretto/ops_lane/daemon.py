@@ -5,6 +5,7 @@ Holds NO permission policy. Identity lock decides "who"; Claude Code's settings
 decide "what"; your tap decides "when"."""
 from __future__ import annotations
 
+import os
 import subprocess
 from collections.abc import Mapping
 from pathlib import Path
@@ -70,10 +71,23 @@ class OpsDaemon:
         self.client.send_message(chat_id, f"Running in {Path(workdir).name}. I'll ask before gated actions.")
 
     # --- approvals ------------------------------------------------------
-    def pump_spool(self, chat_id: int) -> None:
+    def _owner_chat(self, cwd: str) -> int | None:
+        if not cwd:
+            return None
+        target = os.path.realpath(cwd)
+        for chat_id in self.sessions.active_chats():
+            session = self.sessions.get(chat_id)
+            if session and os.path.realpath(session.path) == target:
+                return chat_id
+        return None
+
+    def pump_spool(self) -> None:
         for request_id, payload in self.spool.read_new_requests():
             if request_id in self._rendered:
                 continue
+            chat_id = self._owner_chat(payload.get("cwd", ""))
+            if chat_id is None:
+                continue  # no active session owns this cwd; leave it to time out (deny)
             self._rendered.add(request_id)
             command = payload.get("tool_input", {}).get("command", "")
             tool = payload.get("tool_name", "tool")
@@ -94,6 +108,9 @@ class OpsDaemon:
         if not is_allowed(user_id, self.allowed):
             return
         verb, request_id = self.decode_callback(callback.get("data", ""))
+        if verb not in ("a", "d") or not request_id:
+            self.client.answer_callback(callback.get("id", ""), text="ignored")
+            return
         decision = "allow" if verb == "a" else "deny"
         self.spool.write_decision(
             request_id, {"permissionDecision": decision, "reason": "Telegram tap."}
@@ -108,11 +125,20 @@ class OpsDaemon:
     def run(self, poll=True) -> None:  # pragma: no cover - live loop
         offset = None
         while poll:
-            for update in self.client.get_updates(offset, self.cfg.poll_timeout_s):
+            try:
+                updates = self.client.get_updates(offset, self.cfg.poll_timeout_s)
+            except Exception:
+                continue
+            for update in updates:
                 offset = update["update_id"] + 1
-                if "message" in update:
-                    self.handle_message(update["message"])
-                elif "callback_query" in update:
-                    self.handle_callback(update["callback_query"])
-            for chat_id in self.sessions.active_chats():
-                self.pump_spool(chat_id)
+                try:
+                    if "message" in update:
+                        self.handle_message(update["message"])
+                    elif "callback_query" in update:
+                        self.handle_callback(update["callback_query"])
+                except Exception:
+                    continue
+            try:
+                self.pump_spool()
+            except Exception:
+                continue
