@@ -51,21 +51,30 @@ class DaemonTest(unittest.TestCase):
         self.assertEqual(spawned, [])
         self.assertIn("name a repo", client.sent[-1][1].lower())
 
-    def test_naming_repo_launches_claude(self):
+    def test_naming_repo_pins_without_launch(self):
+        spawned = []
+        daemon, client, _ = make_daemon(self.tmp, lambda *a, **k: spawned.append(a))
+        daemon.handle_message({"chat": {"id": 5}, "from": {"id": 7}, "text": "kaffecard"})
+        self.assertEqual(spawned, [])  # naming does NOT launch
+        self.assertIn("session pinned", client.sent[-1][1].lower())
+
+    def test_task_after_naming_launches(self):
         spawned = []
 
         def spawn(argv, **kwargs):
             spawned.append((argv, kwargs))
-            class P:  # minimal Popen stand-in
+            class P:
                 pass
             return P()
 
         daemon, client, cfg = make_daemon(self.tmp, spawn)
-        daemon.handle_message({"chat": {"id": 5}, "from": {"id": 7}, "text": "kaffecard"})
+        daemon.handle_message({"chat": {"id": 5}, "from": {"id": 7}, "text": "kaffecard"})   # pin
+        daemon.handle_message({"chat": {"id": 5}, "from": {"id": 7}, "text": "fix the bug"})  # task
         self.assertEqual(len(spawned), 1)
         argv, kwargs = spawned[0]
         self.assertIn("--permission-prompt-tool", argv)
         self.assertEqual(kwargs["cwd"], str(self.tmp / "repo"))
+        self.assertEqual(argv[-1], "fix the bug")  # the task text, not the repo name, is the prompt
 
     def test_pump_spool_renders_pending(self):
         daemon, client, cfg = make_daemon(self.tmp, lambda *a, **k: None)

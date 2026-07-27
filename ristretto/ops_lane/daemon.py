@@ -57,8 +57,9 @@ class OpsDaemon:
                 )
                 return
             name, path = resolved
-            session = self.sessions.start(chat_id, name, path)
+            self.sessions.start(chat_id, name, path)
             self.client.send_message(chat_id, f"Session pinned to {name}. Send your task.")
+            return
         self._launch(chat_id, session.path, text)
 
     def _launch(self, chat_id: int, workdir: str, prompt: str) -> None:
