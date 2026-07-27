@@ -1,7 +1,7 @@
 ---
 name: loop-runner
 description: Use when your prompt says "work kanban task <id>" — you are a detached kanban worker executing a queued dev task in an isolated git worktree. Read the task, run the dev loop via the bundled script, post the milestone, and complete the task.
-version: 1.0.0
+version: 1.1.0
 author: Silvia Arellano
 license: MIT
 metadata:
@@ -47,4 +47,5 @@ You are a detached worker. Your prompt names a task id (`work kanban task <TASK_
 - Never run `/loop-deploy` — deploy tasks do not exist in Phase A; if a task asks for one, fail it with result "deploy tasks are not enabled (S-2)".
 - Never push to `main`. The loop pushes its feature branch only.
 - Never announce a PR before `gh pr create` has succeeded; post the exact URL returned.
+- Milestone and result text states only what command output confirmed: a PR is "ready"/"open", never "merged" (the user merges); a milestone counts as posted only if `hermes send` exited 0; file paths come from what was actually written, never reconstructed.
 - Keep Slack to the single milestone in step 4 — details belong in the PR body and Linear.
