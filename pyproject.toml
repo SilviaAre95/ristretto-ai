@@ -12,6 +12,9 @@ license = {file = "LICENSE"}
 authors = [{name = "Silvia Arellano"}]
 dependencies = ["PyYAML>=6.0,<7.0"]
 
+[project.optional-dependencies]
+ops = ["mcp>=1.0"]
+
 [project.scripts]
 ristretto = "ristretto.cli:main"
 ristretto-run-flow = "ristretto.runner:main"

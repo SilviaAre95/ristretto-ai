@@ -14,6 +14,7 @@ install-push-guard:
 
 test:
 	.venv/bin/python -m unittest hermes/tests/ristretto_config_test.py
+	.venv/bin/python -m unittest discover -s tests
 	bash hermes/tests/install.test.sh
 	bash hermes/tests/reap.test.sh
 	bash hermes/tests/ris-stop.test.sh
