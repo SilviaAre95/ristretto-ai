@@ -20,6 +20,12 @@ class CliWiringTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("ready", msg.lower())
 
+    def test_check_fails_without_repos(self):
+        env = {"TELEGRAM_BOT_TOKEN": "t", "TELEGRAM_ALLOWED_USERS": "7"}
+        code, msg = ops_daemon_check(environ=env, repos={})
+        self.assertEqual(code, 1)
+        self.assertIn("repositor", msg.lower())
+
 
 if __name__ == "__main__":
     unittest.main()

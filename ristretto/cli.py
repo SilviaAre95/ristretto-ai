@@ -109,14 +109,14 @@ def main(argv: list[str] | None = None) -> int:
             for key, value in updates.items():
                 if value is not None:
                     instance[key] = value
-            repositories = config.setdefault("repositories", {})
+            repo_map = config.setdefault("repositories", {})
             for item in args.repository:
                 if "=" not in item:
                     raise ConfigError("--repository must use PROJECT=PATH")
                 name, value = item.split("=", 1)
                 if not name.strip() or not value.strip():
                     raise ConfigError("--repository must use non-empty PROJECT=PATH")
-                repositories[name.strip()] = value.strip()
+                repo_map[name.strip()] = value.strip()
             write_user_config(config, target)
             print(f"configuration updated: {target}")
             return 0

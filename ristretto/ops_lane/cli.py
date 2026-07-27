@@ -1,7 +1,6 @@
 """CLI glue for the ops daemon: a dry `--check` and the live runner."""
 from __future__ import annotations
 
-import os
 from collections.abc import Mapping
 
 from .config import load_ops_config
