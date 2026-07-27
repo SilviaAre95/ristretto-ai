@@ -32,6 +32,20 @@ ristretto instance get slack_alerts_channel >/dev/null
 mkdir -p "$hermes_home" "$hermes_home/scripts" \
   "$hermes_home/skills/software-development"
 
+# Record which template version seeded each user-owned copy, so
+# scripts/template-drift.sh can flag upstream template changes on update.
+# Existing installs without a record are baselined on the current template.
+seed_record="$hermes_home/.template-seeds"
+record_seed() {
+  local name="$1"
+  if [ -f "$seed_record" ] && grep -q "^$name " "$seed_record"; then
+    return 0
+  fi
+  echo "$name $(shasum -a 256 "$repo/hermes/$name" | awk '{print $1}')" \
+    >> "$seed_record"
+  chmod 0600 "$seed_record"
+}
+
 if [ ! -e "$hermes_home/config.yaml" ]; then
   cp "$repo/hermes/config.yaml" "$hermes_home/config.yaml"
   chmod 0600 "$hermes_home/config.yaml"
@@ -39,6 +53,7 @@ if [ ! -e "$hermes_home/config.yaml" ]; then
 else
   echo "Kept existing Hermes config: $hermes_home/config.yaml"
 fi
+record_seed "config.yaml"
 
 if [ ! -e "$hermes_home/SOUL.md" ]; then
   cp "$repo/hermes/SOUL.md" "$hermes_home/SOUL.md"
@@ -47,6 +62,7 @@ if [ ! -e "$hermes_home/SOUL.md" ]; then
 else
   echo "Kept existing Hermes persona: $hermes_home/SOUL.md"
 fi
+record_seed "SOUL.md"
 
 link_skill() {
   local source="$1"
