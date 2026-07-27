@@ -7,6 +7,11 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-27
+
+Reliability release: verified-state reporting, queued-task lane discipline,
+and a real user update path.
+
 ### Added
 
 - One-command user update path: `make update` pulls the release
