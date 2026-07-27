@@ -124,6 +124,22 @@ call, and a morning-brief dry run.
 - Wake management is your choice: Ristretto never changes `pmset`. If the
   machine sleeps, Ris sleeps with it.
 
+## Updating
+
+When a new release is out, update from your clone with one command:
+
+```bash
+make update
+```
+
+It pulls the release, refreshes the symlinked skills and scripts, and
+restarts the gateway. Your persona (`~/.hermes/SOUL.md`), config,
+credentials, and cron jobs are never touched. If the release changed the
+persona or config *templates*, the update prints a drift notice with the
+diff to review — port what you want, then acknowledge with
+`bash scripts/template-drift.sh --ack`. Check the release's **Upgrade
+notes** in `CHANGELOG.md` for anything that needs action.
+
 ## Where to go next
 
 - [`development.md`](development.md) — contributor environment and checks.
