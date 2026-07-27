@@ -33,6 +33,22 @@ class SpoolTest(unittest.TestCase):
         )
         self.assertIsNone(got)
 
+    def test_rejects_unsafe_request_id(self):
+        for bad in ["../evil", "a/b", "..", "", "with\x00null"]:
+            with self.assertRaises(ValueError):
+                self.spool.write_request(bad, {"x": 1})
+
+    def test_accepts_normal_id(self):
+        self.spool.write_request("abc123DEF-_.", {"x": 1})
+        self.assertEqual(self.spool.read_new_requests()[0][0], "abc123DEF-_.")
+
+    def test_read_new_requests_skips_malformed(self):
+        (self.spool.dir / "good.request.json").write_text('{"ok": true}')
+        (self.spool.dir / "bad.request.json").write_text("{ this is not json")
+        pending = dict(self.spool.read_new_requests())
+        self.assertIn("good", pending)
+        self.assertNotIn("bad", pending)
+
 
 if __name__ == "__main__":
     unittest.main()

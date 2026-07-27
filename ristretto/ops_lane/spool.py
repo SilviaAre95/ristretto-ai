@@ -11,6 +11,23 @@ import time
 from pathlib import Path
 
 
+def _validate_request_id(request_id: str) -> None:
+    """Validate request_id to prevent path traversal attacks.
+
+    Raises ValueError if the request_id contains path separators, relative
+    references, null bytes, or is empty/dot.
+    """
+    if (
+        not request_id
+        or request_id in (".", "..")
+        or "/" in request_id
+        or "\\" in request_id
+        or "\x00" in request_id
+        or os.path.basename(request_id) != request_id
+    ):
+        raise ValueError(f"unsafe request id: {request_id!r}")
+
+
 class Spool:
     def __init__(self, directory: Path) -> None:
         self.dir = Path(directory)
@@ -27,9 +44,11 @@ class Spool:
                 os.remove(tmp)
 
     def _request_path(self, request_id: str) -> Path:
+        _validate_request_id(request_id)
         return self.dir / f"{request_id}.request.json"
 
     def _decision_path(self, request_id: str) -> Path:
+        _validate_request_id(request_id)
         return self.dir / f"{request_id}.decision.json"
 
     def write_request(self, request_id: str, payload: dict) -> Path:
