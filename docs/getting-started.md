@@ -129,16 +129,15 @@ call, and a morning-brief dry run.
 Chat with real Claude Code on this machine from your phone — the full agent,
 with tool calls gated by an Approve/Deny tap.
 
-1. Install the optional extra: `pip install -e '.[ops]'`.
-2. Create a bot with BotFather, and get your numeric Telegram user ID (message
+1. Create a bot with BotFather, and get your numeric Telegram user ID (message
    `@userinfobot`).
-3. Put your config in the lane's OWN env file, `~/.config/ristretto/ops.env`
-   (kept separate from Hermes's `~/.hermes/.env`):
-   ```
-   TELEGRAM_BOT_TOKEN=<your token>
-   TELEGRAM_ALLOWED_USERS=<your numeric id>
-   RISTRETTO_OPS_ROOT=$HOME/code        # working root sessions open in
-   ```
+2. Run `make ops-setup`. It installs the `[ops]` extra, scaffolds
+   `~/.config/ristretto/ops.env` (non-secret settings only, `chmod 600`), and
+   prints the one command to store your bot token in the **macOS Keychain** —
+   the token never lands in a plaintext file.
+3. Follow its output: store the token in Keychain, then put your numeric
+   Telegram id + working root (`RISTRETTO_OPS_ROOT`) in
+   `~/.config/ristretto/ops.env`.
 4. Validate: `ristretto ops-daemon --check` (should print the root + "identity
    lock armed").
 5. Run: `ristretto ops-daemon`. Message the bot and chat; `/ls` lists folders,

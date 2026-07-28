@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from ristretto.ops_lane.cli import _parse_env_file, ops_daemon_check
+from ristretto.ops_lane.cli import _parse_env_file, ops_daemon_check, resolve_bot_token
 
 
 class CliWiringTest(unittest.TestCase):
@@ -11,9 +11,25 @@ class CliWiringTest(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp())
 
     def test_check_fails_without_token(self):
-        code, msg = ops_daemon_check({})
+        code, msg = ops_daemon_check({}, keychain=lambda: None)
         self.assertEqual(code, 1)
-        self.assertIn("TELEGRAM_BOT_TOKEN", msg)
+        self.assertIn("token", msg.lower())
+        self.assertIn("keychain", msg.lower())
+
+    def test_resolve_token_prefers_env(self):
+        self.assertEqual(
+            resolve_bot_token({"TELEGRAM_BOT_TOKEN": "realtok"}, keychain=lambda: "kc"),
+            "realtok",
+        )
+
+    def test_resolve_token_placeholder_falls_back_to_keychain(self):
+        self.assertEqual(
+            resolve_bot_token({"TELEGRAM_BOT_TOKEN": "REPLACE_ME_x"}, keychain=lambda: "kc-token"),
+            "kc-token",
+        )
+
+    def test_resolve_token_none_when_absent(self):
+        self.assertIsNone(resolve_bot_token({}, keychain=lambda: None))
 
     def test_check_fails_without_allowlist(self):
         code, msg = ops_daemon_check({"TELEGRAM_BOT_TOKEN": "t"})

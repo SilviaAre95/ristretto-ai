@@ -62,6 +62,8 @@ def parser() -> argparse.ArgumentParser:
 
     ops = commands.add_parser("ops-daemon", help="run the Telegram ops lane daemon")
     ops.add_argument("--check", action="store_true", help="validate config and exit")
+
+    commands.add_parser("ops-init", help="scaffold Telegram ops lane config")
     return root
 
 
@@ -129,6 +131,10 @@ def main(argv: list[str] | None = None) -> int:
                 print(msg)
                 return code
             return run_ops_daemon(os.environ)
+        if args.command == "ops-init":
+            from .ops_lane.cli import ops_init
+
+            return ops_init(os.environ)
     except ConfigError as exc:
         print(f"ristretto: {exc}", file=sys.stderr)
         return 2
