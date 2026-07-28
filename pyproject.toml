@@ -13,7 +13,8 @@ authors = [{name = "Silvia Arellano"}]
 dependencies = ["PyYAML>=6.0,<7.0"]
 
 [project.optional-dependencies]
-ops = ["mcp>=1.0"]
+# Pin below 2.0: the low-level server API changed incompatibly in mcp 2.x.
+ops = ["mcp>=1.0,<2.0"]
 
 [project.scripts]
 ristretto = "ristretto.cli:main"

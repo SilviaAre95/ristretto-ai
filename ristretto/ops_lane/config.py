@@ -52,8 +52,9 @@ def load_ops_config(environ: Mapping[str, str]) -> OpsConfig:
         # the strict deny file is layered on top as an always-block override
         # (deny beats allow). Set to "project" to exclude your desktop settings.
         setting_sources=environ.get("RISTRETTO_OPS_SETTING_SOURCES", "all"),
-        # False loads your normal MCP servers (Linear, etc.) alongside the
-        # approval server. Set RISTRETTO_OPS_STRICT_MCP=1 to allow only approval.
+        # False (default) loads your normal MCP servers (Linear, etc.) alongside
+        # the approval server, for full desktop parity. Set
+        # RISTRETTO_OPS_STRICT_MCP=1 to restrict to only the approval server.
         strict_mcp=environ.get("RISTRETTO_OPS_STRICT_MCP", "0") == "1",
         # Working root every session opens in — you roam and create repos under
         # it. Set RISTRETTO_OPS_ROOT to narrow it (e.g. ~/ventures/code).
