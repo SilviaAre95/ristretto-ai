@@ -9,8 +9,14 @@ def allowed_user_ids(environ: Mapping[str, str]) -> set[int]:
     ids: set[int] = set()
     for chunk in raw.split(","):
         chunk = chunk.strip()
-        if chunk:
+        if not chunk:
+            continue
+        try:
             ids.add(int(chunk))
+        except ValueError:
+            # Ignore non-numeric entries (e.g. an unfilled placeholder) rather
+            # than crash; fail closed by simply not trusting them.
+            continue
     return ids
 
 

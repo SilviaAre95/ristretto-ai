@@ -57,9 +57,9 @@ def load_ops_env() -> None:
 
 def ops_daemon_check(environ: Mapping[str, str]) -> tuple[int, str]:
     if not environ.get("TELEGRAM_BOT_TOKEN"):
-        return 1, "missing TELEGRAM_BOT_TOKEN in environment (~/.hermes/.env)"
+        return 1, "missing TELEGRAM_BOT_TOKEN (set it in ~/.config/ristretto/ops.env)"
     if not allowed_user_ids(environ):
-        return 1, "missing TELEGRAM_ALLOWED_USERS in environment (~/.hermes/.env)"
+        return 1, "missing/invalid TELEGRAM_ALLOWED_USERS (set your numeric id in ~/.config/ristretto/ops.env)"
     cfg = load_ops_config(environ)
     if not cfg.root_dir.exists():
         return 1, f"root dir does not exist: {cfg.root_dir} (set RISTRETTO_OPS_ROOT)"

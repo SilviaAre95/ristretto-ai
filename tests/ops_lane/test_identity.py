@@ -10,6 +10,16 @@ class IdentityTest(unittest.TestCase):
     def test_missing_is_empty(self):
         self.assertEqual(allowed_user_ids({}), set())
 
+    def test_non_numeric_entries_skipped(self):
+        # An unfilled placeholder must not crash; it's simply not trusted.
+        self.assertEqual(
+            allowed_user_ids({"TELEGRAM_ALLOWED_USERS": "REPLACE_ME, 42"}), {42}
+        )
+        self.assertEqual(
+            allowed_user_ids({"TELEGRAM_ALLOWED_USERS": "REPLACE_ME_WITH_YOUR_NUMERIC_ID"}),
+            set(),
+        )
+
     def test_empty_allowlist_denies_everyone(self):
         self.assertFalse(is_allowed(10, set()))
 
