@@ -121,15 +121,14 @@ def main(argv: list[str] | None = None) -> int:
             print(f"configuration updated: {target}")
             return 0
         if args.command == "ops-daemon":
-            from .config import repositories
-            from .ops_lane.cli import ops_daemon_check, run_ops_daemon
+            from .ops_lane.cli import load_ops_env, ops_daemon_check, run_ops_daemon
 
-            repos = repositories(config)
             if args.check:
-                code, msg = ops_daemon_check(os.environ, repos)
+                load_ops_env()
+                code, msg = ops_daemon_check(os.environ)
                 print(msg)
                 return code
-            return run_ops_daemon(os.environ, repos)
+            return run_ops_daemon(os.environ)
     except ConfigError as exc:
         print(f"ristretto: {exc}", file=sys.stderr)
         return 2

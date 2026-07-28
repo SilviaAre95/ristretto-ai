@@ -52,3 +52,16 @@ class TelegramClient:
             {"callback_query_id": callback_query_id, "text": text},
             timeout_s=10,
         )
+
+    def edit_message_text(self, chat_id: int, message_id: int, text: str) -> dict:
+        """Replace a message's text and REMOVE its inline keyboard (empty markup)."""
+        return self._call(
+            "editMessageText",
+            {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "text": text,
+                "reply_markup": {"inline_keyboard": []},
+            },
+            timeout_s=10,
+        )
