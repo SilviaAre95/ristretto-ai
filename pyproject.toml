@@ -22,5 +22,8 @@ ristretto-run-flow = "ristretto.runner:main"
 [tool.setuptools.packages.find]
 include = ["ristretto*"]
 
+[tool.setuptools.package-data]
+"ristretto.ops_lane" = ["phone_settings.json"]
+
 [tool.setuptools.data-files]
 "share/ristretto" = ["ristretto.yaml"]

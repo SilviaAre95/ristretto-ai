@@ -126,17 +126,30 @@ call, and a morning-brief dry run.
 
 ## Telegram ops lane (optional)
 
-Drive real Claude Code on this machine from your phone, gated by Claude Code's
-own permission settings.
+Chat with real Claude Code on this machine from your phone — the full agent,
+with tool calls gated by an Approve/Deny tap.
 
-1. Create a bot with BotFather; put the token in `~/.hermes/.env` as
-   `TELEGRAM_BOT_TOKEN`. Set `TELEGRAM_ALLOWED_USERS` to your numeric Telegram ID.
-2. Install the optional extra: `pip install -e '.[ops]'`.
-3. Set user-level deny rules in `~/.claude/settings.json` (see
-   `docs/examples/claude-settings.user.json`) and per-repo rules in each
-   repo's `.claude/settings.json` (see `docs/examples/claude-settings.repo.json`).
-4. Validate: `ristretto ops-daemon --check`.
-5. Run: `ristretto ops-daemon`. Message the bot, name a repo, give it a task.
+1. Install the optional extra: `pip install -e '.[ops]'`.
+2. Create a bot with BotFather, and get your numeric Telegram user ID (message
+   `@userinfobot`).
+3. Put your config in the lane's OWN env file, `~/.config/ristretto/ops.env`
+   (kept separate from Hermes's `~/.hermes/.env`):
+   ```
+   TELEGRAM_BOT_TOKEN=<your token>
+   TELEGRAM_ALLOWED_USERS=<your numeric id>
+   RISTRETTO_OPS_ROOT=$HOME/code        # working root sessions open in
+   ```
+4. Validate: `ristretto ops-daemon --check` (should print the root + "identity
+   lock armed").
+5. Run: `ristretto ops-daemon`. Message the bot and chat; `/ls` lists folders,
+   `/new` starts a fresh conversation.
+
+By default the phone loads your full desktop Claude Code config (MCP tools,
+commands, allow rules) with a hard-deny override always blocking the dangerous
+set (`docs/examples/phone-settings.strict.json`). Set
+`RISTRETTO_OPS_SETTING_SOURCES=project` to exclude your desktop rules and make
+sensitive actions prompt every time.
+
 ## Updating
 
 When a new release is out, update from your clone with one command:
