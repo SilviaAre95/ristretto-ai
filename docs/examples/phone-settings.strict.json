@@ -20,7 +20,15 @@
       "Bash(cat *id_rsa*)",
       "Bash(cat *id_ed25519*)",
       "Bash(cat *.env)",
-      "Bash(cat *.env.*)"
+      "Bash(cat *.env.*)",
+      "Read(~/.ssh/**)",
+      "Read(~/.aws/**)",
+      "Read(~/.config/gcloud/**)",
+      "Read(~/.hermes/.env*)",
+      "Read(**/.env)",
+      "Read(**/.env.*)",
+      "Read(**/*id_rsa*)",
+      "Read(**/*id_ed25519*)"
     ],
     "ask": [
       "Bash(rm *)",
