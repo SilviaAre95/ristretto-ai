@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import subprocess
 import threading
+import time
 from pathlib import Path
 
 from .audit import audit
@@ -206,6 +207,19 @@ class OpsDaemon:
 
     # --- main loop ------------------------------------------------------
     def run(self, poll=True) -> None:  # pragma: no cover - live loop
+        # Pump the approval spool on its own fast loop, decoupled from the
+        # Telegram long-poll: a prompt reaches you in ~1s instead of waiting up
+        # to poll_timeout_s. Claude gives up on the permission tool if the tap
+        # takes too long, so render latency matters.
+        def _pump_loop() -> None:
+            while poll:
+                try:
+                    self.pump_spool()
+                except Exception:
+                    pass
+                time.sleep(0.6)
+
+        threading.Thread(target=_pump_loop, daemon=True).start()
         offset = None
         while poll:
             try:
@@ -221,7 +235,3 @@ class OpsDaemon:
                         self.handle_callback(update["callback_query"])
                 except Exception:
                     continue
-            try:
-                self.pump_spool()
-            except Exception:
-                continue
