@@ -1,7 +1,6 @@
 {
   "permissions": {
     "deny": [
-      "Bash(rm -rf *)",
       "Bash(sudo *)",
       "Bash(dd *)",
       "Bash(mkfs *)",
@@ -22,6 +21,13 @@
       "Bash(cat *id_ed25519*)",
       "Bash(cat *.env)",
       "Bash(cat *.env.*)"
+    ],
+    "ask": [
+      "Bash(rm *)",
+      "Bash(rm -rf *)",
+      "Bash(rmdir *)",
+      "Bash(git clean *)",
+      "Bash(trash *)"
     ],
     "allow": [
       "Read",
