@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -58,6 +59,11 @@ def parser() -> argparse.ArgumentParser:
         metavar="PROJECT=PATH",
         help="add or replace a project repository mapping",
     )
+
+    ops = commands.add_parser("ops-daemon", help="run the Telegram ops lane daemon")
+    ops.add_argument("--check", action="store_true", help="validate config and exit")
+
+    commands.add_parser("ops-init", help="scaffold Telegram ops lane config")
     return root
 
 
@@ -105,17 +111,30 @@ def main(argv: list[str] | None = None) -> int:
             for key, value in updates.items():
                 if value is not None:
                     instance[key] = value
-            repositories = config.setdefault("repositories", {})
+            repo_map = config.setdefault("repositories", {})
             for item in args.repository:
                 if "=" not in item:
                     raise ConfigError("--repository must use PROJECT=PATH")
                 name, value = item.split("=", 1)
                 if not name.strip() or not value.strip():
                     raise ConfigError("--repository must use non-empty PROJECT=PATH")
-                repositories[name.strip()] = value.strip()
+                repo_map[name.strip()] = value.strip()
             write_user_config(config, target)
             print(f"configuration updated: {target}")
             return 0
+        if args.command == "ops-daemon":
+            from .ops_lane.cli import load_ops_env, ops_daemon_check, run_ops_daemon
+
+            if args.check:
+                load_ops_env()
+                code, msg = ops_daemon_check(os.environ)
+                print(msg)
+                return code
+            return run_ops_daemon(os.environ)
+        if args.command == "ops-init":
+            from .ops_lane.cli import ops_init
+
+            return ops_init(os.environ)
     except ConfigError as exc:
         print(f"ristretto: {exc}", file=sys.stderr)
         return 2
