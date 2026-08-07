@@ -7,6 +7,21 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Approval cards now stay actionable for 30 minutes instead of 5. The Hermes
+  baseline (`hermes/config.yaml`) gained an `approvals.gateway_timeout` of
+  1800s; Hermes' own default of 300s expired while the operator was away from
+  the desk, and an expired card in Slack stays clickable while no longer
+  reaching the agent.
+
+### Upgrade notes
+
+- `hermes/config.yaml` gained an `approvals` block. Existing installs: run
+  `bash scripts/template-drift.sh`, port the block into
+  `~/.hermes/config.yaml`, then acknowledge with `--ack`. Restart the gateway
+  for it to take effect.
+
 ## [0.2.0] - 2026-07-27
 
 Reliability release: verified-state reporting, queued-task lane discipline,
