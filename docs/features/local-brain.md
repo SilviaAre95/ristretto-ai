@@ -3,7 +3,7 @@ id: local-brain
 title: Local Brain
 status: implemented  # proposed | in-progress | implemented | deprecated
 created_at: 2026-07-05
-last_modified: 2026-07-18
+last_modified: 2026-08-24
 owner: project
 depends_on: []
 acceptance_criteria:
@@ -19,7 +19,7 @@ non_goals:
 
 ## Summary
 
-Orchestrator reasoning defaults to local `qwen3.6:27b` through Ollama, keeping chat, briefs, and tool decisions on the user's machine. Coding flows may use Claude, Codex, the local coder, or a validated combination. `RIS_LOCAL_LOOP_MODEL` overrides the public `qwen3-coder:30b` coding default.
+Orchestrator reasoning defaults to local `qwen3.6:35b-mlx` through Ollama, keeping chat, briefs, and tool decisions on the user's machine. Coding flows may use Claude, the local brain, the local coder, or a validated combination (`tier0` through `tier3`). `RIS_LOCAL_LOOP_MODEL` overrides the public `qwen3.6:27b-coding-nvfp4` coding default; `RIS_LOCAL_BRAIN_MODEL` overrides the brain inside flows.
 
 ## Behavior
 
@@ -36,15 +36,18 @@ Heavy local code loops use the environment-selected coder without changing the o
 
 ## Implementation notes (optional)
 
-Hermes v0.18.0 orchestrator configured with brain `qwen3.6:27b` served locally via Ollama.
+Hermes orchestrator configured with brain `qwen3.6:35b-mlx` served locally via Ollama's MLX runner (Apple Silicon, Ollama >= 0.19).
 
 Suggested model roles:
 
 | Model | Role |
 |---|---|
-| `qwen3.6:27b` | Default always-on orchestrator |
-| `qwen3-coder:30b` | `run-loop.sh` fallback when `RIS_LOCAL_LOOP_MODEL` is unset |
-| `$RIS_LOCAL_LOOP_MODEL` | Optional machine-local coding override |
+| `qwen3.6:35b-mlx` | Default always-on orchestrator and the `local-brain` flow provider: MoE, fast, 256k context |
+| `qwen3.6:27b-coding-nvfp4` | `local-coder` flow provider and `run-loop.sh` fallback when `RIS_LOCAL_LOOP_MODEL` is unset: dense, strongest local coder |
+| `qwen3-coder-next:q4_K_M` | Optional large-project coder, selected per run with `RIS_LOCAL_LOOP_MODEL` |
+| `$RIS_LOCAL_LOOP_MODEL` / `$RIS_LOCAL_BRAIN_MODEL` | Machine-local overrides |
+
+Reviewer is never builder: the brain reviews what the coder built, in every tier.
 
 Model-change checklist:
 

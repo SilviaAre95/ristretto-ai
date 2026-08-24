@@ -1,7 +1,7 @@
 # Public Hermes baseline. The installer copies this file into the user's
 # HERMES_HOME; it is never symlinked to live runtime state.
 model:
-  default: qwen3.6:27b
+  default: qwen3.6:35b-mlx
   provider: custom
   base_url: http://localhost:11434/v1
 agent:
