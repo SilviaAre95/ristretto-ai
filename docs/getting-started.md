@@ -23,11 +23,12 @@ Do you need a local LLM? **Yes, for the orchestrator.** By design, all
 orchestration — chat, morning briefs, tool decisions — runs through a local
 Ollama model with no cloud calls, so day-to-day operation has zero marginal
 model cost (see [`features/local-brain.md`](features/local-brain.md)). The
-suggested brain is `qwen3.6:27b`, which realistically wants an Apple Silicon
-Mac with 32 GB+ of memory. Coding is a separate axis: the default `classic`
-flow uses Claude Code with your own account, so the local coder model is only
-needed for the `local`/`balanced` flows or the automatic fallback when Claude
-is unavailable.
+suggested brain is `qwen3.6:35b-mlx`, which runs on Ollama's MLX engine and
+wants an Apple Silicon Mac with more than 32 GB of memory (64 GB+ to keep the
+brain and the coder resident together). Coding is a separate axis: the default
+`classic` flow uses Claude Code with your own account, so the local coder model
+is only needed for `tier1` through `tier3` or the automatic fallback when
+Claude is unavailable.
 
 ## 1. Clone and bootstrap
 
@@ -55,8 +56,8 @@ symlink. It never touches Hermes, credentials, or services.
 ## 3. Pull the local models
 
 ```bash
-ollama pull qwen3.6:27b        # orchestrator brain (required)
-ollama pull qwen3-coder:30b    # local coding model (optional)
+ollama pull qwen3.6:35b-mlx             # orchestrator brain (required)
+ollama pull qwen3.6:27b-coding-nvfp4    # local coding model (optional)
 ```
 
 Override the coding model with `RIS_LOCAL_LOOP_MODEL` in `~/.hermes/.env`.

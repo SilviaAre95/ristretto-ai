@@ -19,49 +19,70 @@ instance:
 repositories: {}
 
 providers:
+  # Claude tiers. Opus reasons and reviews, Sonnet builds and repairs, Haiku
+  # writes the PR. The reviewer is never the model that wrote the code.
+  claude-opus:
+    runner: claude-code
+    model: opus
   claude:
     runner: claude-code
     model: sonnet
-    fallback: local
-  local:
+    fallback: local-coder
+  claude-haiku:
     runner: claude-code
-    model: qwen3-coder:30b
-    model_env: RIS_LOCAL_LOOP_MODEL
+    model: haiku
+  # Local models served by Ollama on this machine. The brain is the MoE
+  # orchestrator (fast, 256k context); the coder is the dense 27B coding
+  # build. Override either per machine or per run through the *_env names.
+  local-brain:
+    runner: claude-code
+    model: qwen3.6:35b-mlx
+    model_env: RIS_LOCAL_BRAIN_MODEL
     base_url: http://localhost:11434
     # Non-secret compatibility placeholder required by Ollama's local API.
     # Real provider credentials must use auth_token_env, never auth_token.
     auth_token: ollama
+  local-coder:
+    runner: claude-code
+    model: qwen3.6:27b-coding-nvfp4
+    model_env: RIS_LOCAL_LOOP_MODEL
+    base_url: http://localhost:11434
+    auth_token: ollama
+  # Independent reviewer for custom flows; not used by the standard tiers.
   codex:
     runner: codex
 
+# Tiers trade cloud spend for local compute. Every tier keeps the same shape:
+# plan -> build -> review -> repair -> verify -> pr, verify is always the
+# deterministic builtin gate, and the reviewer is never the builder.
 flows:
   classic:
     description: Existing Claude /loop-dev with automatic local fallback.
     builtin: classic
 
-  balanced:
-    description: Claude plans, a local model builds and repairs, Codex reviews.
+  tier0:
+    description: All Claude. Opus plans and reviews, Sonnet builds and repairs, Haiku opens the PR.
     stages:
       - id: plan
         role: plan
-        provider: claude
+        provider: claude-opus
         mutates: false
         output: plan.md
       - id: build
         role: build
-        provider: local
+        provider: claude
         mutates: true
         inputs: [plan.md]
         output: build.md
       - id: review
         role: review
-        provider: codex
+        provider: claude-opus
         mutates: false
         inputs: [plan.md, build.md]
         output: review.md
       - id: repair
         role: repair
-        provider: local
+        provider: claude
         mutates: true
         inputs: [plan.md, review.md]
         output: repair.md
@@ -72,13 +93,13 @@ flows:
         output: verify.txt
       - id: finish
         role: pr
-        provider: claude
+        provider: claude-haiku
         mutates: true
         inputs: [plan.md, review.md, repair.md, verify.txt]
         output: finish.md
 
-  quality:
-    description: Claude plans/builds/repairs and Codex supplies independent review.
+  tier1:
+    description: Local builds, Claude judges and rescues. Claude plans, reviews, and repairs; the local coder does the token-heavy build.
     stages:
       - id: plan
         role: plan
@@ -87,13 +108,13 @@ flows:
         output: plan.md
       - id: build
         role: build
-        provider: claude
+        provider: local-coder
         mutates: true
         inputs: [plan.md]
         output: build.md
       - id: review
         role: review
-        provider: codex
+        provider: claude
         mutates: false
         inputs: [plan.md, build.md]
         output: review.md
@@ -110,34 +131,34 @@ flows:
         output: verify.txt
       - id: finish
         role: pr
-        provider: claude
+        provider: local-brain
         mutates: true
         inputs: [plan.md, review.md, repair.md, verify.txt]
         output: finish.md
 
-  local:
-    description: Local-model plan/build/review/repair with deterministic verification.
+  tier2:
+    description: Mainly local. One Claude call, spent on review, where a miss is most expensive.
     stages:
       - id: plan
         role: plan
-        provider: local
+        provider: local-brain
         mutates: false
         output: plan.md
       - id: build
         role: build
-        provider: local
+        provider: local-coder
         mutates: true
         inputs: [plan.md]
         output: build.md
       - id: review
         role: review
-        provider: local
+        provider: claude
         mutates: false
         inputs: [plan.md, build.md]
         output: review.md
       - id: repair
         role: repair
-        provider: local
+        provider: local-coder
         mutates: true
         inputs: [plan.md, review.md]
         output: repair.md
@@ -148,7 +169,45 @@ flows:
         output: verify.txt
       - id: finish
         role: pr
-        provider: local
+        provider: local-brain
+        mutates: true
+        inputs: [plan.md, review.md, repair.md, verify.txt]
+        output: finish.md
+
+  tier3:
+    description: All local. The brain plans and reviews, the coder builds and repairs; set RIS_LOCAL_LOOP_MODEL=qwen3-coder-next:q4_K_M for a large project.
+    stages:
+      - id: plan
+        role: plan
+        provider: local-brain
+        mutates: false
+        output: plan.md
+      - id: build
+        role: build
+        provider: local-coder
+        mutates: true
+        inputs: [plan.md]
+        output: build.md
+      - id: review
+        role: review
+        provider: local-brain
+        mutates: false
+        inputs: [plan.md, build.md]
+        output: review.md
+      - id: repair
+        role: repair
+        provider: local-coder
+        mutates: true
+        inputs: [plan.md, review.md]
+        output: repair.md
+      - id: verify
+        role: verify
+        provider: builtin
+        mutates: false
+        output: verify.txt
+      - id: finish
+        role: pr
+        provider: local-brain
         mutates: true
         inputs: [plan.md, review.md, repair.md, verify.txt]
         output: finish.md

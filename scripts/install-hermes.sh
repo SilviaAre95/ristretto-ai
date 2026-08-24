@@ -101,7 +101,7 @@ for skill in durable-dev loop-runner; do
 done
 
 HERMES_HOME="$hermes_home" hermes -p ris-worker config set model.provider custom >/dev/null
-HERMES_HOME="$hermes_home" hermes -p ris-worker config set model.default qwen3.6:27b >/dev/null
+HERMES_HOME="$hermes_home" hermes -p ris-worker config set model.default qwen3.6:35b-mlx >/dev/null
 HERMES_HOME="$hermes_home" hermes -p ris-worker config set model.base_url http://localhost:11434/v1 >/dev/null
 HERMES_HOME="$hermes_home" hermes -p ris-worker config set agent.max_turns 300 >/dev/null
 HERMES_HOME="$hermes_home" hermes -p ris-worker config set tool_loop_guardrails.hard_stop_enabled true >/dev/null

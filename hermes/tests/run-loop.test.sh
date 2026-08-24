@@ -52,7 +52,7 @@ t "junk model dropped (allowlist)"  "! grep -q -- '--model' '$FAKEBIN/argv'"
 
 # Local tier: routes to Ollama's Anthropic endpoint with the local coder model
 "$SCRIPT" t-local PROJ-04 local >/dev/null 2>&1
-t "local tier: ollama model passed" "grep -q -- '--model qwen3-coder:30b' '$FAKEBIN/argv'"
+t "local tier: ollama model passed" "grep -q -- '--model qwen3.6:27b-coding-nvfp4' '$FAKEBIN/argv'"
 t "local tier: base_url exported"   "grep -q 'http://localhost:11434' '$FAKEBIN/baseurl'"
 t "local tier: no session flags"    "! grep -qE -- '--session-id|--resume' '$FAKEBIN/argv'"
 RIS_LOCAL_LOOP_MODEL="qwen3-coder-next:q4_K_M" "$SCRIPT" t-local2 PROJ-05 local >/dev/null 2>&1
@@ -117,7 +117,7 @@ EOF
 chmod +x "$FAKEBIN/claude"
 "$SCRIPT" t-fb PROJ-06 >/dev/null 2>"$FB_STDERR"; RC=$?
 t "fallback: local run succeeds"    "[ $RC -eq 0 ]"
-t "fallback: local model used"      "grep -q -- '--model qwen3-coder:30b' '$FAKEBIN/argv'"
+t "fallback: local model used"      "grep -q -- '--model qwen3.6:27b-coding-nvfp4' '$FAKEBIN/argv'"
 t "fallback: announced on stderr"   "grep -q 'falling back to local model' '$FB_STDERR'"
 
 # Non-auth failure must NOT fall back
@@ -152,10 +152,10 @@ exit 0
 EOF
 chmod +x "$FAKEBIN/python3"
 WT_FLOW="$(mktemp -d)"; cd "$WT_FLOW"
-"$SCRIPT" t-flow PROJ-12 --flow balanced >/dev/null 2>&1; RC=$?
+"$SCRIPT" t-flow PROJ-12 --flow tier1 >/dev/null 2>&1; RC=$?
 t "custom flow: succeeds"             "[ $RC -eq 0 ]"
 t "custom flow: runner module"        "grep -q -- '-m ristretto.runner' '$FAKEBIN/python_argv'"
-t "custom flow: passes selection"     "grep -q -- '--flow balanced' '$FAKEBIN/python_argv'"
+t "custom flow: passes selection"     "grep -q -- '--flow tier1' '$FAKEBIN/python_argv'"
 t "custom flow: passes task and issue" "grep -q -- '--task-id t-flow --issue PROJ-12' '$FAKEBIN/python_argv'"
 t "custom flow: repo on PYTHONPATH"    "grep -Fq '$REPO_ROOT' '$FAKEBIN/pythonpath'"
 t "custom flow: no session state"     "[ ! -e '$WT_FLOW/.cc-ris-session' ]"

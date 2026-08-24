@@ -44,26 +44,26 @@ class ConfigTests(unittest.TestCase):
     def test_environment_model_override(self) -> None:
         flow = resolved_flow(
             self.config,
-            "balanced",
+            "tier1",
             {"RIS_LOCAL_LOOP_MODEL": "local-test-model"},
         )
         self.assertEqual(flow["stages"][1]["provider_config"]["model"], "local-test-model")
 
     def test_review_is_forced_read_only(self) -> None:
         config = copy.deepcopy(self.config)
-        config["flows"]["balanced"]["stages"][2]["mutates"] = True
+        config["flows"]["tier1"]["stages"][2]["mutates"] = True
         with self.assertRaisesRegex(ConfigError, "review stages must be read-only"):
             validate_config(config)
 
     def test_artifacts_must_come_from_prior_stage(self) -> None:
         config = copy.deepcopy(self.config)
-        config["flows"]["balanced"]["stages"][0]["inputs"] = ["future.md"]
+        config["flows"]["tier1"]["stages"][0]["inputs"] = ["future.md"]
         with self.assertRaisesRegex(ConfigError, "unavailable artifact"):
             validate_config(config)
 
     def test_pr_must_be_last(self) -> None:
         config = copy.deepcopy(self.config)
-        stages = config["flows"]["balanced"]["stages"]
+        stages = config["flows"]["tier1"]["stages"]
         stages.append(
             {
                 "id": "after-pr",
@@ -78,12 +78,12 @@ class ConfigTests(unittest.TestCase):
 
     def test_unknown_provider_is_rejected(self) -> None:
         config = copy.deepcopy(self.config)
-        config["flows"]["balanced"]["stages"][0]["provider"] = "missing"
+        config["flows"]["tier1"]["stages"][0]["provider"] = "missing"
         with self.assertRaisesRegex(ConfigError, "unknown provider"):
             validate_config(config)
 
     def test_tokens_are_redacted_from_flow_output(self) -> None:
-        flow = resolved_flow(self.config, "balanced")
+        flow = resolved_flow(self.config, "tier1")
         rendered = flow_json(flow)
         self.assertNotIn('"auth_token": "ollama"', rendered)
         self.assertIn('"auth_token": "[redacted]"', rendered)

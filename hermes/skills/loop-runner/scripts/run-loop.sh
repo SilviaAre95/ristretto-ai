@@ -53,7 +53,7 @@ fi
 # the claude-unavailable fallback. Configure per machine in ~/.hermes/.env
 # (RIS_LOCAL_LOOP_MODEL). Requires Ollama >= 0.14 (Anthropic-compatible API)
 # and a >= 64k context window.
-LOCAL_MODEL="${RIS_LOCAL_LOOP_MODEL:-qwen3-coder:30b}"
+LOCAL_MODEL="${RIS_LOCAL_LOOP_MODEL:-qwen3.6:27b-coding-nvfp4}"
 # Auto-fallback to the local model on Claude auth/limit failures (default
 # on). RIS_LOCAL_FALLBACK=0 disables — the task then just fails and blocks.
 FALLBACK="${RIS_LOCAL_FALLBACK:-1}"

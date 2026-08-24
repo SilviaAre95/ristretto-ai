@@ -3,7 +3,7 @@ id: custom-model-flows
 title: Custom Model Flows
 status: in-progress  # proposed | in-progress | implemented | deprecated
 created_at: 2026-07-18
-last_modified: 2026-07-18
+last_modified: 2026-08-24
 owner: project
 depends_on: [autonomous-coding]
 acceptance_criteria:
@@ -24,11 +24,14 @@ non_goals:
 ## Summary
 
 Ristretto can run a coding task with a named, validated sequence of model
-stages. The included `balanced` preset plans with Claude, builds and repairs
-with the configured local model, reviews independently with Codex, runs a
-deterministic verification gate, and asks Claude to finish the branch and PR.
-`quality` and `local` presets cover cloud-heavy and local-only work. The
-existing Claude `/loop-dev` behavior remains available as `classic`.
+stages. Four included tiers trade cloud spend for local compute while keeping
+one shape: plan, build, review, repair, deterministic verify, PR. `tier0` is
+all Claude (Opus plans and reviews, Sonnet builds and repairs, Haiku opens the
+PR). `tier1` lets the local coder do the token-heavy build while Claude plans,
+reviews, and repairs. `tier2` is mainly local with a single Claude call spent on
+review. `tier3` is fully local. In every tier the reviewer is a different model
+from the builder. The existing Claude `/loop-dev` behavior remains available
+as `classic`.
 
 ## Behavior
 
@@ -44,9 +47,9 @@ stage explicitly sets `mutates: true`. Stage outputs and logs are stored under
 `.ristretto/runs/<task-id>/`; credentials are resolved from environment
 variables and are never written into the resolved flow output.
 
-Task requests may select a flow explicitly, for example "do PROJ-123 using the
-balanced flow." Saying "locally" selects `local`. Requests without a flow keep
-using `classic`, preserving the proven production path.
+Task requests may select a flow explicitly, for example "do PROJ-123 on
+tier1." Saying "locally" selects `tier3`. Requests without a flow keep using
+`classic`, preserving the proven production path.
 
 ## Custom flow example
 
@@ -64,7 +67,7 @@ flows:
         output: plan.md
       - id: build
         role: build
-        provider: local
+        provider: local-coder
         mutates: true
         inputs: [plan.md]
         output: build.md

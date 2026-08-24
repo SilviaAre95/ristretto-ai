@@ -14,7 +14,7 @@ Source of truth for what this product **does** and **does not** do. Every code c
 |----|-------|--------|---------|---------------|
 | `slack-gateway` | Slack Gateway | implemented | Ris talks to one allowlisted user in Slack over Socket Mode. | NOT public/multi-user; NOT other chat platforms in V0 |
 | `ris-persona` | Ris Persona | implemented | Assistant identifies and behaves as "Ris", per SOUL.md. | NOT a generic assistant voice; NOT changing identity per session |
-| `local-brain` | Local Brain | implemented | `qwen3.6:27b` orchestrates locally; an environment-selected Ollama coder backs up Claude. | NOT cloud LLM for orchestration in V0; NOT the primary coding brain |
+| `local-brain` | Local Brain | implemented | `qwen3.6:35b-mlx` orchestrates locally; `qwen3.6:27b-coding-nvfp4` is the local coder across four tiers. | NOT cloud LLM for orchestration in V0; NOT the primary coding brain |
 | `linear-integration` | Linear Integration | implemented | Ris reads and writes one configured Linear team via MCP. | NOT acting on other teams; NOT auto-closing issues without instruction |
 | `config-in-repo` | Config In Repo | implemented | Hermes config versioned in repo and symlinked; secrets stay local. | NOT committing secrets; NOT versioning the Hermes engine code or runtime state |
 | `morning-brief` | Morning Brief | implemented | 8am cron posts a prioritized brief to the configured Slack channel. | NOT acting on the board automatically; NOT posting when nothing is new |
