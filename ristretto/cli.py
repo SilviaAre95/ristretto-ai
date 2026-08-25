@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
@@ -33,6 +34,21 @@ def parser() -> argparse.ArgumentParser:
     show.add_argument("name", nargs="?")
 
     commands.add_parser("doctor", help="check provider commands and instance settings")
+
+    preflight_command = commands.add_parser(
+        "preflight", help="check a repository can run a supervised loop"
+    )
+    preflight_command.add_argument("project", help="configured project name or repository path")
+    preflight_command.add_argument(
+        "--deep",
+        action="store_true",
+        help="clone the base branch and run the verify gate from a clean checkout",
+    )
+
+    events_command = commands.add_parser("events", help="read the pipeline event log")
+    events_command.add_argument("task_id", nargs="?", help="limit to one task")
+    events_command.add_argument("--limit", type=int, default=50)
+    events_command.add_argument("--json", action="store_true", help="print raw JSON")
 
     instance = commands.add_parser("instance", help="read resolved instance settings")
     instance_commands = instance.add_subparsers(dest="instance_command", required=True)
@@ -87,6 +103,38 @@ def main(argv: list[str] | None = None) -> int:
             print(f"config: {path}")
             print("\n".join(findings))
             return 1 if any(line.startswith("ERROR") for line in findings) else 0
+        if args.command == "preflight":
+            from . import events as event_log
+            from .preflight import preflight
+
+            candidate = Path(args.project).expanduser()
+            repo = candidate if candidate.is_dir() else repository_path(config, args.project)
+            base = str(config.get("base_branch", "main"))
+            findings = preflight(repo, base, deep=args.deep)
+            print(f"repo: {repo}")
+            for finding in findings:
+                print(finding)
+            failed = [f for f in findings if f.level == "ERROR"]
+            event_log.emit(
+                f"preflight-{repo.name}",
+                "preflight.failed" if failed else "preflight.passed",
+                project=repo.name,
+                payload={"repo": str(repo), "errors": [f.message for f in failed]} if failed else None,
+            )
+            return 1 if failed else 0
+        if args.command == "events":
+            from . import events as event_log
+
+            records = event_log.read(args.task_id, limit=args.limit)
+            if args.json:
+                print(json.dumps(records, indent=2, sort_keys=True))
+                return 0
+            if not records:
+                print("no events recorded yet")
+                return 0
+            for record in reversed(records):
+                print(event_log.format_line(record))
+            return 0
         if args.command == "instance":
             print(instance_value(config, args.key))
             return 0

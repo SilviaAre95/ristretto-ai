@@ -11,9 +11,11 @@ import shlex
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any, Mapping
 
+from . import events
 from .config import ConfigError, load_config, resolved_flow, resolved_provider
 
 
@@ -281,6 +283,44 @@ def run_process(
         return process.returncode, f"{stdout or ''}{stderr or ''}"
 
 
+# Why the last attempt at a given stage failed, so the event carries the
+# reason the operator needs rather than a bare exit code.
+LAST_STAGE_REASON: dict[str, str] = {}
+
+
+PR_URL = re.compile(r"https://\S+/pull/\d+")
+
+
+def pr_url(artifact: Path) -> str | None:
+    """The pull request URL a pr stage reported, if it reported one."""
+    if not artifact.exists():
+        return None
+    match = PR_URL.search(artifact.read_text(encoding="utf-8", errors="replace"))
+    return match.group(0) if match else None
+
+
+def _emitter(task_id: str, issue: str, cwd: Path, dry_run: bool):
+    """Best-effort event emitter bound to this run.
+
+    Telemetry never fails a build: storage errors are swallowed inside
+    events.emit, and a dry run records nothing at all.
+    """
+
+    def emit(kind: str, *, stage: str | None = None, payload: Mapping[str, Any] | None = None) -> None:
+        if dry_run:
+            return
+        events.emit(
+            task_id,
+            kind,
+            issue_key=issue,
+            project=cwd.name,
+            stage=stage,
+            payload=payload,
+        )
+
+    return emit
+
+
 def stage_output_failure(stage: Mapping[str, Any], text: str) -> str | None:
     """Return why a stage's artifact is unusable, or None when it is fine.
 
@@ -406,7 +446,9 @@ def run_stage(
             reason = pr_stage_failure(cwd, base)
         if reason is not None:
             print(f"stage {stage['id']}: {reason}", file=sys.stderr)
+            LAST_STAGE_REASON[stage["id"]] = reason
             return 1
+        LAST_STAGE_REASON.pop(stage["id"], None)
         return 0
     if stage["provider"] != "builtin":
         provider = stage["provider_config"]
@@ -458,8 +500,12 @@ def execute(args: argparse.Namespace) -> int:
         + "\n",
         encoding="utf-8",
     )
+    emit = _emitter(args.task_id, args.issue, cwd, args.dry_run)
+    emit("run.started", payload={"flow": args.flow, "base": base})
     for stage in flow["stages"]:
         print(f"flow {args.flow}: starting {stage['id']} ({stage['role']})", file=sys.stderr)
+        emit("stage.started", stage=stage["id"], payload={"role": stage["role"]})
+        started = time.monotonic()
         code = run_stage(
             config,
             stage,
@@ -471,9 +517,31 @@ def execute(args: argparse.Namespace) -> int:
             args.dry_run,
             expected_verify_digest,
         )
+        elapsed = round(time.monotonic() - started, 1)
         if code != 0:
+            reason = LAST_STAGE_REASON.get(stage["id"]) or f"exit {code}"
             print(f"flow {args.flow}: stage {stage['id']} failed (exit {code})", file=sys.stderr)
+            if stage["role"] == "verify":
+                emit("verify.red", stage=stage["id"], payload={"detail": reason})
+            emit(
+                "stage.failed",
+                stage=stage["id"],
+                payload={"role": stage["role"], "reason": reason, "duration_s": elapsed},
+            )
+            emit("run.ended", payload={"outcome": "failed", "stage": stage["id"]})
             return code
+        if stage["role"] == "verify":
+            emit("verify.green", stage=stage["id"])
+        emit(
+            "stage.passed",
+            stage=stage["id"],
+            payload={"role": stage["role"], "duration_s": elapsed},
+        )
+        if stage["role"] == "pr":
+            url = pr_url(artifacts / str(stage.get("output", "")))
+            if url:
+                emit("pr.opened", stage=stage["id"], payload={"url": url})
+    emit("run.ended", payload={"outcome": "completed"})
     return 0
 
 

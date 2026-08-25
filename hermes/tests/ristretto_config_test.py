@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import io
 import os
 import subprocess
 import tempfile
@@ -12,6 +13,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from ristretto import events, preflight
 from ristretto.cli import main as cli_main
 from ristretto.config import (
     ConfigError,
@@ -374,6 +376,121 @@ class PrStageTests(unittest.TestCase):
             (cwd / ".ristretto" / "runs").mkdir(parents=True)
             (cwd / ".ristretto" / "runs" / "plan.md").write_text("plan\n", encoding="utf-8")
             self.assertEqual(uncommitted_paths(cwd), [])
+
+
+class EventStoreTests(unittest.TestCase):
+    def setUp(self) -> None:
+        scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(scratch.cleanup)
+        self.db = Path(scratch.name) / "events.db"
+
+    def test_emit_and_read_roundtrip(self) -> None:
+        events.emit(
+            "t_1",
+            "stage.failed",
+            issue_key="XARI-33",
+            project="kaffecard",
+            stage="plan",
+            payload={"reason": "model reported failure"},
+            path=self.db,
+        )
+        records = events.read("t_1", path=self.db)
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["kind"], "stage.failed")
+        self.assertEqual(records[0]["stage"], "plan")
+        self.assertEqual(records[0]["payload"], {"reason": "model reported failure"})
+
+    def test_unknown_kind_is_a_caller_bug_and_raises(self) -> None:
+        with self.assertRaises(events.UnknownEventKind):
+            events.emit("t_1", "stage.exploded", path=self.db)
+
+    def test_storage_failure_never_raises(self) -> None:
+        # Telemetry must not be able to fail the build it is describing.
+        unwritable = Path("/proc/definitely/not/writable/events.db")
+        with contextlib.redirect_stderr(io.StringIO()) as noise:
+            self.assertFalse(events.emit("t_1", "run.started", path=unwritable))
+        self.assertIn("could not record", noise.getvalue())
+
+    def test_reads_are_newest_first_and_limited(self) -> None:
+        for index in range(5):
+            events.emit("t_1", "stage.passed", stage=f"s{index}", path=self.db, now=1000 + index)
+        records = events.read("t_1", limit=2, path=self.db)
+        self.assertEqual([r["stage"] for r in records], ["s4", "s3"])
+
+    def test_events_are_scoped_by_task(self) -> None:
+        events.emit("t_1", "run.started", path=self.db)
+        events.emit("t_2", "run.started", path=self.db)
+        self.assertEqual(len(events.read("t_1", path=self.db)), 1)
+        self.assertEqual(len(events.read(path=self.db)), 2)
+
+    def test_unserializable_payload_is_dropped_not_fatal(self) -> None:
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertTrue(events.emit("t_1", "run.started", payload={"x": object()}, path=self.db))
+        self.assertIsNone(events.read("t_1", path=self.db)[0]["payload"])
+
+
+class PreflightTests(unittest.TestCase):
+    """A repo is loop-capable only if a fresh worktree can run its gate."""
+
+    def _repo(self) -> Path:
+        scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(scratch.cleanup)
+        origin = Path(scratch.name) / "origin.git"
+        work = Path(scratch.name) / "work"
+        run = lambda *a, **k: subprocess.run(list(a), check=True, capture_output=True, **k)
+        run("git", "init", "-q", "--bare", "-b", "main", str(origin))
+        run("git", "clone", "-q", str(origin), str(work))
+        for key, value in (("user.email", "t@example.invalid"), ("user.name", "T")):
+            run("git", "config", key, value, cwd=work)
+        (work / "seed.txt").write_text("seed\n", encoding="utf-8")
+        run("git", "add", "-A", cwd=work)
+        run("git", "commit", "-q", "-m", "seed", cwd=work)
+        run("git", "push", "-q", "origin", "main", cwd=work)
+        return work
+
+    def test_gate_files_missing_entirely(self) -> None:
+        findings = preflight.fast_findings(self._repo())
+        self.assertEqual(len([f for f in findings if f.level == "ERROR"]), 2)
+        self.assertTrue(all("missing" in f.message for f in findings))
+
+    def test_gate_file_on_disk_but_uncommitted_is_an_error(self) -> None:
+        # Exactly the pilates-flow case: present locally, absent from the ref
+        # a fresh worktree starts from.
+        repo = self._repo()
+        for name in preflight.GATE_FILES:
+            (repo / name).write_text("local only\n", encoding="utf-8")
+        findings = preflight.fast_findings(repo)
+        self.assertEqual(len([f for f in findings if f.level == "ERROR"]), 2)
+        self.assertTrue(all("not committed" in f.message for f in findings))
+
+    def test_committed_gate_files_pass(self) -> None:
+        repo = self._repo()
+        for name in preflight.GATE_FILES:
+            (repo / name).write_text("committed\n", encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-q", "-m", "wire"], cwd=repo, check=True, capture_output=True)
+        subprocess.run(["git", "push", "-q", "origin", "main"], cwd=repo, check=True, capture_output=True)
+        findings = preflight.fast_findings(repo)
+        self.assertFalse([f for f in findings if f.level == "ERROR"], findings)
+
+    def test_origin_wins_over_a_stale_local_branch(self) -> None:
+        # A local main sitting behind the remote must not be what we inspect.
+        repo = self._repo()
+        for name in preflight.GATE_FILES:
+            (repo / name).write_text("committed\n", encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-q", "-m", "wire"], cwd=repo, check=True, capture_output=True)
+        subprocess.run(["git", "push", "-q", "origin", "main"], cwd=repo, check=True, capture_output=True)
+        subprocess.run(["git", "reset", "-q", "--hard", "HEAD~1"], cwd=repo, check=True, capture_output=True)
+        self.assertEqual(preflight.resolve_ref(repo, "main"), "origin/main")
+        self.assertFalse([f for f in preflight.fast_findings(repo) if f.level == "ERROR"])
+
+    def test_non_git_directory_is_reported(self) -> None:
+        scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(scratch.cleanup)
+        findings = preflight.fast_findings(Path(scratch.name))
+        self.assertEqual(len(findings), 1)
+        self.assertIn("not a git repository", findings[0].message)
 
 
 if __name__ == "__main__":
