@@ -138,6 +138,13 @@ def validate_config(config: Mapping[str, Any]) -> None:
                 f"providers.{name}.auth_token may only use the non-secret ollama placeholder; "
                 "real credentials must use auth_token_env"
             )
+        context_length = provider.get("context_length")
+        if context_length is not None and (
+            not isinstance(context_length, int)
+            or isinstance(context_length, bool)
+            or context_length <= 0
+        ):
+            raise ConfigError(f"providers.{name}.context_length must be a positive integer")
         fallback = provider.get("fallback")
         if fallback is not None and fallback not in providers:
             raise ConfigError(f"providers.{name}.fallback references unknown provider {fallback}")
