@@ -13,7 +13,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from ristretto import events, preflight
+from ristretto import events, gc, preflight
 from ristretto.cli import main as cli_main
 from ristretto.config import (
     ConfigError,
@@ -491,6 +491,114 @@ class PreflightTests(unittest.TestCase):
         findings = preflight.fast_findings(Path(scratch.name))
         self.assertEqual(len(findings), 1)
         self.assertIn("not a git repository", findings[0].message)
+
+
+class GarbageCollectionTests(unittest.TestCase):
+    """Removing a worktree must never lose work that only exists there."""
+
+    def setUp(self) -> None:
+        scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(scratch.cleanup)
+        self.repo = Path(scratch.name) / "repo"
+        self.repo.mkdir()
+        run = lambda *a: subprocess.run(list(a), cwd=self.repo, check=True, capture_output=True)
+        run("git", "init", "-q", "-b", "main")
+        run("git", "config", "user.email", "t@example.invalid")
+        run("git", "config", "user.name", "T")
+        (self.repo / "seed.txt").write_text("seed\n", encoding="utf-8")
+        run("git", "add", "-A")
+        run("git", "commit", "-q", "-m", "seed")
+
+    def _worktree(self, name: str) -> Path:
+        path = self.repo / ".worktrees" / name
+        subprocess.run(
+            ["git", "worktree", "add", "--detach", "--quiet", str(path), "HEAD"],
+            cwd=self.repo,
+            check=True,
+            capture_output=True,
+        )
+        self.addCleanup(
+            lambda: subprocess.run(
+                ["git", "worktree", "remove", "--force", str(path)],
+                cwd=self.repo,
+                check=False,
+                capture_output=True,
+            )
+        )
+        return path
+
+    def _only(self, tasks: dict) -> gc.Candidate:
+        candidates = [c for c in gc.plan(self.repo, tasks) if c.path.name.startswith("t_")]
+        self.assertEqual(len(candidates), 1, candidates)
+        return candidates[0]
+
+    def test_finished_task_with_clean_tree_is_removable(self) -> None:
+        self._worktree("t_a1b2c3d4")
+        decision = self._only({"t_a1b2c3d4": {"id": "t_a1b2c3d4", "status": "done"}})
+        self.assertEqual(decision.action, "remove")
+
+    def test_uncommitted_work_is_never_removed(self) -> None:
+        path = self._worktree("t_a1b2c3d4")
+        (path / "unsaved.txt").write_text("work\n", encoding="utf-8")
+        decision = self._only({"t_a1b2c3d4": {"id": "t_a1b2c3d4", "status": "done"}})
+        self.assertEqual(decision.action, "keep")
+        self.assertIn("unsaved.txt", decision.reason)
+
+    def test_run_artifacts_do_not_block_removal(self) -> None:
+        path = self._worktree("t_a1b2c3d4")
+        (path / ".ristretto" / "runs").mkdir(parents=True)
+        (path / ".ristretto" / "runs" / "plan.md").write_text("plan\n", encoding="utf-8")
+        decision = self._only({"t_a1b2c3d4": {"id": "t_a1b2c3d4", "status": "done"}})
+        self.assertEqual(decision.action, "remove")
+
+    def test_running_task_is_left_alone(self) -> None:
+        self._worktree("t_a1b2c3d4")
+        for status in ("running", "blocked", "ready"):
+            decision = self._only({"t_a1b2c3d4": {"id": "t_a1b2c3d4", "status": status}})
+            self.assertEqual(decision.action, "keep", status)
+
+    def test_unknown_task_is_left_for_a_human(self) -> None:
+        self._worktree("t_a1b2c3d4")
+        decision = self._only({})
+        self.assertEqual(decision.action, "keep")
+        self.assertIn("no matching task", decision.reason)
+
+    def test_directories_not_named_after_a_task_are_untouched(self) -> None:
+        # A developer's own worktree must never be a candidate, whatever the
+        # board contains.
+        self._worktree("my-own-experiment")
+        candidates = gc.plan(self.repo, {"my-own-experiment": {"status": "done"}})
+        mine = [c for c in candidates if c.path.name == "my-own-experiment"]
+        self.assertEqual(mine[0].action, "keep")
+        self.assertIn("not a task worktree", mine[0].reason)
+
+    def test_reclaim_removes_only_approved_candidates(self) -> None:
+        keep = self._worktree("t_deadbee1")
+        drop = self._worktree("t_deadbee2")
+        (keep / "unsaved.txt").write_text("work\n", encoding="utf-8")
+        tasks = {
+            "t_deadbee1": {"id": "t_deadbee1", "status": "done"},
+            "t_deadbee2": {"id": "t_deadbee2", "status": "done"},
+        }
+        gc.reclaim(self.repo, gc.plan(self.repo, tasks))
+        self.assertTrue(keep.exists(), "a dirty worktree was removed")
+        self.assertFalse(drop.exists(), "a clean finished worktree was left behind")
+
+    def test_merged_branches_excludes_base_and_current(self) -> None:
+        run = lambda *a: subprocess.run(list(a), cwd=self.repo, check=True, capture_output=True)
+        run("git", "branch", "merged-work")
+        names = gc.merged_branches(self.repo, "main")
+        self.assertIn("merged-work", names)
+        self.assertNotIn("main", names)
+
+    def test_unmerged_branch_is_not_offered(self) -> None:
+        run = lambda *a: subprocess.run(list(a), cwd=self.repo, check=True, capture_output=True)
+        run("git", "checkout", "-q", "-b", "unmerged")
+        (self.repo / "new.txt").write_text("new\n", encoding="utf-8")
+        run("git", "add", "-A")
+        run("git", "commit", "-q", "-m", "unmerged work")
+        run("git", "checkout", "-q", "main")
+        self.assertNotIn("unmerged", gc.merged_branches(self.repo, "main"))
 
 
 if __name__ == "__main__":

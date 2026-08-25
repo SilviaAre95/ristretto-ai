@@ -45,6 +45,19 @@ def parser() -> argparse.ArgumentParser:
         help="clone the base branch and run the verify gate from a clean checkout",
     )
 
+    gc_command = commands.add_parser(
+        "gc", help="reclaim worktrees and branches left by finished tasks"
+    )
+    gc_command.add_argument(
+        "project", nargs="?", help="configured project name or path (default: all configured)"
+    )
+    gc_command.add_argument(
+        "--force", action="store_true", help="actually remove; without this it only reports"
+    )
+    gc_command.add_argument(
+        "--branches", action="store_true", help="also delete local branches merged into the base"
+    )
+
     events_command = commands.add_parser("events", help="read the pipeline event log")
     events_command.add_argument("task_id", nargs="?", help="limit to one task")
     events_command.add_argument("--limit", type=int, default=50)
@@ -122,6 +135,50 @@ def main(argv: list[str] | None = None) -> int:
                 payload={"repo": str(repo), "errors": [f.message for f in failed]} if failed else None,
             )
             return 1 if failed else 0
+        if args.command == "gc":
+            from . import gc as garbage
+
+            if args.project:
+                candidate = Path(args.project).expanduser()
+                repos = [candidate if candidate.is_dir() else repository_path(config, args.project)]
+            else:
+                repos = [
+                    Path(value).expanduser()
+                    for value in config.get("repositories", {}).values()
+                ]
+            if not repos:
+                print("no repositories configured")
+                return 0
+            base = str(config.get("base_branch", "main"))
+            tasks = garbage.board_tasks()
+            if not tasks:
+                print("could not read the kanban board — refusing to remove anything")
+                return 1
+            removable = 0
+            for repo in repos:
+                if not repo.is_dir():
+                    continue
+                print(f"repo: {repo}")
+                candidates = garbage.plan(repo, tasks)
+                for item in candidates:
+                    print(f"  {item}")
+                removable += sum(1 for item in candidates if item.action == "remove")
+                if args.force:
+                    for line in garbage.reclaim(repo, candidates):
+                        print(f"  {line}")
+                if args.branches:
+                    names = garbage.merged_branches(repo, base)
+                    if not names:
+                        print("  no merged branches to delete")
+                    elif args.force:
+                        for line in garbage.delete_branches(repo, names):
+                            print(f"  {line}")
+                    else:
+                        for name in names:
+                            print(f"  DELETE branch {name}  (merged into {base})")
+            if not args.force and removable:
+                print(f"\n{removable} worktree(s) would be removed. Re-run with --force.")
+            return 0
         if args.command == "events":
             from . import events as event_log
 
