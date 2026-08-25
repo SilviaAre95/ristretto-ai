@@ -173,6 +173,11 @@ def runner_command(
             env["ANTHROPIC_BASE_URL"] = str(provider["base_url"])
         if provider.get("auth_token"):
             env["ANTHROPIC_AUTH_TOKEN"] = str(provider["auth_token"])
+        if provider.get("context_length"):
+            # The runner does not know local model names and assumes a 200k
+            # window for them, compacting long stages far earlier than the
+            # model requires. Declare the real window per provider.
+            env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = str(provider["context_length"])
         command.append(prompt)
         return command, env, "claude"
     if runner == "codex":

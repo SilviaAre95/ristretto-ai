@@ -208,6 +208,36 @@ class RunnerCommandTests(unittest.TestCase):
                 os.environ["HERMES_KANBAN_BOARD"] = previous
 
 
+class ContextLengthTests(unittest.TestCase):
+    """Local model names are unknown to the runner, which then assumes 200k."""
+
+    def setUp(self) -> None:
+        config, _ = load_config(ROOT / "ristretto.yaml")
+        self.config = copy.deepcopy(config)
+
+    def _command_env(self, provider_name: str) -> dict[str, str]:
+        provider = resolved_provider(self.config, provider_name)
+        stage = {"id": "build", "role": "build", "mutates": True}
+        _, env, _ = runner_command(provider, stage, "prompt", Path("/tmp"), Path("/tmp/out.md"))
+        return env
+
+    def test_declared_window_is_exported(self) -> None:
+        env = self._command_env("local-coder")
+        self.assertEqual(env.get("CLAUDE_CODE_MAX_CONTEXT_TOKENS"), "262144")
+
+    def test_cloud_provider_gets_no_override(self) -> None:
+        # Claude knows its own models; forcing a window would only cause harm.
+        env = self._command_env("claude")
+        self.assertNotIn("CLAUDE_CODE_MAX_CONTEXT_TOKENS", env)
+
+    def test_context_length_must_be_a_positive_integer(self) -> None:
+        for bad in ("262144", 0, -1, True, 1.5):
+            config = copy.deepcopy(self.config)
+            config["providers"]["local-coder"]["context_length"] = bad
+            with self.assertRaisesRegex(ConfigError, "context_length", msg=f"accepted {bad!r}"):
+                validate_config(config)
+
+
 class DoctorLocalModelTests(unittest.TestCase):
     """A configured model name is not evidence the host still serves it.
 

@@ -42,12 +42,16 @@ providers:
     # Non-secret compatibility placeholder required by Ollama's local API.
     # Real provider credentials must use auth_token_env, never auth_token.
     auth_token: ollama
+    # Real window for this model; without it the runner assumes 200k.
+    context_length: 262144
   local-coder:
     runner: claude-code
     model: qwen3.6:27b-coding-nvfp4
     model_env: RIS_LOCAL_LOOP_MODEL
     base_url: http://localhost:11434
     auth_token: ollama
+    # Real window for this model; without it the runner assumes 200k.
+    context_length: 262144
   # Independent reviewer for custom flows; not used by the standard tiers.
   codex:
     runner: codex
