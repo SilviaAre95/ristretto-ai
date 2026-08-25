@@ -157,10 +157,24 @@ run_once() {  # $1 = cloud|local, $2 = fresh|resume — sets RC + RUN_ELAPSED
   cat "$OUT"
 }
 
+# Pipeline telemetry. Never allowed to fail the loop it is describing: the
+# emitter always exits 0, and `|| true` covers a missing interpreter too.
+ris_event() {
+  python3 "$SCRIPT_DIR/../../../scripts/ris-event.py" "$TASK_ID" "$1" \
+    --issue "$ISSUE_KEY" --project "$(basename "$PWD")" "${@:2}" >/dev/null 2>&1 || true
+}
+
+ris_event run.started --payload "{\"flow\":\"classic\",\"model\":\"${MODEL:-default}\"}"
+
+finish() {  # $1 = outcome
+  ris_event run.ended --payload "{\"outcome\":\"$1\",\"runtime\":\"$2\"}"
+}
+
 if [ "$MODEL" = "local" ]; then
   MODEL=""  # run_once local supplies LOCAL_MODEL as the flag
   run_once local fresh
   [ "$RC" -eq 0 ] && rm -f "$SESSION_FILE"
+  [ "$RC" -eq 0 ] && finish completed local || finish failed local
   exit "$RC"
 fi
 
@@ -180,10 +194,15 @@ else
   run_once cloud fresh
 fi
 
+RUNTIME=cloud
 if [ "$RC" -ne 0 ] && [ "$FALLBACK" = "1" ] && \
    grep -qiE "session limit|oauth|failed to authenticate|credit balance" "$OUT"; then
   echo "run-loop: claude unavailable (rc=$RC) — falling back to local model $LOCAL_MODEL" >&2
+  ris_event stage.failed --stage cloud \
+    --payload "{\"reason\":\"claude unavailable (rc=$RC)\",\"fallback\":\"$LOCAL_MODEL\"}"
+  RUNTIME=local-fallback
   run_once local fresh
 fi
 [ "$RC" -eq 0 ] && rm -f "$SESSION_FILE"
+[ "$RC" -eq 0 ] && finish completed "$RUNTIME" || finish failed "$RUNTIME"
 exit "$RC"

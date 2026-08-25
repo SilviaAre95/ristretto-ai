@@ -89,6 +89,9 @@ install -m 0755 \
 install -m 0755 \
   "$repo/hermes/scripts/ris-stop.sh" \
   "$hermes_home/scripts/ris-stop.sh"
+install -m 0755 \
+  "$repo/hermes/scripts/ris-event.py" \
+  "$hermes_home/scripts/ris-event.py"
 
 if [ ! -d "$hermes_home/profiles/ris-worker" ]; then
   HERMES_HOME="$hermes_home" hermes profile create ris-worker --no-skills \
