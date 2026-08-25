@@ -14,11 +14,14 @@ from pathlib import Path
 from ristretto.cli import main as cli_main
 from ristretto.config import (
     ConfigError,
+    doctor,
     flow_json,
     instance_value,
     load_config,
     repository_path,
     resolved_flow,
+    resolved_provider,
+    served_models,
     validate_config,
 )
 from ristretto.runner import (
@@ -202,6 +205,48 @@ class RunnerCommandTests(unittest.TestCase):
                 os.environ.pop("HERMES_KANBAN_BOARD", None)
             else:
                 os.environ["HERMES_KANBAN_BOARD"] = previous
+
+
+class DoctorLocalModelTests(unittest.TestCase):
+    """A configured model name is not evidence the host still serves it."""
+
+    def _config(self) -> dict:
+        config, _ = load_config(ROOT / "ristretto.yaml")
+        return copy.deepcopy(config)
+
+    def test_missing_local_model_is_an_error(self) -> None:
+        config = self._config()
+        findings = doctor(config, os.environ, catalog=lambda url: {"some-other-model"})
+        errors = [f for f in findings if f.startswith("ERROR") and "not served" in f]
+        self.assertTrue(errors, f"expected a not-served error, got: {findings}")
+
+    def test_served_local_model_is_ok(self) -> None:
+        config = self._config()
+        models = {
+            resolved_provider(config, name)["model"]
+            for name, p in config["providers"].items()
+            if p.get("base_url")
+        }
+        findings = doctor(config, os.environ, catalog=lambda url: models)
+        self.assertFalse([f for f in findings if f.startswith("ERROR")], findings)
+
+    def test_unreachable_endpoint_warns_rather_than_errors(self) -> None:
+        # The server being down is not a configuration error.
+        config = self._config()
+        findings = doctor(config, os.environ, catalog=lambda url: None)
+        self.assertFalse([f for f in findings if f.startswith("ERROR")], findings)
+        self.assertTrue([f for f in findings if f.startswith("WARN") and "cannot reach" in f])
+
+    def test_endpoint_is_queried_once_per_base_url(self) -> None:
+        config = self._config()
+        calls: list[str] = []
+
+        def catalog(url: str) -> set[str]:
+            calls.append(url)
+            return set()
+
+        doctor(config, os.environ, catalog=catalog)
+        self.assertEqual(len(calls), len(set(calls)), f"duplicate lookups: {calls}")
 
 
 class StageOutcomeTests(unittest.TestCase):
