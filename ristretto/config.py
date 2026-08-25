@@ -63,6 +63,87 @@ def user_config_path(environ: Mapping[str, str] | None = None) -> Path:
     return xdg / "ristretto" / "config.yaml"
 
 
+# Providers and flows describe how Ristretto works and ship with it. The
+# instance and its repository map describe one person's machine. Copying the
+# first group into the user's file is what let a live install sit on flows
+# that had been replaced months earlier — valid, internally consistent, and
+# silently out of date.
+PROJECT_KEYS = frozenset({"schema_version", "providers", "flows"})
+USER_KEYS = frozenset({"instance", "repositories", "default_flow", "base_branch"})
+# Merged by name so a user may override or add one provider or flow without
+# pinning the whole set.
+MERGED_KEYS = ("providers", "flows")
+
+
+def packaged_config_path(environ: Mapping[str, str] | None = None) -> Path:
+    """The project layer that ships with Ristretto."""
+    source_tree = repo_root() / "ristretto.yaml"
+    if source_tree.is_file():
+        return source_tree
+    return Path(sysconfig.get_path("data")) / "share" / "ristretto" / "ristretto.yaml"
+
+
+def read_yaml(path: Path) -> dict[str, Any]:
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        raise ConfigError(f"invalid YAML in {path}: {exc}") from exc
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ConfigError(f"configuration root must be a mapping: {path}")
+    return raw
+
+
+def merge_layers(project: Mapping[str, Any], user: Mapping[str, Any]) -> dict[str, Any]:
+    """Overlay a user's settings on the shipped project layer."""
+    merged: dict[str, Any] = {key: value for key, value in project.items()}
+    for key, value in user.items():
+        if key in MERGED_KEYS and isinstance(value, dict) and isinstance(merged.get(key), dict):
+            combined = dict(merged[key])
+            combined.update(value)
+            merged[key] = combined
+        else:
+            merged[key] = value
+    return merged
+
+
+def pinned_project_keys(user: Mapping[str, Any], project: Mapping[str, Any]) -> list[str]:
+    """Project-layer entries a user file is holding an identical copy of."""
+    stale: list[str] = []
+    for key in MERGED_KEYS:
+        for name, value in (user.get(key) or {}).items():
+            if (project.get(key) or {}).get(name) == value:
+                stale.append(f"{key}.{name}")
+    return stale
+
+
+def entry_differences(
+    user: Mapping[str, Any], project: Mapping[str, Any]
+) -> dict[str, list[str]]:
+    """Field-level differences for entries a user file has diverged on.
+
+    A diff cannot distinguish a deliberate customisation from a copy that has
+    simply fallen behind, so the difference is reported rather than guessed at.
+    """
+    report: dict[str, list[str]] = {}
+    for key in MERGED_KEYS:
+        for name, value in (user.get(key) or {}).items():
+            shipped = (project.get(key) or {}).get(name)
+            if shipped is None or shipped == value:
+                continue
+            lines: list[str] = []
+            if isinstance(value, Mapping) and isinstance(shipped, Mapping):
+                for field in sorted(set(value) | set(shipped)):
+                    mine, theirs = value.get(field, "<absent>"), shipped.get(field, "<absent>")
+                    if mine != theirs:
+                        lines.append(f"{field}: yours={mine!r} shipped={theirs!r}")
+            else:
+                lines.append(f"yours={value!r} shipped={shipped!r}")
+            report[f"{key}.{name}"] = lines
+    return report
+
+
 def load_config(
     path: str | Path | None = None,
     environ: Mapping[str, str] | None = None,
@@ -70,12 +151,12 @@ def load_config(
     config_path = Path(path).expanduser() if path else default_config_path(environ)
     if not config_path.is_file():
         raise ConfigError(f"configuration not found: {config_path}")
-    try:
-        raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    except yaml.YAMLError as exc:
-        raise ConfigError(f"invalid YAML in {config_path}: {exc}") from exc
-    if not isinstance(raw, dict):
-        raise ConfigError("configuration root must be a mapping")
+    packaged = packaged_config_path(environ)
+    user_raw = read_yaml(config_path)
+    if packaged.is_file() and packaged.resolve() != config_path.resolve():
+        raw = merge_layers(read_yaml(packaged), user_raw)
+    else:
+        raw = user_raw
     validate_config(raw)
     return raw, config_path.resolve()
 
@@ -276,13 +357,43 @@ def repositories(config: Mapping[str, Any]) -> dict[str, str]:
     return {str(name): str(Path(str(path)).expanduser()) for name, path in repos.items()}
 
 
-def write_user_config(config: Mapping[str, Any], path: Path) -> None:
+def user_layer(
+    config: Mapping[str, Any],
+    environ: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """Just the parts that belong to this machine.
+
+    Anything identical to what shipped is dropped: re-persisting a copy is
+    what let a live config keep serving flows that had since been replaced.
+    """
+    packaged = packaged_config_path(environ)
+    project = read_yaml(packaged) if packaged.is_file() else {}
+    layer: dict[str, Any] = {}
+    for key, value in config.items():
+        if key in USER_KEYS:
+            layer[key] = value
+        elif key in MERGED_KEYS and isinstance(value, dict):
+            customised = {
+                name: entry
+                for name, entry in value.items()
+                if (project.get(key) or {}).get(name) != entry
+            }
+            if customised:
+                layer[key] = customised
+    return layer
+
+
+def write_user_config(
+    config: Mapping[str, Any],
+    path: Path,
+    environ: Mapping[str, str] | None = None,
+) -> None:
     validate_config(config)
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(
         "w", encoding="utf-8", dir=path.parent, delete=False
     ) as handle:
-        yaml.safe_dump(dict(config), handle, sort_keys=False)
+        yaml.safe_dump(user_layer(config, environ), handle, sort_keys=False)
         temporary = Path(handle.name)
     os.chmod(temporary, 0o600)
     temporary.replace(path)

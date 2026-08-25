@@ -45,6 +45,18 @@ def parser() -> argparse.ArgumentParser:
         help="clone the base branch and run the verify gate from a clean checkout",
     )
 
+    migrate_command = commands.add_parser(
+        "migrate", help="drop project-layer copies from the user configuration"
+    )
+    migrate_command.add_argument(
+        "--force", action="store_true", help="rewrite the file; without this it only reports"
+    )
+    migrate_command.add_argument(
+        "--adopt",
+        action="store_true",
+        help="also take the shipped version of entries that differ",
+    )
+
     gc_command = commands.add_parser(
         "gc", help="reclaim worktrees and branches left by finished tasks"
     )
@@ -135,6 +147,62 @@ def main(argv: list[str] | None = None) -> int:
                 payload={"repo": str(repo), "errors": [f.message for f in failed]} if failed else None,
             )
             return 1 if failed else 0
+        if args.command == "migrate":
+            from .config import (
+                entry_differences,
+                packaged_config_path,
+                pinned_project_keys,
+                read_yaml,
+            )
+
+            target = args.config.expanduser() if args.config else user_config_path()
+            if not target.is_file():
+                print(f"nothing to migrate: {target} does not exist")
+                return 0
+            packaged = packaged_config_path()
+            stored = read_yaml(target)
+            pinned = pinned_project_keys(stored, read_yaml(packaged) if packaged.is_file() else {})
+            kept = {
+                key
+                for key in stored
+                if key not in ("instance", "repositories", "default_flow", "base_branch")
+            }
+            if not pinned and not kept:
+                print(f"{target} already holds only user settings")
+                return 0
+            print(f"config: {target}")
+            for name in pinned:
+                print(f"  DROP  {name}  (identical to the shipped version)")
+            differences = entry_differences(
+                stored, read_yaml(packaged) if packaged.is_file() else {}
+            )
+            verb = "DROP " if args.adopt else "KEEP "
+            for name, lines in differences.items():
+                note = "adopting the shipped version" if args.adopt else "stays pinned"
+                print(f"  {verb} {name}  (differs — {note})")
+                for line in lines:
+                    print(f"          {line}")
+            if differences and not args.adopt:
+                print(
+                    "\nA difference may be a deliberate change or simply an out-of-date copy."
+                    "\nReview the fields above; --adopt takes the shipped version for all of them."
+                )
+            if not args.force:
+                print("\nRe-run with --force to rewrite. A backup is written alongside.")
+                return 0
+            backup = target.with_suffix(f"{target.suffix}.bak")
+            backup.write_text(target.read_text(encoding="utf-8"), encoding="utf-8")
+            merged = load_config(target)[0]
+            if args.adopt:
+                packaged_raw = read_yaml(packaged) if packaged.is_file() else {}
+                for key in ("providers", "flows"):
+                    for name in list((stored.get(key) or {})):
+                        shipped = (packaged_raw.get(key) or {}).get(name)
+                        if shipped is not None:
+                            merged.setdefault(key, {})[name] = shipped
+            write_user_config(merged, target)
+            print(f"rewrote {target} (backup: {backup})")
+            return 0
         if args.command == "gc":
             from . import gc as garbage
 

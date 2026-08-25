@@ -18,6 +18,8 @@ from ristretto.cli import main as cli_main
 from ristretto.config import (
     ConfigError,
     doctor,
+    entry_differences,
+    merge_layers,
     flow_json,
     instance_value,
     load_config,
@@ -25,7 +27,9 @@ from ristretto.config import (
     resolved_flow,
     resolved_provider,
     served_models,
+    pinned_project_keys,
     validate_config,
+    write_user_config,
 )
 from ristretto.runner import (
     FlowError,
@@ -491,6 +495,93 @@ class PreflightTests(unittest.TestCase):
         findings = preflight.fast_findings(Path(scratch.name))
         self.assertEqual(len(findings), 1)
         self.assertIn("not a git repository", findings[0].message)
+
+
+class ConfigLayerTests(unittest.TestCase):
+    """The user's file describes a machine, not how Ristretto works.
+
+    Copying providers and flows into it is what let a live install keep
+    serving presets that had been replaced months earlier — valid,
+    internally consistent, and silently out of date.
+    """
+
+    def setUp(self) -> None:
+        scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(scratch.cleanup)
+        self.target = Path(scratch.name) / "config.yaml"
+        self.project, _ = load_config(ROOT / "ristretto.yaml")
+
+    def _write(self, data: dict) -> None:
+        import yaml
+
+        self.target.write_text(yaml.safe_dump(data), encoding="utf-8")
+
+    def test_user_file_needs_only_machine_settings(self) -> None:
+        self._write(
+            {
+                "instance": {"linear_team": "DEMO"},
+                "repositories": {"Example": "/tmp/example"},
+            }
+        )
+        merged, _ = load_config(self.target)
+        self.assertEqual(sorted(merged["flows"]), sorted(self.project["flows"]))
+        self.assertEqual(merged["instance"]["linear_team"], "DEMO")
+
+    def test_user_entry_overrides_one_provider_without_pinning_the_rest(self) -> None:
+        self._write(
+            {
+                "instance": {"linear_team": "DEMO"},
+                "repositories": {},
+                "providers": {"claude": {"runner": "claude-code", "model": "haiku"}},
+            }
+        )
+        merged, _ = load_config(self.target)
+        self.assertEqual(merged["providers"]["claude"]["model"], "haiku")
+        self.assertIn("local-coder", merged["providers"])
+        self.assertEqual(sorted(merged["flows"]), sorted(self.project["flows"]))
+
+    def test_write_user_config_drops_what_shipped_unchanged(self) -> None:
+        write_user_config(copy.deepcopy(self.project), self.target)
+        import yaml
+
+        stored = yaml.safe_load(self.target.read_text(encoding="utf-8"))
+        self.assertNotIn("flows", stored)
+        self.assertNotIn("providers", stored)
+        self.assertIn("instance", stored)
+        # And the merged view is unchanged by the round trip.
+        merged, _ = load_config(self.target)
+        self.assertEqual(sorted(merged["flows"]), sorted(self.project["flows"]))
+
+    def test_write_user_config_keeps_a_genuine_customisation(self) -> None:
+        config = copy.deepcopy(self.project)
+        config["providers"]["claude"]["model"] = "haiku"
+        write_user_config(config, self.target)
+        import yaml
+
+        stored = yaml.safe_load(self.target.read_text(encoding="utf-8"))
+        self.assertEqual(list(stored["providers"]), ["claude"])
+        self.assertEqual(stored["providers"]["claude"]["model"], "haiku")
+
+    def test_identical_copies_are_reported_as_pinned(self) -> None:
+        pinned = pinned_project_keys(self.project, self.project)
+        self.assertIn("flows.tier3", pinned)
+        self.assertIn("providers.local-coder", pinned)
+
+    def test_differences_are_reported_field_by_field(self) -> None:
+        # A stale copy and a deliberate change look identical to a diff, so
+        # the fields are shown rather than guessed at.
+        stale = copy.deepcopy(self.project)
+        stale["providers"]["local-coder"].pop("context_length", None)
+        report = entry_differences(stale, self.project)
+        self.assertIn("providers.local-coder", report)
+        self.assertTrue(
+            any("context_length" in line for line in report["providers.local-coder"]),
+            report,
+        )
+
+    def test_merge_prefers_the_user_for_scalars(self) -> None:
+        merged = merge_layers({"base_branch": "main"}, {"base_branch": "trunk"})
+        self.assertEqual(merged["base_branch"], "trunk")
 
 
 class GarbageCollectionTests(unittest.TestCase):
