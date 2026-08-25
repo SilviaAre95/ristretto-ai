@@ -14,6 +14,7 @@ a heartbeat it never saw.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -22,6 +23,8 @@ from typing import Any, Mapping
 
 from .. import events
 
+# Same shape ris-stop.sh enforces before it will act on an id.
+SAFE_TASK_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 # A run with no news for this long, still claiming to be active, is reported
 # as stalled rather than healthy. Silence is the failure mode that cost two
 # tasks a month apiece.
@@ -118,7 +121,15 @@ def board(timeout: int = 30) -> list[dict[str, Any]]:
 
 
 def task_detail(task_id: str, timeout: int = 30) -> dict[str, Any]:
-    """Hermes' own view of one task, including its run history."""
+    """Hermes' own view of one task, including its run history.
+
+    The id arrives from a URL and crosses a process boundary. There is no
+    shell here — the command is a list — but unvalidated request data should
+    not reach another program's argv on the strength of that alone, so the
+    shape is checked first. It matches the guard `ris-stop.sh` already uses.
+    """
+    if not SAFE_TASK_ID.fullmatch(task_id):
+        return {}
     result = subprocess.run(
         ["hermes", "kanban", "show", "--json", task_id],
         capture_output=True,

@@ -151,6 +151,14 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("xariprojects/xari-33", response.text)
 
+    def test_hostile_task_ids_never_reach_a_subprocess(self) -> None:
+        # The id comes from a URL and crosses a process boundary. argv is not
+        # a shell, but that is not a reason to pass request data unchecked.
+        with mock.patch.object(data.subprocess, "run") as spawned:
+            for hostile in ("../../etc/passwd", "a b", "$(whoami)", "-rf", "", "x" * 200):
+                self.assertEqual(data.task_detail(hostile), {}, hostile)
+            spawned.assert_not_called()
+
     def test_there_are_no_mutating_routes(self) -> None:
         # Phase 2 observes and nothing else; controls arrive with the
         # privilege split that should accompany them.
