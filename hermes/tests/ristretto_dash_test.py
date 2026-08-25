@@ -36,7 +36,7 @@ def task(**overrides):
         "started_at": NOW - 600,
         "completed_at": None,
         "branch_name": "xariprojects/xari-33",
-        "workspace_path": "/Users/x/code/kaffecard/.worktrees/t_a1b2c3d4",
+        "workspace_path": "/repos/kaffecard/.worktrees/t_a1b2c3d4",
     }
     base.update(overrides)
     return base
