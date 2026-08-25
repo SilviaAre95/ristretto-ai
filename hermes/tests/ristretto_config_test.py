@@ -10,6 +10,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from ristretto.cli import main as cli_main
 from ristretto.config import (
@@ -208,44 +209,52 @@ class RunnerCommandTests(unittest.TestCase):
 
 
 class DoctorLocalModelTests(unittest.TestCase):
-    """A configured model name is not evidence the host still serves it."""
+    """A configured model name is not evidence the host still serves it.
 
-    def _config(self) -> dict:
+    The runner binaries are stubbed throughout: whether `claude` and `codex`
+    happen to be installed is a property of the machine running the suite,
+    and CI has neither. Without this the provider check short-circuits at
+    "command not found" and never reaches the model lookup under test.
+    """
+
+    def setUp(self) -> None:
+        patcher = mock.patch("shutil.which", return_value="/usr/bin/stub")
+        self.which = patcher.start()
+        self.addCleanup(patcher.stop)
         config, _ = load_config(ROOT / "ristretto.yaml")
-        return copy.deepcopy(config)
+        self.config = copy.deepcopy(config)
+        self.local_models = {
+            resolved_provider(self.config, name)["model"]
+            for name, provider in self.config["providers"].items()
+            if provider.get("base_url")
+        }
+        self.assertTrue(self.local_models, "fixture needs at least one local provider")
 
     def test_missing_local_model_is_an_error(self) -> None:
-        config = self._config()
-        findings = doctor(config, os.environ, catalog=lambda url: {"some-other-model"})
+        findings = doctor(self.config, {}, catalog=lambda url: {"some-other-model"})
         errors = [f for f in findings if f.startswith("ERROR") and "not served" in f]
         self.assertTrue(errors, f"expected a not-served error, got: {findings}")
 
     def test_served_local_model_is_ok(self) -> None:
-        config = self._config()
-        models = {
-            resolved_provider(config, name)["model"]
-            for name, p in config["providers"].items()
-            if p.get("base_url")
-        }
-        findings = doctor(config, os.environ, catalog=lambda url: models)
+        findings = doctor(self.config, {}, catalog=lambda url: self.local_models)
         self.assertFalse([f for f in findings if f.startswith("ERROR")], findings)
+        self.assertTrue([f for f in findings if "serving" in f], findings)
 
     def test_unreachable_endpoint_warns_rather_than_errors(self) -> None:
         # The server being down is not a configuration error.
-        config = self._config()
-        findings = doctor(config, os.environ, catalog=lambda url: None)
+        findings = doctor(self.config, {}, catalog=lambda url: None)
         self.assertFalse([f for f in findings if f.startswith("ERROR")], findings)
         self.assertTrue([f for f in findings if f.startswith("WARN") and "cannot reach" in f])
 
     def test_endpoint_is_queried_once_per_base_url(self) -> None:
-        config = self._config()
         calls: list[str] = []
 
         def catalog(url: str) -> set[str]:
             calls.append(url)
             return set()
 
-        doctor(config, os.environ, catalog=catalog)
+        doctor(self.config, {}, catalog=catalog)
+        self.assertTrue(calls, "expected at least one endpoint lookup")
         self.assertEqual(len(calls), len(set(calls)), f"duplicate lookups: {calls}")
 
 
