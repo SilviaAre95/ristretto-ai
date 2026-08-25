@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}Ris — fleet{% endblock %}
+
+{% block counts %}
+<div class="counts">
+  <span class="c-live">live <b id="n-live">{{ live }}</b></span>
+  <span class="c-stalled">stalled <b id="n-stalled">{{ stalled }}</b></span>
+  <span class="c-blocked">blocked <b id="n-blocked">{{ blocked }}</b></span>
+</div>
+{% endblock %}
+
+{% block content %}
+{% if not grouped %}
+  <p class="empty">No runs on the board yet.</p>
+{% endif %}
+
+{% for project, runs in grouped.items() %}
+  <h2 class="project">{{ project }}</h2>
+  {% for run in runs %}
+    <a class="card h-{{ run.health }}" href="/task/{{ run.task_id }}" id="card-{{ run.task_id }}">
+      <span class="stripe"></span>
+      <span>
+        <span class="name">{{ run.issue_key or run.task_id }}{% if run.stage %} · {{ run.stage }}{% endif %}</span>
+        <span class="meta">
+          <span>{{ run.status }}</span>
+          <span data-field="elapsed">{{ run.elapsed | duration }}</span>
+          {% if run.health in ("running", "stalled") %}
+            <span data-field="signal">last {{ run.signal_source }} {{ run.age_of_signal | duration }} ago</span>
+          {% endif %}
+          {% if run.failure %}<span class="reason">{{ run.failure }}</span>{% endif %}
+        </span>
+      </span>
+      <span class="pill" data-field="health">{{ run.health }}</span>
+    </a>
+  {% endfor %}
+{% endfor %}
+
+<p class="note">
+  Hermes does not expose a heartbeat through its CLI, so liveness is derived from the
+  newest signal Ris has — a recorded event, or the run's start — and each card says which.
+  A run active with no signal for 15 minutes is shown as stalled rather than healthy.
+  This view is read-only.
+</p>
+{% endblock %}
+
+{% block script %}
+<script>
+  const source = new EventSource("/stream");
+  source.onmessage = (message) => {
+    const payload = JSON.parse(message.data);
+    for (const key of ["live", "stalled", "blocked"]) {
+      const node = document.getElementById("n-" + key);
+      if (node) node.textContent = payload[key];
+    }
+    for (const run of payload.runs) {
+      const card = document.getElementById("card-" + run.id);
+      if (!card) continue;
+      card.className = "card h-" + run.health;
+      const health = card.querySelector('[data-field="health"]');
+      if (health) health.textContent = run.health;
+      const elapsed = card.querySelector('[data-field="elapsed"]');
+      if (elapsed) elapsed.textContent = run.elapsed;
+      const signal = card.querySelector('[data-field="signal"]');
+      if (signal) signal.textContent = signal.textContent.replace(/[\d—][^ ]* ago$/, run.signal + " ago");
+    }
+  };
+  // A new or removed run changes the page structure, not just its numbers.
+  source.addEventListener("error", () => {});
+</script>
+{% endblock %}
