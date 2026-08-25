@@ -25,6 +25,16 @@ UNAVAILABLE = re.compile(
 ACTIVE_PROCESS: subprocess.Popen[str] | None = None
 ACTIVE_RECORD: Path | None = None
 
+# A runner can exit 0 while the model reports that it failed. The stage
+# artifact is what the next stage reads, so it — not the exit code alone —
+# decides whether a stage succeeded.
+MODEL_FAILURE = re.compile(r"<model_failure>(.*?)</model_failure>", re.DOTALL | re.IGNORECASE)
+# Observed protocol violations emit a bare tool tag and nothing else, e.g.
+# "<severity>10</severity>". No genuine stage report is anywhere near this short.
+MIN_STAGE_OUTPUT = 40
+# Ristretto's own run artifacts are not the flow's work product.
+ARTIFACT_DIR_NAME = ".ristretto"
+
 
 class FlowError(RuntimeError):
     """A user-facing flow execution error."""
@@ -222,37 +232,120 @@ def run_process(
 ) -> tuple[int, str]:
     global ACTIVE_PROCESS, ACTIVE_RECORD
     with log_path.open("w", encoding="utf-8") as log:
+        # stderr is kept out of stdout: the runner writes warnings and notices
+        # there, and stdout becomes the artifact the next stage reads as its
+        # input. Merging the two feeds CLI noise to the next model as content.
         process = subprocess.Popen(
             command,
             cwd=cwd,
             env=dict(env),
             text=True,
             stdout=subprocess.PIPE if output_from_stdout else log,
-            stderr=subprocess.STDOUT if output_from_stdout else log,
+            stderr=subprocess.PIPE if output_from_stdout else log,
         )
         ACTIVE_PROCESS = process
         ACTIVE_RECORD = record_path
         write_record(record_path, process, runner, cwd)
+
+        def record_streams(out: str | None, err: str | None) -> None:
+            log.write(out or "")
+            if err:
+                log.write(f"\n--- stderr ---\n{err}")
+
         try:
-            stdout, _ = process.communicate(timeout=timeout)
+            stdout, stderr = process.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
             process.terminate()
             try:
-                stdout, _ = process.communicate(timeout=5)
+                stdout, stderr = process.communicate(timeout=5)
             except subprocess.TimeoutExpired:
                 process.kill()
-                stdout, _ = process.communicate()
-            log.write(stdout or "")
+                stdout, stderr = process.communicate()
+            record_streams(stdout, stderr)
             log.write(f"\nflow stage timed out after {timeout}s\n")
-            return 124, stdout or ""
+            return 124, f"{stdout or ''}{stderr or ''}"
         finally:
             record_path.unlink(missing_ok=True)
             ACTIVE_PROCESS = None
             ACTIVE_RECORD = None
         if output_from_stdout:
-            log.write(stdout or "")
+            record_streams(stdout, stderr)
             output_path.write_text(stdout or "", encoding="utf-8")
-        return process.returncode, stdout or ""
+        # Availability detection reads both streams; auth and limit errors
+        # are reported on stderr.
+        return process.returncode, f"{stdout or ''}{stderr or ''}"
+
+
+def stage_output_failure(stage: Mapping[str, Any], text: str) -> str | None:
+    """Return why a stage's artifact is unusable, or None when it is fine.
+
+    A zero exit code is not proof of success: the runner exits 0 when the
+    model itself reports a failure, and the next stage consumes this text as
+    its input regardless.
+    """
+    failure = MODEL_FAILURE.search(text)
+    if failure:
+        detail = failure.group(1).strip() or "no detail"
+        return f"model reported failure: {detail}"
+    stripped = text.strip()
+    if not stripped:
+        return "produced no output"
+    if stage["role"] == "review":
+        # A stated verdict is a complete review, however briefly it is put:
+        # "CLEAN. No findings." is shorter than the floor below and valid.
+        if not re.search(r"\b(CLEAN|BLOCKING)\b", stripped):
+            return "review did not report CLEAN or BLOCKING"
+        return None
+    if len(stripped) < MIN_STAGE_OUTPUT:
+        return f"produced implausibly short output ({len(stripped)} chars): {stripped!r}"
+    return None
+
+
+def uncommitted_paths(cwd: Path) -> list[str]:
+    """Tracked changes and new files left in the tree, ignoring run artifacts."""
+    result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return []
+    paths = []
+    for line in result.stdout.splitlines():
+        path = line[3:].strip()
+        if path and not path.startswith(f"{ARTIFACT_DIR_NAME}/"):
+            paths.append(path)
+    return paths
+
+
+def pr_stage_failure(cwd: Path, base: str) -> str | None:
+    """Return why the pr stage did not deliver, or None when it did.
+
+    The pr prompt asks the model to commit, push, and open a pull request.
+    Nothing else checks that any of it happened, so a stage that emits a
+    stray tag and stops is otherwise indistinguishable from success.
+    """
+    for ref in (base, f"origin/{base}"):
+        result = subprocess.run(
+            ["git", "rev-list", "--count", f"{ref}..HEAD"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            if result.stdout.strip() == "0":
+                return f"pr stage committed nothing on top of {ref}"
+            break
+    else:
+        return f"pr stage could not resolve base branch {base}"
+    left = uncommitted_paths(cwd)
+    if left:
+        listed = ", ".join(left[:5]) + (" …" if len(left) > 5 else "")
+        return f"pr stage left uncommitted work: {listed}"
+    return None
 
 
 def run_stage(
@@ -299,6 +392,16 @@ def run_stage(
         output_from_stdout,
     )
     if code == 0:
+        if stage["role"] == "verify":
+            return 0
+        reason = stage_output_failure(
+            stage, output.read_text(encoding="utf-8") if output.exists() else ""
+        )
+        if reason is None and stage["role"] == "pr":
+            reason = pr_stage_failure(cwd, base)
+        if reason is not None:
+            print(f"stage {stage['id']}: {reason}", file=sys.stderr)
+            return 1
         return 0
     if stage["provider"] != "builtin":
         provider = stage["provider_config"]

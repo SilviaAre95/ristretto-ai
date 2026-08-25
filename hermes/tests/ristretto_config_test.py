@@ -3,8 +3,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -23,8 +25,11 @@ from ristretto.runner import (
     FlowError,
     artifact_dir,
     pid_record,
+    pr_stage_failure,
     role_prompt,
     runner_command,
+    stage_output_failure,
+    uncommitted_paths,
     verify_command,
     verify_gate_digest,
 )
@@ -197,6 +202,94 @@ class RunnerCommandTests(unittest.TestCase):
                 os.environ.pop("HERMES_KANBAN_BOARD", None)
             else:
                 os.environ["HERMES_KANBAN_BOARD"] = previous
+
+
+class StageOutcomeTests(unittest.TestCase):
+    """A zero exit code is not proof that a stage did its job.
+
+    Every case here was observed in a real tier3 run that reported success.
+    """
+
+    BUILD = {"id": "build", "role": "build"}
+    REVIEW = {"id": "review", "role": "review"}
+
+    def test_model_failure_marker_fails_the_stage(self) -> None:
+        text = "<model_failure>File already exists.</model_failure>"
+        reason = stage_output_failure(self.BUILD, text)
+        self.assertIsNotNone(reason)
+        self.assertIn("File already exists.", reason or "")
+
+    def test_empty_output_fails_the_stage(self) -> None:
+        self.assertIsNotNone(stage_output_failure(self.BUILD, "   \n\t  "))
+
+    def test_bare_protocol_tag_fails_the_stage(self) -> None:
+        # A stage that emits only "<severity>10</severity>" has not reported.
+        self.assertIsNotNone(stage_output_failure(self.BUILD, "<severity>10</severity>"))
+
+    def test_real_output_passes(self) -> None:
+        text = "Implemented the localized info label and added a regression test for it."
+        self.assertIsNone(stage_output_failure(self.BUILD, text))
+
+    def test_review_must_state_a_verdict(self) -> None:
+        wordy = "I looked at the diff and it seems reasonable overall, nothing much to add."
+        self.assertIsNotNone(stage_output_failure(self.REVIEW, wordy))
+        self.assertIsNone(stage_output_failure(self.REVIEW, f"BLOCKING. {wordy}"))
+        self.assertIsNone(stage_output_failure(self.REVIEW, f"CLEAN. {wordy}"))
+
+    def test_terse_clean_review_is_not_rejected_for_length(self) -> None:
+        # Shorter than the minimum for other roles, but a complete verdict.
+        terse = "CLEAN. No findings."
+        self.assertLess(len(terse), 40)
+        self.assertIsNone(stage_output_failure(self.REVIEW, terse))
+
+
+class PrStageTests(unittest.TestCase):
+    def _repo(self, stack: contextlib.ExitStack) -> Path:
+        cwd = Path(stack.enter_context(tempfile.TemporaryDirectory()))
+        run = lambda *a: subprocess.run(a, cwd=cwd, check=True, capture_output=True)
+        run("git", "init", "-q", "-b", "main")
+        run("git", "config", "user.email", "test@example.invalid")
+        run("git", "config", "user.name", "Test")
+        (cwd / "seed.txt").write_text("seed\n", encoding="utf-8")
+        run("git", "add", "seed.txt")
+        run("git", "commit", "-q", "-m", "seed")
+        return cwd
+
+    def test_no_commit_is_a_failure(self) -> None:
+        with contextlib.ExitStack() as stack:
+            cwd = self._repo(stack)
+            reason = pr_stage_failure(cwd, "main")
+            self.assertIsNotNone(reason)
+            self.assertIn("committed nothing", reason or "")
+
+    def test_uncommitted_work_is_a_failure(self) -> None:
+        with contextlib.ExitStack() as stack:
+            cwd = self._repo(stack)
+            subprocess.run(["git", "checkout", "-q", "-b", "feature"], cwd=cwd, check=True)
+            (cwd / "done.txt").write_text("done\n", encoding="utf-8")
+            subprocess.run(["git", "add", "done.txt"], cwd=cwd, check=True)
+            subprocess.run(["git", "commit", "-q", "-m", "work"], cwd=cwd, check=True)
+            # The observed run left a new test file untracked and never committed it.
+            (cwd / "extra.test.ts").write_text("stray\n", encoding="utf-8")
+            reason = pr_stage_failure(cwd, "main")
+            self.assertIsNotNone(reason)
+            self.assertIn("uncommitted", reason or "")
+
+    def test_committed_and_clean_passes(self) -> None:
+        with contextlib.ExitStack() as stack:
+            cwd = self._repo(stack)
+            subprocess.run(["git", "checkout", "-q", "-b", "feature"], cwd=cwd, check=True)
+            (cwd / "done.txt").write_text("done\n", encoding="utf-8")
+            subprocess.run(["git", "add", "done.txt"], cwd=cwd, check=True)
+            subprocess.run(["git", "commit", "-q", "-m", "work"], cwd=cwd, check=True)
+            self.assertIsNone(pr_stage_failure(cwd, "main"))
+
+    def test_run_artifacts_do_not_count_as_uncommitted(self) -> None:
+        with contextlib.ExitStack() as stack:
+            cwd = self._repo(stack)
+            (cwd / ".ristretto" / "runs").mkdir(parents=True)
+            (cwd / ".ristretto" / "runs" / "plan.md").write_text("plan\n", encoding="utf-8")
+            self.assertEqual(uncommitted_paths(cwd), [])
 
 
 if __name__ == "__main__":
