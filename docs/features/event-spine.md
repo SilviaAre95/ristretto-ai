@@ -68,10 +68,27 @@ can sit weeks behind.
 - NOT failing a build on telemetry error: an unwritable store degrades to a gap
   in the timeline.
 
+### Reclaiming worktrees
+
+Every issue gets its own worktree so several can run in parallel. Hermes
+creates them; until now nothing removed them, so finished tasks left
+directories on disk indefinitely and local branches accumulated beside them.
+
+`ristretto gc` reports what can be reclaimed and removes it only with
+`--force`. A worktree qualifies when its name matches a task on the board,
+that task is `done` or `archived`, and the tree has no uncommitted work —
+run artifacts under `.ristretto/` do not count. Anything else is kept with a
+reason, including worktrees with no matching task, which are left for a human.
+Removing a worktree cannot lose commits because the branch keeps them; the
+uncommitted-work check is what protects the only copy of anything.
+
+`--branches` additionally deletes local branches already merged into the base
+ref, using `git branch -d` so git's own refusal is the safety net.
+
 ## Open questions
 
-- Should `preflight` run automatically before dispatch, or stay explicit?
-- Retention: the log grows without bound and has no `gc` path yet.
+- Should `preflight` and `gc` run automatically around dispatch, or stay explicit?
+- Event retention: the log grows without bound and has no pruning path yet.
 
 ## Implementation notes (optional)
 
