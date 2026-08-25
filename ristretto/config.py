@@ -8,8 +8,10 @@ import re
 import shutil
 import sysconfig
 import tempfile
+import urllib.error
+import urllib.request
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 import yaml
 
@@ -305,17 +307,68 @@ def resolved_flow(
     return flow
 
 
-def doctor(config: Mapping[str, Any], environ: Mapping[str, str] | None = None) -> list[str]:
+def served_models(base_url: str, timeout: float = 2.0) -> set[str] | None:
+    """Model names a local endpoint is serving, or None if it is unreachable.
+
+    Accepts both the Ollama-native and OpenAI-compatible listings so this
+    works against any endpoint a provider's base_url may point at.
+    """
+    for path, key, field in (
+        ("/api/tags", "models", "name"),
+        ("/v1/models", "data", "id"),
+    ):
+        url = f"{base_url.rstrip('/')}{path}"
+        try:
+            with urllib.request.urlopen(url, timeout=timeout) as response:
+                payload = json.load(response)
+        except (urllib.error.URLError, OSError, ValueError, json.JSONDecodeError):
+            continue
+        entries = payload.get(key)
+        if isinstance(entries, list):
+            return {
+                str(entry[field])
+                for entry in entries
+                if isinstance(entry, Mapping) and entry.get(field)
+            }
+    return None
+
+
+def doctor(
+    config: Mapping[str, Any],
+    environ: Mapping[str, str] | None = None,
+    catalog: Callable[[str], set[str] | None] | None = None,
+) -> list[str]:
     env = os.environ if environ is None else environ
+    lookup = served_models if catalog is None else catalog
     findings: list[str] = []
     commands = {"claude-code": "claude", "codex": "codex"}
+    seen: dict[str, set[str] | None] = {}
     for name in config["providers"]:
         provider = resolved_provider(config, name, env)
         command = commands[provider["runner"]]
+        model = provider.get("model")
+        base_url = provider.get("base_url")
         if shutil.which(command) is None:
             findings.append(f"ERROR provider {name}: command not found: {command}")
-        elif not provider.get("model") and provider["runner"] == "claude-code":
+        elif not model and provider["runner"] == "claude-code":
             findings.append(f"ERROR provider {name}: no model configured")
+        elif base_url and model:
+            # A configured model name proves nothing: it can be deleted from
+            # the host at any time, and without this the flow only finds out
+            # mid-run, several stages deep.
+            if base_url not in seen:
+                seen[base_url] = lookup(str(base_url))
+            available = seen[base_url]
+            if available is None:
+                findings.append(
+                    f"WARN provider {name}: cannot reach {base_url} to confirm {model} is served"
+                )
+            elif str(model) not in available:
+                findings.append(
+                    f"ERROR provider {name}: model {model} is not served by {base_url}"
+                )
+            else:
+                findings.append(f"OK provider {name}: {provider['runner']} serving {model}")
         else:
             findings.append(f"OK provider {name}: {provider['runner']}")
     for key, env_name in config.get("instance", {}).items():
