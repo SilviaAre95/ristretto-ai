@@ -70,6 +70,11 @@ def parser() -> argparse.ArgumentParser:
         "--branches", action="store_true", help="also delete local branches merged into the base"
     )
 
+    dash_command = commands.add_parser("dash", help="serve the read-only fleet view")
+    dash_command.add_argument("--host", help="bind address (default: tailnet, else loopback)")
+    dash_command.add_argument("--port", type=int, default=8787)
+    dash_command.add_argument("--reload", action="store_true", help="reload on code changes")
+
     events_command = commands.add_parser("events", help="read the pipeline event log")
     events_command.add_argument("task_id", nargs="?", help="limit to one task")
     events_command.add_argument("--limit", type=int, default=50)
@@ -247,6 +252,21 @@ def main(argv: list[str] | None = None) -> int:
             if not args.force and removable:
                 print(f"\n{removable} worktree(s) would be removed. Re-run with --force.")
             return 0
+        if args.command == "dash":
+            try:
+                from .dash.serve import BindRefused, run as serve_dash
+            except ImportError as exc:
+                print(
+                    f"ristretto: the dashboard needs its extra dependencies: {exc}\n"
+                    "  pip install 'ristretto-ops[dash]'",
+                    file=sys.stderr,
+                )
+                return 2
+            try:
+                return serve_dash(args.host, args.port, args.reload)
+            except BindRefused as exc:
+                print(f"ristretto: {exc}", file=sys.stderr)
+                return 2
         if args.command == "events":
             from . import events as event_log
 

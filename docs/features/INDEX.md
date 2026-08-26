@@ -25,6 +25,7 @@ Source of truth for what this product **does** and **does not** do. Every code c
 | `always-on-service` | Always-On Service | implemented | Gateway runs as launchd service; Lungo holds the wake assertion. | NOT changing pmset without approval; verify Lungo after reboot |
 | `telegram-ops-lane` | Telegram Ops Lane | in-progress | Identity-locked Telegram daemon relays Claude Code's own `ask` prompts to your phone. | NOT a second allowlist system; NOT auto-run; NOT inbound networking |
 | `event-spine` | Event Spine | in-progress | Pipeline events in Ristretto's own log; `preflight` proves a repo is loop-capable; `gc` reclaims finished worktrees. | NOT writing into Hermes' schema; NOT a UI in V1; NOT removing worktrees with uncommitted work |
+| `fleet-view` | Fleet View | in-progress | Read-only dashboard over the board and event log, bound to the tailnet. | NOT mutating anything in V1; NOT public ingress; NOT implying a heartbeat Hermes does not expose |
 
 <!-- Append new rows above this comment. Keep the summary column ≤ 15 words. -->
 

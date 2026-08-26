@@ -15,6 +15,8 @@ dependencies = ["PyYAML>=6.0,<7.0"]
 [project.optional-dependencies]
 # Pin below 2.0: the low-level server API changed incompatibly in mcp 2.x.
 ops = ["mcp>=1.0,<2.0"]
+# Read-only fleet view. Optional: the CLI and loop work without it.
+dash = ["fastapi>=0.115", "jinja2>=3.1", "uvicorn>=0.30"]
 
 [project.scripts]
 ristretto = "ristretto.cli:main"
@@ -25,6 +27,7 @@ include = ["ristretto*"]
 
 [tool.setuptools.package-data]
 "ristretto.ops_lane" = ["phone_settings.json"]
+"ristretto.dash" = ["templates/*.html"]
 
 [tool.setuptools.data-files]
 "share/ristretto" = ["ristretto.yaml"]

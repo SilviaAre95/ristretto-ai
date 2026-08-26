@@ -10,6 +10,8 @@ if [ -x "$repo/.venv/bin/python" ]; then
 fi
 
 "$python_bin" -m unittest hermes/tests/ristretto_config_test.py
+# Dashboard tests skip their route cases when the [dash] extra is absent.
+"$python_bin" -m unittest hermes/tests/ristretto_dash_test.py
 "$python_bin" -m unittest discover -s tests
 bash -n scripts/*.sh hermes/tests/*.sh hermes/skills/loop-runner/scripts/*.sh
 bash hermes/tests/install.test.sh

@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}Ris — {{ run.issue_key if run else task_id }}{% endblock %}
+
+{% block content %}
+<a class="back" href="/">← fleet</a>
+
+{% if not run %}
+  <p class="empty">No task <code>{{ task_id }}</code> on the board.</p>
+{% else %}
+  <h2 style="margin:16px 0 4px; font-size:19px;">{{ run.title }}</h2>
+  <span class="pill h-{{ run.health }}" style="color:var(--{{ run.health }}, var(--done))">{{ run.health }}</span>
+
+  <table class="detail">
+    <tr><th>Task</th><td>{{ run.task_id }}</td></tr>
+    <tr><th>Status</th><td>{{ run.status }}</td></tr>
+    <tr><th>Project</th><td>{{ run.project }}</td></tr>
+    {% if run.stage %}<tr><th>Stage</th><td>{{ run.stage }}</td></tr>{% endif %}
+    {% if run.branch %}<tr><th>Branch</th><td>{{ run.branch }}</td></tr>{% endif %}
+    <tr><th>Elapsed</th><td>{{ run.elapsed | duration }}</td></tr>
+    <tr>
+      <th>Last signal</th>
+      <td>
+        {% if run.signal_source == "none" %}no signal recorded
+        {% else %}{{ run.age_of_signal | duration }} ago (from the run's {{ run.signal_source }})
+        {% endif %}
+      </td>
+    </tr>
+    {% if run.failure %}<tr><th>Failure</th><td style="color:var(--failed)">{{ run.failure }}</td></tr>{% endif %}
+  </table>
+
+  <h2 class="project">Ris pipeline events</h2>
+  {% if not timeline %}
+    <p class="note" style="border:0; margin:0; padding:0">
+      Nothing recorded. Runs from before the event spine, or a classic run that
+      never reached an emit point, leave no pipeline trail.
+    </p>
+  {% else %}
+    <ol class="timeline">
+      {% for item in timeline %}
+        <li class="k-{{ item.kind | replace('.', '-') }}">
+          <time>{{ item.created_at | timestamp }}</time>
+          <span class="kind">{{ item.kind }}{% if item.stage %} · {{ item.stage }}{% endif %}</span>
+          <span class="payload">
+            {%- if item.payload is mapping -%}
+              {% for key, value in item.payload.items() %}{{ key }}={{ value }}{% if not loop.last %} · {% endif %}{% endfor %}
+            {%- elif item.payload -%}{{ item.payload }}{%- endif -%}
+          </span>
+        </li>
+      {% endfor %}
+    </ol>
+  {% endif %}
+
+  <h2 class="project">Hermes runs</h2>
+  {% if not runs %}
+    <p class="note" style="border:0; margin:0; padding:0">No run history.</p>
+  {% else %}
+    <ul class="runs" style="margin:0; padding:0">
+      {% for item in runs %}
+        <li>
+          #{{ item.id }} · {{ item.status }}{% if item.outcome %} → {{ item.outcome }}{% endif %}
+          {% if item.error %}<div class="err">{{ item.error }}</div>{% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+{% endif %}
+{% endblock %}
