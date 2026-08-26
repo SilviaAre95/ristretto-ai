@@ -11,7 +11,14 @@
 
 {% block content %}
 {% if not grouped %}
-  <p class="empty">No runs on the board yet.</p>
+  <p class="empty">
+    {% if total %}
+      Nothing has run in the last 7 days.<br>
+      <a href="/?all=1">Show all {{ total }} runs</a>
+    {% else %}
+      No runs on the board yet.
+    {% endif %}
+  </p>
 {% endif %}
 
 {% for project, runs in grouped.items() %}
@@ -24,6 +31,7 @@
         <span class="meta">
           <span>{{ run.status }}</span>
           <span data-field="elapsed">{{ run.elapsed | duration }}</span>
+          <span>{{ run.last_signal_at | ago }}</span>
           {% if run.health in ("running", "stalled") %}
             <span data-field="signal">last {{ run.signal_source }} {{ run.age_of_signal | duration }} ago</span>
           {% endif %}
@@ -34,6 +42,17 @@
     </a>
   {% endfor %}
 {% endfor %}
+
+{% if hidden %}
+  <p class="note" style="border:0;padding-top:18px">
+    {{ hidden }} older run{{ "s" if hidden != 1 }} hidden ·
+    <a href="/?all=1" style="color:inherit">show history</a>
+  </p>
+{% elif show_all %}
+  <p class="note" style="border:0;padding-top:18px">
+    Showing all {{ total }} runs · <a href="/" style="color:inherit">show recent only</a>
+  </p>
+{% endif %}
 
 <p class="note">
   Hermes does not expose a heartbeat through its CLI, so liveness is derived from the

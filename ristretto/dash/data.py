@@ -29,6 +29,8 @@ SAFE_TASK_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 # as stalled rather than healthy. Silence is the failure mode that cost two
 # tasks a month apiece.
 STALL_AFTER_SECONDS = 15 * 60
+# Finished work older than this is history, not fleet status.
+RECENT_WINDOW_SECONDS = 7 * 24 * 3600
 ACTIVE_STATES = frozenset({"running", "ready", "review", "todo", "triage"})
 LIVE_STATES = ACTIVE_STATES | {"blocked", "scheduled"}
 
@@ -88,6 +90,13 @@ class Run:
                 return None
             return max(0, int(self.completed_at) - int(self.started_at))
         return max(0, int(time.time()) - int(self.started_at))
+
+
+def ago(timestamp: int | None) -> str:
+    """How long since something happened, so July cannot be mistaken for today."""
+    if not timestamp:
+        return "—"
+    return f"{humanise(max(0, int(time.time()) - int(timestamp)))} ago"
 
 
 def humanise(seconds: int | None) -> str:
@@ -195,13 +204,30 @@ def build_run(task: Mapping[str, Any], task_events: list[Mapping[str, Any]]) -> 
 
 
 def fleet(limit_events: int = 200) -> list[Run]:
-    """Live and recently finished runs, newest activity first."""
+    """Every run the board knows about, newest activity first."""
     recorded: dict[str, list[Mapping[str, Any]]] = {}
     for item in events.read(limit=limit_events * 10):
         recorded.setdefault(str(item.get("task_id")), []).append(item)
     runs = [build_run(task, recorded.get(str(task.get("id")), [])) for task in board()]
     runs.sort(key=lambda r: (r.last_signal_at or 0), reverse=True)
     return runs
+
+
+def recent(runs: list[Run], window: int = RECENT_WINDOW_SECONDS) -> tuple[list[Run], int]:
+    """What is worth looking at now, and how much was left out.
+
+    A fleet view showing every task ever finished is a graveyard: the work
+    that needs attention is buried under months of archived rows that all
+    look alike. Anything live is always kept, however quiet it has been.
+    """
+    cutoff = int(time.time()) - window
+    keep, hidden = [], 0
+    for run in runs:
+        if run.status in LIVE_STATES or (run.last_signal_at or 0) >= cutoff:
+            keep.append(run)
+        else:
+            hidden += 1
+    return keep, hidden
 
 
 def grouped(runs: list[Run]) -> dict[str, list[Run]]:

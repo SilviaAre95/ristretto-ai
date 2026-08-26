@@ -119,6 +119,22 @@ class RunTests(unittest.TestCase):
     def test_issue_key_comes_from_the_title(self) -> None:
         self.assertEqual(data.build_run(task(), []).issue_key, "XARI-33")
 
+    def test_history_is_hidden_but_live_work_never_is(self) -> None:
+        # A fleet view showing every task ever finished is a graveyard: what
+        # needs attention gets buried under months of identical archived rows.
+        fresh = data.build_run(task(id="t_fresh", status="archived", started_at=NOW - 60), [])
+        old = data.build_run(task(id="t_old", status="archived", started_at=NOW - 40 * 86400), [])
+        quiet_but_live = data.build_run(
+            task(id="t_live", status="running", started_at=NOW - 40 * 86400), []
+        )
+        keep, hidden = data.recent([fresh, old, quiet_but_live])
+        self.assertEqual({r.task_id for r in keep}, {"t_fresh", "t_live"})
+        self.assertEqual(hidden, 1)
+
+    def test_age_is_stated_so_july_is_not_mistaken_for_today(self) -> None:
+        self.assertEqual(data.ago(None), "—")
+        self.assertTrue(data.ago(NOW - 90).endswith("ago"))
+
     def test_live_projects_sort_first(self) -> None:
         live = data.build_run(task(id="t_live", workspace_path="/x/aaa/.worktrees/t_live"), [])
         done = data.build_run(

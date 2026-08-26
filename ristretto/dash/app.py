@@ -22,6 +22,7 @@ from . import data
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 TEMPLATES.env.filters["duration"] = data.humanise
+TEMPLATES.env.filters["ago"] = data.ago
 TEMPLATES.env.filters["timestamp"] = lambda value: (
     time.strftime("%H:%M:%S", time.localtime(value)) if value else "—"
 )
@@ -29,21 +30,24 @@ TEMPLATES.env.filters["timestamp"] = lambda value: (
 app = FastAPI(title="Ris", docs_url=None, redoc_url=None, openapi_url=None)
 
 
-def _snapshot() -> dict[str, Any]:
-    runs = data.fleet()
-    live = [r for r in runs if r.status in data.LIVE_STATES]
+def _snapshot(show_all: bool = False) -> dict[str, Any]:
+    everything = data.fleet()
+    shown, hidden = (everything, 0) if show_all else data.recent(everything)
     return {
-        "runs": runs,
-        "grouped": data.grouped(runs),
-        "live": len(live),
-        "stalled": len([r for r in runs if r.health == "stalled"]),
-        "blocked": len([r for r in runs if r.health == "blocked"]),
+        "runs": shown,
+        "grouped": data.grouped(shown),
+        "hidden": hidden,
+        "show_all": show_all,
+        "total": len(everything),
+        "live": len([r for r in everything if r.status in data.LIVE_STATES]),
+        "stalled": len([r for r in everything if r.health == "stalled"]),
+        "blocked": len([r for r in everything if r.health == "blocked"]),
     }
 
 
 @app.get("/", response_class=HTMLResponse)
-def fleet(request: Request) -> HTMLResponse:
-    return TEMPLATES.TemplateResponse(request, "fleet.html", _snapshot())
+def fleet(request: Request, all: bool = False) -> HTMLResponse:
+    return TEMPLATES.TemplateResponse(request, "fleet.html", _snapshot(all))
 
 
 @app.get("/task/{task_id}", response_class=HTMLResponse)
