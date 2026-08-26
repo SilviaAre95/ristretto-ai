@@ -69,7 +69,11 @@ if [[ ! "$BOARD" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
 fi
 PID_DIR="$HOME/.hermes/kanban/$BOARD/pids"
 REC="$PID_DIR/$TASK_ID.json"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# -P resolves the skill symlink. The installed skill lives at
+# ~/.hermes/skills/software-development/loop-runner but is a link into this
+# repository, and `cd ..` without -P walks the *logical* path, landing in
+# ~/.hermes instead of the repo — where the ristretto package is not.
+SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 SESSION_FILE="$PWD/.cc-ris-session"
 RESUME_FAILURE_WINDOW="${RIS_RESUME_FAILURE_WINDOW:-30}"
 [[ "$RESUME_FAILURE_WINDOW" =~ ^[0-9]+$ ]] || RESUME_FAILURE_WINDOW=30
@@ -78,8 +82,15 @@ RESUME_FAILURE_WINDOW="${RIS_RESUME_FAILURE_WINDOW:-30}"
 bash "$SCRIPT_DIR/reap.sh" "$TASK_ID"
 
 if [ "$FLOW" != "classic" ]; then
-  RISTRETTO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+  RISTRETTO_ROOT="$(cd -P "$SCRIPT_DIR/../../../.." && pwd -P)"
   export PYTHONPATH="$RISTRETTO_ROOT${PYTHONPATH:+:$PYTHONPATH}"
+  # Fail with the cause rather than a Python traceback: a wrong root here
+  # means every non-classic flow dies before its first stage, and the
+  # traceback names the module, not the path that was wrong.
+  if ! python3 -c "import ristretto.runner" 2>/dev/null; then
+    echo "run-loop: cannot import ristretto from $RISTRETTO_ROOT — flow $FLOW cannot start" >&2
+    exit 2
+  fi
   exec python3 -m ristretto.runner \
     --task-id "$TASK_ID" --issue "$ISSUE_KEY" --flow "$FLOW"
 fi
@@ -159,8 +170,13 @@ run_once() {  # $1 = cloud|local, $2 = fresh|resume — sets RC + RUN_ELAPSED
 
 # Pipeline telemetry. Never allowed to fail the loop it is describing: the
 # emitter always exits 0, and `|| true` covers a missing interpreter too.
+# The installed copy first, the repo copy second: both exist on a normal
+# install and either is fine, but neither may break the loop.
+RIS_EVENT="$HOME/.hermes/scripts/ris-event.py"
+[ -f "$RIS_EVENT" ] || RIS_EVENT="$SCRIPT_DIR/../../../scripts/ris-event.py"
 ris_event() {
-  python3 "$SCRIPT_DIR/../../../scripts/ris-event.py" "$TASK_ID" "$1" \
+  [ -f "$RIS_EVENT" ] || return 0
+  python3 "$RIS_EVENT" "$TASK_ID" "$1" \
     --issue "$ISSUE_KEY" --project "$(basename "$PWD")" "${@:2}" >/dev/null 2>&1 || true
 }
 
