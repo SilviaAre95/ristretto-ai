@@ -92,6 +92,10 @@ install -m 0755 \
 install -m 0755 \
   "$repo/hermes/scripts/ris-event.py" \
   "$hermes_home/scripts/ris-event.py"
+mkdir -p "$hermes_home/agent-hooks"
+install -m 0755 \
+  "$repo/hermes/agent-hooks/loop-flow-guard.sh" \
+  "$hermes_home/agent-hooks/loop-flow-guard.sh"
 
 if [ ! -d "$hermes_home/profiles/ris-worker" ]; then
   HERMES_HOME="$hermes_home" hermes profile create ris-worker --no-skills \
@@ -109,6 +113,13 @@ HERMES_HOME="$hermes_home" hermes -p ris-worker config set model.base_url http:/
 HERMES_HOME="$hermes_home" hermes -p ris-worker config set agent.max_turns 300 >/dev/null
 HERMES_HOME="$hermes_home" hermes -p ris-worker config set tool_loop_guardrails.hard_stop_enabled true >/dev/null
 HERMES_HOME="$hermes_home" hermes -p ris-worker config set session_reset.idle_minutes 180 >/dev/null
+# Hooks are per profile, and the worker profile is the one that calls
+# kanban_complete — declaring the guard only in the top-level config would
+# leave the process it exists to gate completely ungated.
+HERMES_HOME="$hermes_home" hermes -p ris-worker config set hooks.pre_tool_call \
+  '[{"matcher":"kanban_complete","command":"~/.hermes/agent-hooks/loop-flow-guard.sh","timeout":15}]' >/dev/null
+# The worker has no TTY to consent at.
+HERMES_HOME="$hermes_home" hermes -p ris-worker config set hooks_auto_accept true >/dev/null
 
 if ! HERMES_HOME="$hermes_home" hermes cron list --all | grep -Fq "Morning brief"; then
   prompt="Use the precheck output as the authoritative $linear_team board snapshot. If it is exactly NO_CHANGES, reply exactly [SILENT]. Otherwise write a short priority-led morning brief and ask what the user wants to work on. Do not mutate Linear."

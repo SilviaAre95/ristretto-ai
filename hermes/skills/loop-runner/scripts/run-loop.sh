@@ -81,6 +81,14 @@ RESUME_FAILURE_WINDOW="${RIS_RESUME_FAILURE_WINDOW:-30}"
 # Guard 4: reap a verified orphan from a previous run (no-op otherwise).
 bash "$SCRIPT_DIR/reap.sh" "$TASK_ID"
 
+# Run marker. Written before anything else and directly, not through the
+# best-effort event emitter: the completion guard reads this to tell a real
+# loop from a worker that decided to do the work itself, and telemetry being
+# unavailable must never look like a loop that never ran.
+RUN_MARKER="$PWD/.ristretto/runs/$TASK_ID"
+mkdir -p "$RUN_MARKER" 2>/dev/null && printf '{"task":"%s","issue":"%s","flow":"%s","started":%s}\n' \
+  "$TASK_ID" "$ISSUE_KEY" "$FLOW" "$(date +%s)" > "$RUN_MARKER/loop.json" 2>/dev/null || true
+
 if [ "$FLOW" != "classic" ]; then
   RISTRETTO_ROOT="$(cd -P "$SCRIPT_DIR/../../../.." && pwd -P)"
   export PYTHONPATH="$RISTRETTO_ROOT${PYTHONPATH:+:$PYTHONPATH}"

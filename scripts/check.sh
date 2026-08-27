@@ -18,6 +18,7 @@ bash hermes/tests/install.test.sh
 bash hermes/tests/reap.test.sh
 bash hermes/tests/ris-stop.test.sh
 bash hermes/tests/run-loop.test.sh
+bash hermes/tests/flow-guard.test.sh
 bash hermes/tests/morning-brief-precheck.test.sh
 bash hermes/tests/push-guard.test.sh
 bash hermes/tests/template-drift.test.sh

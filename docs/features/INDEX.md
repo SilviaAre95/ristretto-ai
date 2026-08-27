@@ -26,6 +26,7 @@ Source of truth for what this product **does** and **does not** do. Every code c
 | `telegram-ops-lane` | Telegram Ops Lane | in-progress | Identity-locked Telegram daemon relays Claude Code's own `ask` prompts to your phone. | NOT a second allowlist system; NOT auto-run; NOT inbound networking |
 | `event-spine` | Event Spine | in-progress | Pipeline events in Ristretto's own log; `preflight` proves a repo is loop-capable; `gc` reclaims finished worktrees. | NOT writing into Hermes' schema; NOT a UI in V1; NOT removing worktrees with uncommitted work |
 | `fleet-view` | Fleet View | in-progress | Read-only dashboard over the board and event log, bound to the tailnet. | NOT mutating anything in V1; NOT public ingress; NOT implying a heartbeat Hermes does not expose |
+| `flow-enforcement` | Flow Enforcement | implemented | A loop task cannot be completed unless its loop actually ran. | NOT gating non-loop tasks; NOT relying on the event log; NOT blocking edits, only completion |
 
 <!-- Append new rows above this comment. Keep the summary column ≤ 15 words. -->
 
