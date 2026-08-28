@@ -20,6 +20,18 @@ approvals:
   # defaults to 300s, which expires while you are away from the desk: the
   # card stays clickable, but the click no longer reaches the agent.
   gateway_timeout: 1800
+# A worker may not mark a loop task done unless the loop actually ran. The
+# skill already says to run run-loop.sh and not to drive the coding tools
+# directly; one ignored it and shipped a pull request that had never been
+# planned, reviewed, or verified. This gates completion on evidence instead.
+hooks:
+  pre_tool_call:
+    - matcher: "kanban_complete"
+      command: "~/.hermes/agent-hooks/loop-flow-guard.sh"
+      timeout: 15
+# Required for the gateway and cron, which have no TTY to consent at.
+hooks_auto_accept: true
+
 tool_loop_guardrails:
   warnings_enabled: true
   hard_stop_enabled: true

@@ -152,6 +152,16 @@ exit 0
 EOF
 chmod +x "$FAKEBIN/python3"
 WT_FLOW="$(mktemp -d)"; cd "$WT_FLOW"
+# Regression: the installed skill is a symlink into the repo, and resolving
+# SCRIPT_DIR logically walked out to HERMES_HOME instead of the repo root, so
+# every non-classic flow died with ModuleNotFoundError before its first stage.
+LINKDIR="$(mktemp -d)/skills/software-development"
+mkdir -p "$LINKDIR"
+ln -s "$(cd -P "$(dirname "$SCRIPT")/.." && pwd -P)" "$LINKDIR/loop-runner"
+LINKED_ROOT="$(cd -P "$LINKDIR/loop-runner/scripts/../../../.." && pwd -P)"
+t "symlinked skill resolves the repo root" "[ -f '$LINKED_ROOT/ristretto/runner.py' ]"
+t "symlinked skill does not resolve to HERMES_HOME" "[ '$LINKED_ROOT' != \"$HOME/.hermes\" ]"
+
 "$SCRIPT" t-flow PROJ-12 --flow tier1 >/dev/null 2>&1; RC=$?
 t "custom flow: succeeds"             "[ $RC -eq 0 ]"
 t "custom flow: runner module"        "grep -q -- '-m ristretto.runner' '$FAKEBIN/python_argv'"
