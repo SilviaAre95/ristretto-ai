@@ -7,12 +7,14 @@ dependencies, and skip cleanly when those are absent.
 
 from __future__ import annotations
 
+import subprocess
+import tempfile
 import time
 import unittest
 from pathlib import Path
 from unittest import mock
 
-from ristretto.dash import data
+from ristretto.dash import control, data
 from ristretto.dash.serve import BindRefused, resolve_host
 
 try:
@@ -175,15 +177,112 @@ class RouteTests(unittest.TestCase):
                 self.assertEqual(data.task_detail(hostile), {}, hostile)
             spawned.assert_not_called()
 
-    def test_there_are_no_mutating_routes(self) -> None:
-        # Phase 2 observes and nothing else; controls arrive with the
-        # privilege split that should accompany them.
-        methods = {
-            method
+    def test_only_the_two_control_routes_mutate(self) -> None:
+        # Starting work is deliberately absent: it spends tokens and writes
+        # code, and must not arrive as a third button added by analogy.
+        posting = {
+            route.path
             for route in app.routes
-            for method in getattr(route, "methods", set())
+            if "POST" in getattr(route, "methods", set())
         }
-        self.assertFalse(methods & {"POST", "PUT", "PATCH", "DELETE"}, methods)
+        self.assertEqual(posting, {"/task/{task_id}/stop", "/task/{task_id}/unblock"})
+        others = {
+            m
+            for route in app.routes
+            for m in getattr(route, "methods", set())
+        } & {"PUT", "PATCH", "DELETE"}
+        self.assertFalse(others, others)
+
+
+class CrossSiteTests(unittest.TestCase):
+    """There is no login, so a mutating route must know who is asking.
+
+    Without this, any page visited while on the tailnet could post to the
+    dashboard from the browser and stop a running agent.
+    """
+
+    def setUp(self) -> None:
+        if not WEB:
+            self.skipTest("dashboard extras not installed")
+        self.client = TestClient(app)
+        patcher = mock.patch.object(control, "stop", return_value=control.Outcome(True, "stopped"))
+        self.stop = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def post(self, headers):
+        return self.client.post(
+            "/task/t_a1b2c3d4/stop", headers=headers, follow_redirects=False
+        )
+
+    def test_same_origin_form_post_is_accepted(self) -> None:
+        response = self.post({"sec-fetch-site": "same-origin"})
+        self.assertEqual(response.status_code, 303)
+        self.stop.assert_called_once()
+
+    def test_cross_site_post_is_refused(self) -> None:
+        response = self.post({"sec-fetch-site": "cross-site"})
+        self.assertEqual(response.status_code, 403)
+        self.stop.assert_not_called()
+
+    def test_same_site_is_not_good_enough(self) -> None:
+        # A sibling subdomain is still not this page.
+        self.assertEqual(self.post({"sec-fetch-site": "same-site"}).status_code, 403)
+        self.stop.assert_not_called()
+
+    def test_direct_navigation_is_refused(self) -> None:
+        # "none" means no page triggered it, which a form post cannot be.
+        self.assertEqual(self.post({"sec-fetch-site": "none"}).status_code, 403)
+        self.stop.assert_not_called()
+
+    def test_header_absent_falls_back_to_origin(self) -> None:
+        ok = self.post({"origin": "http://testserver", "host": "testserver"})
+        self.assertEqual(ok.status_code, 303)
+
+    def test_header_absent_and_origin_mismatched_is_refused(self) -> None:
+        bad = self.post({"origin": "http://evil.example", "host": "testserver"})
+        self.assertEqual(bad.status_code, 403)
+        self.stop.assert_not_called()
+
+    def test_no_headers_at_all_is_refused(self) -> None:
+        self.assertEqual(self.post({}).status_code, 403)
+        self.stop.assert_not_called()
+
+
+class ControlActionTests(unittest.TestCase):
+    def test_invalid_task_id_never_shells_out(self) -> None:
+        with mock.patch.object(control.subprocess, "run") as spawned:
+            for hostile in ("../../etc/passwd", "$(whoami)", "a b", ""):
+                self.assertFalse(control.stop(hostile).ok, hostile)
+                self.assertFalse(control.unblock(hostile).ok, hostile)
+            spawned.assert_not_called()
+
+    def test_stop_reports_failure_verbatim(self) -> None:
+        # ris-stop.sh exits non-zero with NOT STOPPED when the kill did not
+        # take. That must not be translated into a cheerful success.
+        completed = subprocess.CompletedProcess([], 1, "NOT STOPPED: worker still alive", "")
+        with tempfile.NamedTemporaryFile(suffix=".sh") as script, \
+             mock.patch.object(control, "STOP_SCRIPT", Path(script.name)), \
+             mock.patch.object(control.subprocess, "run", return_value=completed), \
+             mock.patch.object(control.events, "emit"):
+            outcome = control.stop("t_a1b2c3d4")
+        self.assertFalse(outcome.ok)
+        self.assertIn("NOT STOPPED", outcome.message)
+
+    def test_actions_are_recorded_in_the_timeline(self) -> None:
+        completed = subprocess.CompletedProcess([], 0, "Unblocked t_a1b2c3d4", "")
+        with mock.patch.object(control.subprocess, "run", return_value=completed), \
+             mock.patch.object(control.events, "emit") as emitted:
+            control.unblock("t_a1b2c3d4", actor="dashboard")
+        emitted.assert_called_once()
+        self.assertEqual(emitted.call_args.args[1], "control.unblock")
+        self.assertTrue(emitted.call_args.kwargs["payload"]["ok"])
+
+    def test_missing_kill_switch_is_reported_not_crashed(self) -> None:
+        absent = Path(tempfile.gettempdir()) / "ris-stop-does-not-exist.sh"
+        with mock.patch.object(control, "STOP_SCRIPT", absent):
+            outcome = control.stop("t_a1b2c3d4")
+        self.assertFalse(outcome.ok)
+        self.assertIn("not installed", outcome.message)
 
 
 if __name__ == "__main__":

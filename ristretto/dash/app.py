@@ -1,8 +1,12 @@
-"""Read-only fleet view over the kanban board and Ristretto's event log.
+"""Fleet view over the kanban board and Ristretto's event log.
 
-Phase 2 of the control surface: it observes and nothing else. There are no
-mutating routes, so the worst a compromised viewer can do is read a task list.
-Controls arrive with the privilege split that should accompany them.
+Reading is open to anyone who can reach the tailnet address. The two
+mutating routes are not: there is no login here, so they are same-origin
+only and every action they take is recorded in the event log.
+
+Starting work is deliberately absent. Stopping a run costs a restart;
+launching one spends tokens and writes code, and that deserves its own
+design rather than a third button added by analogy.
 """
 
 from __future__ import annotations
@@ -12,13 +16,19 @@ import json
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 from fastapi.templating import Jinja2Templates
 
 from .. import events
-from . import data
+from . import control, data
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 TEMPLATES.env.filters["duration"] = data.humanise
@@ -51,7 +61,7 @@ def fleet(request: Request, all: bool = False) -> HTMLResponse:
 
 
 @app.get("/task/{task_id}", response_class=HTMLResponse)
-def task(request: Request, task_id: str) -> HTMLResponse:
+def task(request: Request, task_id: str, ok: str | None = None, failed: str | None = None) -> HTMLResponse:
     detail = data.task_detail(task_id)
     task_row = detail.get("task") or {}
     recorded = events.read(task_id, limit=500)
@@ -65,8 +75,54 @@ def task(request: Request, task_id: str) -> HTMLResponse:
             "runs": detail.get("runs") or [],
             "comments": detail.get("comments") or [],
             "timeline": list(reversed(recorded)),
+            "ok": ok,
+            "failed": failed,
         },
         status_code=200 if run else 404,
+    )
+
+
+def require_same_origin(request: Request) -> None:
+    """Reject a mutating request that did not come from this page.
+
+    There is no login here, so without this check any site you happened to
+    visit while on the tailnet could post to the dashboard from your browser
+    and stop your agents. Browsers send Sec-Fetch-Site on every request and
+    cannot be talked out of it from script, so its absence is treated as
+    suspicious rather than waved through.
+    """
+    site = request.headers.get("sec-fetch-site")
+    # Only same-origin. "none" means the request was not triggered by a page
+    # at all, which a form post cannot be, so it is not an exemption here.
+    if site == "same-origin":
+        return
+    if site is None:
+        origin = request.headers.get("origin")
+        host = request.headers.get("host")
+        if origin and host and origin.split("://")[-1] == host:
+            return
+    raise HTTPException(status_code=403, detail="cross-site requests are refused")
+
+
+@app.post("/task/{task_id}/stop")
+def stop_task(request: Request, task_id: str) -> RedirectResponse:
+    require_same_origin(request)
+    outcome = control.stop(task_id)
+    return _back_to_task(task_id, outcome)
+
+
+@app.post("/task/{task_id}/unblock")
+def unblock_task(request: Request, task_id: str) -> RedirectResponse:
+    require_same_origin(request)
+    outcome = control.unblock(task_id)
+    return _back_to_task(task_id, outcome)
+
+
+def _back_to_task(task_id: str, outcome: control.Outcome) -> RedirectResponse:
+    status = "ok" if outcome.ok else "failed"
+    detail = quote(outcome.message[:300])
+    return RedirectResponse(
+        f"/task/{quote(task_id)}?{status}={detail}", status_code=303
     )
 
 
