@@ -14,7 +14,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from ristretto.dash import control, data
+from ristretto.dash import chat, control, data
 from ristretto.dash.serve import BindRefused, resolve_host
 
 try:
@@ -177,15 +177,21 @@ class RouteTests(unittest.TestCase):
                 self.assertEqual(data.task_detail(hostile), {}, hostile)
             spawned.assert_not_called()
 
-    def test_only_the_two_control_routes_mutate(self) -> None:
-        # Starting work is deliberately absent: it spends tokens and writes
-        # code, and must not arrive as a third button added by analogy.
+    def test_the_post_surface_is_exactly_what_we_intend(self) -> None:
+        # Every POST here is a deliberate decision, so the set is pinned:
+        #   stop/unblock change running work,
+        #   chat spends a model turn but changes nothing and has no acting tools.
+        # Launching work is absent — it writes code to a branch and must not
+        # arrive as another route added by analogy to these.
         posting = {
             route.path
             for route in app.routes
             if "POST" in getattr(route, "methods", set())
         }
-        self.assertEqual(posting, {"/task/{task_id}/stop", "/task/{task_id}/unblock"})
+        self.assertEqual(
+            posting,
+            {"/task/{task_id}/stop", "/task/{task_id}/unblock", "/chat"},
+        )
         others = {
             m
             for route in app.routes
@@ -246,6 +252,60 @@ class CrossSiteTests(unittest.TestCase):
     def test_no_headers_at_all_is_refused(self) -> None:
         self.assertEqual(self.post({}).status_code, 403)
         self.stop.assert_not_called()
+
+    def test_chat_is_same_origin_too(self) -> None:
+        # It spends a model turn, and an endpoint anyone can drive is one
+        # anyone can drain.
+        with mock.patch.object(chat, "ask") as asked:
+            refused = self.client.post(
+                "/chat", json={"message": "hi"}, headers={"sec-fetch-site": "cross-site"}
+            )
+            self.assertEqual(refused.status_code, 403)
+            asked.assert_not_called()
+
+
+class ChatTests(unittest.TestCase):
+    """Ris in the dashboard is Ris with its dangerous tools taken away."""
+
+    def test_toolset_excludes_everything_that_can_act(self) -> None:
+        # Unrestricted, asked to run a shell command, Ris runs it and reports
+        # the output. On a page with no login that is remote code execution.
+        forbidden = {"terminal", "file", "code_execution", "browser", "delegation", "cronjob"}
+        self.assertFalse(forbidden & set(chat.TOOLSETS.split(",")), chat.TOOLSETS)
+
+    def test_the_restriction_reaches_the_command_line(self) -> None:
+        completed = subprocess.CompletedProcess([], 0, "answer", "")
+        with mock.patch.object(chat.subprocess, "run", return_value=completed) as spawned, \
+             mock.patch.object(chat, "fleet_context", return_value="none"):
+            chat.ask("hello")
+        argv = spawned.call_args.args[0]
+        self.assertIn("-t", argv)
+        self.assertEqual(argv[argv.index("-t") + 1], chat.TOOLSETS)
+
+    def test_empty_and_oversized_questions_never_spawn(self) -> None:
+        with mock.patch.object(chat.subprocess, "run") as spawned:
+            self.assertFalse(chat.ask("   ").ok)
+            self.assertFalse(chat.ask("x" * (chat.MAX_MESSAGE + 1)).ok)
+            spawned.assert_not_called()
+
+    def test_a_timeout_is_reported_not_raised(self) -> None:
+        with mock.patch.object(chat, "fleet_context", return_value="none"), \
+             mock.patch.object(
+                 chat.subprocess, "run",
+                 side_effect=subprocess.TimeoutExpired("hermes", 180)):
+            reply = chat.ask("hello")
+        self.assertFalse(reply.ok)
+        self.assertIn("did not answer", reply.text)
+
+    def test_the_fleet_is_handed_over_not_looked_up(self) -> None:
+        # Context is injected precisely so Ris needs no tools to fetch it.
+        completed = subprocess.CompletedProcess([], 0, "answer", "")
+        with mock.patch.object(chat, "fleet_context", return_value="RUN-A is stalled"), \
+             mock.patch.object(chat.subprocess, "run", return_value=completed) as spawned:
+            chat.ask("what is stalled?")
+        prompt = spawned.call_args.args[0][2]
+        self.assertIn("RUN-A is stalled", prompt)
+        self.assertIn("what is stalled?", prompt)
 
 
 class ControlActionTests(unittest.TestCase):

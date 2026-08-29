@@ -54,6 +54,16 @@
   </p>
 {% endif %}
 
+<section class="ask">
+  <h2 class="project">Ask Ris</h2>
+  <form id="ask" autocomplete="off">
+    <input id="q" name="q" type="text" placeholder="Why did XARI-33 stall?" aria-label="Ask Ris about the fleet">
+    <button type="submit">Ask</button>
+  </form>
+  <div id="answer" hidden></div>
+  <p class="hint">Ris answers from the fleet above. It has no terminal, file or code tools here.</p>
+</section>
+
 <p class="note">
   Hermes does not expose a heartbeat through its CLI, so liveness is derived from the
   newest signal Ris has — a recorded event, or the run's start — and each card says which.
@@ -85,5 +95,39 @@
   };
   // A new or removed run changes the page structure, not just its numbers.
   source.addEventListener("error", () => {});
+
+  const form = document.getElementById("ask");
+  const box = document.getElementById("q");
+  const answer = document.getElementById("answer");
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const question = box.value.trim();
+    if (!question) return;
+    const started = Date.now();
+    answer.hidden = false;
+    answer.className = "waiting";
+    answer.textContent = "Ris is thinking… 0s";
+    const tick = setInterval(() => {
+      answer.textContent = `Ris is thinking… ${Math.round((Date.now() - started) / 1000)}s`;
+    }, 1000);
+    form.querySelector("button").disabled = true;
+    try {
+      const response = await fetch("/chat", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({message: question}),
+      });
+      const data = await response.json();
+      answer.className = data.ok ? "good" : "bad";
+      answer.textContent = data.text;
+      if (data.ok) box.value = "";
+    } catch (err) {
+      answer.className = "bad";
+      answer.textContent = "Could not reach the dashboard.";
+    } finally {
+      clearInterval(tick);
+      form.querySelector("button").disabled = false;
+    }
+  });
 </script>
 {% endblock %}

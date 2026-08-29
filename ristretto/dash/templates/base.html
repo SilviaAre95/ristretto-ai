@@ -87,6 +87,30 @@
   .h-failed  .pill { color: var(--failed); }
   .h-blocked .pill { color: var(--blocked); }
   .empty { color: var(--ink-faint); padding: 40px 0; text-align: center; }
+  .ask { margin-top: 34px; }
+  .ask form { display: flex; gap: 8px; }
+  .ask input {
+    flex: 1; min-width: 0; font-family: var(--sans); font-size: 16px;
+    padding: 11px 13px; min-height: 44px; color: var(--ink);
+    background: var(--surface); border: 1px solid var(--hairline); border-radius: 2px;
+  }
+  .ask input:focus-visible, .ask button:focus-visible {
+    outline: 2px solid var(--ris); outline-offset: 2px;
+  }
+  .ask button {
+    font-family: var(--mono); font-size: 13px; padding: 11px 20px; min-height: 44px;
+    cursor: pointer; color: var(--ink); background: var(--surface);
+    border: 1px solid var(--ink-faint); border-radius: 2px;
+  }
+  .ask button:disabled { opacity: 0.5; cursor: default; }
+  #answer {
+    margin-top: 12px; padding: 13px 15px; font-size: 15px; line-height: 1.55;
+    background: var(--surface); border: 1px solid var(--hairline);
+    white-space: pre-wrap; word-break: break-word;
+  }
+  #answer.waiting { color: var(--ink-faint); font-family: var(--mono); font-size: 13px; }
+  #answer.bad { color: var(--failed); }
+  .hint { font-size: 12.5px; color: var(--ink-faint); margin: 8px 0 0; }
   .actions { display: flex; gap: 10px; margin: 18px 0 4px; }
   .actions form { margin: 0; }
   .actions button {

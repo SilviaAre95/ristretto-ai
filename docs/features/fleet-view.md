@@ -3,7 +3,7 @@ id: fleet-view
 title: Fleet View
 status: in-progress  # proposed | in-progress | implemented | deprecated
 created_at: 2026-08-25
-last_modified: 2026-08-29
+last_modified: 2026-08-30
 owner: project
 depends_on: [event-spine]
 acceptance_criteria:
@@ -13,6 +13,7 @@ acceptance_criteria:
   - Stopping and unblocking are possible from a phone
   - A mutating request that did not come from this page is refused
   - Every control action is recorded in the timeline
+  - Ris answers questions about the fleet from the dashboard
 non_goals:
   - NOT binding to a public interface
   - NOT launching work from the dashboard
@@ -72,6 +73,29 @@ matches the host when the header is absent; `cross-site`, `same-site`,
 **Starting work is deliberately absent.** Stopping a run costs a restart;
 launching one spends tokens and writes code to a branch, and it deserves its
 own design rather than a third button added by analogy to the other two.
+
+### Asking Ris
+
+The same agent that answers on Slack answers here, narrowed twice.
+
+Its tools are restricted to a minimal set. Ris normally has terminal, file,
+code execution and delegation; exposed unmodified on a page with no login,
+a chat box is remote code execution over HTTP for anyone on the tailnet —
+asked to run a shell command, the unrestricted agent runs it and reports the
+output. Verified: invoked with the restricted toolset it answers *"there's no
+bash tool available in this environment"*. Widening this is a one-line change
+and should be a deliberate one.
+
+Context is injected rather than fetched. The dashboard already knows the
+fleet, so it hands Ris a summary instead of granting the tools to go looking.
+Fewer capabilities and better answers, and "why did XARI-33 stall" works
+without naming a task id.
+
+Replies are not streamed. `hermes -z` emits its whole answer at the end —
+measured under a tty as well as a pipe, so it is the agent's behaviour and
+not output buffering. Streaming would need `hermes serve`, a second daemon
+running a JSON-RPC/WebSocket gateway; that earns itself when Ris is fully
+capable here, not for read-only questions that land in under fifteen seconds.
 
 ### Why there is no separate dashboard user
 
