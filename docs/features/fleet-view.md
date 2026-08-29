@@ -3,17 +3,19 @@ id: fleet-view
 title: Fleet View
 status: in-progress  # proposed | in-progress | implemented | deprecated
 created_at: 2026-08-25
-last_modified: 2026-08-25
+last_modified: 2026-08-29
 owner: project
 depends_on: [event-spine]
 acceptance_criteria:
   - Every run across every project is visible from a phone on the tailnet
   - A run that has gone quiet is shown as stalled, not as healthy
   - The view never claims a signal it did not receive
-  - No route mutates anything in this phase
+  - Stopping and unblocking are possible from a phone
+  - A mutating request that did not come from this page is refused
+  - Every control action is recorded in the timeline
 non_goals:
   - NOT binding to a public interface
-  - NOT stopping, unblocking, or launching work in V1
+  - NOT launching work from the dashboard
   - NOT implying a heartbeat Hermes does not expose
 ---
 
@@ -49,6 +51,40 @@ that is active with no signal for fifteen minutes is shown as stalled.
 A finished task with no recorded completion time reports its duration as
 unknown rather than counting from its start, which would grow forever and read
 as though the work were still in flight.
+
+### Controls
+
+A run can be stopped and a blocked task unblocked. Stop shells the existing
+hardened kill switch, which reclaims the task, kills the worker by its exact
+spawn signature, verified-reaps the Claude Code grandchild, and re-checks for
+the promote race; its `NOT STOPPED` message and non-zero exit are surfaced
+verbatim rather than translated into a cheerful failure. Both actions are
+recorded as `control.stop` / `control.unblock` events, so a run that ends
+early has a reason in its timeline instead of just stopping.
+
+There is no login, so a mutating request must prove it came from this page.
+Without that, any site visited while on the tailnet could post to the
+dashboard from the browser and stop a running agent. Requests are accepted
+only with `Sec-Fetch-Site: same-origin`, falling back to an `Origin` that
+matches the host when the header is absent; `cross-site`, `same-site`,
+`none`, a mismatched origin, and no headers at all are all refused.
+
+**Starting work is deliberately absent.** Stopping a run costs a restart;
+launching one spends tokens and writes code to a branch, and it deserves its
+own design rather than a third button added by analogy to the other two.
+
+### Why there is no separate dashboard user
+
+The design called for the web process to run as an unprivileged `_risdash`.
+It does not, because the split cannot work here and pretending otherwise
+would be worse than not doing it: `ris-stop.sh` has to signal a worker owned
+by the primary user, and one user cannot kill another's processes. Bridging
+that needs a sudo rule letting the web user run a script as the owner, which
+is itself an escalation path — more attack surface than the split removes.
+
+The effort went into the boundary that is actually reachable instead: no
+public bind, same-origin-only mutations, two verbs, validated ids, and an
+audit trail.
 
 ### Binding
 

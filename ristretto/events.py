@@ -37,6 +37,10 @@ KINDS = frozenset(
         "awaiting.approval",
         "preflight.passed",
         "preflight.failed",
+        # Actions taken from the fleet view. Recorded so a run that stops
+        # has a reason in its timeline rather than just ending.
+        "control.stop",
+        "control.unblock",
     }
 )
 

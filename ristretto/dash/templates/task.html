@@ -10,6 +10,23 @@
   <h2 style="margin:16px 0 4px; font-size:19px;">{{ run.title }}</h2>
   <span class="pill h-{{ run.health }}" style="color:var(--{{ run.health }}, var(--done))">{{ run.health }}</span>
 
+  {% if ok %}<p class="banner good">{{ ok }}</p>{% endif %}
+  {% if failed %}<p class="banner bad">{{ failed }}</p>{% endif %}
+
+  <div class="actions">
+    {% if run.status in ("running", "ready", "review") %}
+      <form method="post" action="/task/{{ run.task_id }}/stop"
+            onsubmit="return confirm('Stop {{ run.issue_key or run.task_id }}? The worker is killed; committed work stays on the branch.')">
+        <button class="danger" type="submit">Stop</button>
+      </form>
+    {% endif %}
+    {% if run.status == "blocked" %}
+      <form method="post" action="/task/{{ run.task_id }}/unblock">
+        <button type="submit">Unblock</button>
+      </form>
+    {% endif %}
+  </div>
+
   <table class="detail">
     <tr><th>Task</th><td>{{ run.task_id }}</td></tr>
     <tr><th>Status</th><td>{{ run.status }}</td></tr>

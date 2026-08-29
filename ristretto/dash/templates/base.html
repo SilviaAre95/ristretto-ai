@@ -87,6 +87,23 @@
   .h-failed  .pill { color: var(--failed); }
   .h-blocked .pill { color: var(--blocked); }
   .empty { color: var(--ink-faint); padding: 40px 0; text-align: center; }
+  .actions { display: flex; gap: 10px; margin: 18px 0 4px; }
+  .actions form { margin: 0; }
+  .actions button {
+    font-family: var(--mono); font-size: 13px; letter-spacing: 0.04em;
+    padding: 9px 18px; min-height: 40px; cursor: pointer;
+    background: var(--surface); color: var(--ink);
+    border: 1px solid var(--ink-faint); border-radius: 2px;
+  }
+  .actions button:hover { border-color: var(--ink); }
+  .actions button:focus-visible { outline: 2px solid var(--ris); outline-offset: 2px; }
+  .actions button.danger { color: var(--failed); border-color: var(--failed); }
+  .banner {
+    font-family: var(--mono); font-size: 13px; padding: 10px 14px;
+    margin: 16px 0 0; border: 1px solid currentColor; word-break: break-word;
+  }
+  .banner.good { color: var(--running); }
+  .banner.bad  { color: var(--failed); }
   .note {
     font-size: 13px; color: var(--ink-faint); border-top: 1px solid var(--hairline);
     margin-top: 32px; padding-top: 14px;
