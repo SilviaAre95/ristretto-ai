@@ -28,6 +28,8 @@ Source of truth for what this product **does** and **does not** do. Every code c
 | `fleet-view` | Fleet View | in-progress | Dashboard over the board and event log, bound to the tailnet; stop, unblock, and ask Ris. | NOT launching work; NOT public ingress; NOT implying a heartbeat Hermes does not expose |
 | `flow-enforcement` | Flow Enforcement | implemented | A loop task cannot be completed unless its loop actually ran. | NOT gating non-loop tasks; NOT relying on the event log; NOT blocking edits, only completion |
 
+| `doorbell` | Doorbell | implemented | Pipeline milestones reach Slack with a link into the fleet view. | NOT notifying on progress; NOT a daemon; NOT retrying a failed send |
+
 <!-- Append new rows above this comment. Keep the summary column ≤ 15 words. -->
 
 ## Deprecated

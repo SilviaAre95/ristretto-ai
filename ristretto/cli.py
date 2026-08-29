@@ -75,6 +75,16 @@ def parser() -> argparse.ArgumentParser:
     dash_command.add_argument("--port", type=int, default=8787)
     dash_command.add_argument("--reload", action="store_true", help="reload on code changes")
 
+    doorbell_command = commands.add_parser(
+        "doorbell", help="post pipeline milestones to Slack with a link to the fleet view"
+    )
+    doorbell_command.add_argument("--once", action="store_true", help="deliver and exit")
+    doorbell_command.add_argument(
+        "--dry-run", action="store_true", help="print what would be sent, send nothing"
+    )
+    doorbell_command.add_argument("--interval", type=int, default=20)
+    doorbell_command.add_argument("--base-url", help="dashboard URL used in links")
+
     events_command = commands.add_parser("events", help="read the pipeline event log")
     events_command.add_argument("task_id", nargs="?", help="limit to one task")
     events_command.add_argument("--limit", type=int, default=50)
@@ -267,6 +277,21 @@ def main(argv: list[str] | None = None) -> int:
             except BindRefused as exc:
                 print(f"ristretto: {exc}", file=sys.stderr)
                 return 2
+        if args.command == "doorbell":
+            from . import doorbell as bell
+
+            base = args.base_url
+            if not base:
+                from .dash.serve import resolve_host
+
+                host, _ = resolve_host()
+                base = f"http://{host}:8787"
+            channel = bell.resolve_channel(config)
+            if args.once or args.dry_run:
+                sent = bell.ring(base, channel, dry_run=args.dry_run)
+                print(f"{sent} milestone(s) {'would be sent' if args.dry_run else 'sent'}")
+                return 0
+            return bell.watch(base, channel, args.interval)
         if args.command == "events":
             from . import events as event_log
 
