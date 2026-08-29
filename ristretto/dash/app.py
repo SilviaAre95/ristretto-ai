@@ -28,7 +28,7 @@ from fastapi.responses import (
 from fastapi.templating import Jinja2Templates
 
 from .. import events
-from . import control, data
+from . import chat, control, data
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 TEMPLATES.env.filters["duration"] = data.humanise
@@ -124,6 +124,20 @@ def _back_to_task(task_id: str, outcome: control.Outcome) -> RedirectResponse:
     return RedirectResponse(
         f"/task/{quote(task_id)}?{status}={detail}", status_code=303
     )
+
+
+@app.post("/chat")
+async def ask_ris(request: Request) -> JSONResponse:
+    """Put a question to Ris with the fleet as context.
+
+    Same-origin like the other mutating routes. It does not change anything,
+    but it does spend a model turn, and an endpoint anyone can drive is one
+    anyone can drain.
+    """
+    require_same_origin(request)
+    body = await request.json()
+    reply = chat.ask(str(body.get("message", "")))
+    return JSONResponse({"ok": reply.ok, "text": reply.text}, status_code=200 if reply.ok else 400)
 
 
 @app.get("/healthz")
