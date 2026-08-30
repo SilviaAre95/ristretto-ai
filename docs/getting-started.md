@@ -125,31 +125,6 @@ call, and a morning-brief dry run.
 - Wake management is your choice: Ristretto never changes `pmset`. If the
   machine sleeps, Ris sleeps with it.
 
-## Telegram ops lane (optional)
-
-Chat with real Claude Code on this machine from your phone — the full agent,
-with tool calls gated by an Approve/Deny tap.
-
-1. Create a bot with BotFather, and get your numeric Telegram user ID (message
-   `@userinfobot`).
-2. Run `make ops-setup`. It installs the `[ops]` extra, scaffolds
-   `~/.config/ristretto/ops.env` (non-secret settings only, `chmod 600`), and
-   prints the one command to store your bot token in the **macOS Keychain** —
-   the token never lands in a plaintext file.
-3. Follow its output: store the token in Keychain, then put your numeric
-   Telegram id + working root (`RISTRETTO_OPS_ROOT`) in
-   `~/.config/ristretto/ops.env`.
-4. Validate: `ristretto ops-daemon --check` (should print the root + "identity
-   lock armed").
-5. Run: `ristretto ops-daemon`. Message the bot and chat; `/ls` lists folders,
-   `/new` starts a fresh conversation.
-
-By default the phone loads your full desktop Claude Code config (MCP tools,
-commands, allow rules) with a hard-deny override always blocking the dangerous
-set (`docs/examples/phone-settings.strict.json`). Set
-`RISTRETTO_OPS_SETTING_SOURCES=project` to exclude your desktop rules and make
-sensitive actions prompt every time.
-
 ## Updating
 
 When a new release is out, update from your clone with one command:

@@ -29,7 +29,7 @@ Ris connects to Slack over Socket Mode, so no public URL or inbound webhook is r
 ## Out of scope
 
 - NOT public/multi-user: V0 serves one explicitly allowlisted user. Multi-user support would require per-user authorization, scoping, and audit trails.
-- NOT other chat platforms in V0: only Slack is wired up. Telegram, email, or other channels are not implemented and are not on the V0 roadmap.
+- NOT other chat platforms: Slack is the only chat integration. A Telegram ops lane existed and was removed — its rejected token retried every five minutes and took the shared gateway adapters down with it, which is why Slack never received an inbound message. Conversation with Ris also happens in the fleet view; see `fleet-view`.
 - NOT unauthenticated access: every inbound event is checked against the allowlist before any processing occurs; there is no anonymous or guest mode.
 
 ## Open questions
