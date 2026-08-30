@@ -119,10 +119,65 @@ HERMES_HOME="$hermes_home" hermes -p ris-worker config set session_reset.idle_mi
 # Hooks are per profile, and the worker profile is the one that calls
 # kanban_complete — declaring the guard only in the top-level config would
 # leave the process it exists to gate completely ungated.
-HERMES_HOME="$hermes_home" hermes -p ris-worker config set hooks.pre_tool_call \
-  '[{"matcher":"kanban_complete","command":"~/.hermes/agent-hooks/loop-flow-guard.sh","timeout":15}]' >/dev/null
+#
+# Written as a delimited block rather than via `config set`, which stores a
+# JSON argument as a *string*: the profile ends up with
+#   hooks: {pre_tool_call: '[{...}]'}
+# which loads as no hooks at all. That silently disarmed the guard on every
+# reinstall, and nothing said so.
+profile_config="$hermes_home/profiles/ris-worker/config.yaml"
+python3 - "$profile_config" <<'GUARD'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text() if path.exists() else ""
+begin, end = "# ris:flow-guard begin", "# ris:flow-guard end"
+
+if begin in text and end in text:
+    head, _, rest = text.partition(begin)
+    _, _, tail = rest.partition(end)
+    text = head.rstrip("\n") + "\n" + tail.lstrip("\n")
+
+# Drop any earlier hooks mapping, children included. Removing only the
+# top-level keys orphans their indented entries and leaves YAML that will
+# not parse — which is how this went wrong the first time.
+kept, dropping = [], False
+for line in text.splitlines():
+    top_level = line[:1] not in (" ", "\t") and line.strip()
+    if top_level and line.split(":", 1)[0] in ("hooks", "hooks_auto_accept"):
+        dropping = True
+        continue
+    if dropping:
+        if not line.strip() or not top_level:
+            continue
+        dropping = False
+    kept.append(line)
+text = "\n".join(kept)
+
+block = f"""{begin}
+hooks:
+  pre_tool_call:
+    - matcher: "kanban_complete"
+      command: "~/.hermes/agent-hooks/loop-flow-guard.sh"
+      timeout: 15
 # The worker has no TTY to consent at.
-HERMES_HOME="$hermes_home" hermes -p ris-worker config set hooks_auto_accept true >/dev/null
+hooks_auto_accept: true
+{end}
+"""
+path.parent.mkdir(parents=True, exist_ok=True)
+path.write_text(text.rstrip("\n") + "\n" + block)
+GUARD
+
+# Configuring is not the same as working: prove the guard is actually
+# registered rather than trusting that writing the file was enough.
+if ! HERMES_HOME="$hermes_home" hermes -p ris-worker hooks list 2>/dev/null \
+     | grep -q "loop-flow-guard"; then
+  echo "install-hermes: the loop flow guard is not registered on the ris-worker profile" >&2
+  echo "  a worker could complete a task without running its loop — refusing to finish silently" >&2
+  exit 1
+fi
+echo "Loop flow guard armed on the ris-worker profile."
 
 # The doorbell turns pipeline milestones into Slack messages. Run as a cron
 # rather than a daemon: a missed tick delivers late, a crashed daemon delivers
