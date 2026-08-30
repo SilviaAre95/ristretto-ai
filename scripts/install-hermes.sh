@@ -93,9 +93,15 @@ install -m 0755 \
   "$repo/hermes/scripts/ris-event.py" \
   "$hermes_home/scripts/ris-event.py"
 mkdir -p "$hermes_home/agent-hooks"
-install -m 0755 \
-  "$repo/hermes/agent-hooks/loop-flow-guard.sh" \
-  "$hermes_home/agent-hooks/loop-flow-guard.sh"
+# Copy only when it differs. Hermes fingerprints an approved hook script, so
+# rewriting an identical copy would invalidate the approval on every install
+# and leave the guard needing re-approval it did not actually need.
+if ! cmp -s "$repo/hermes/agent-hooks/loop-flow-guard.sh" \
+            "$hermes_home/agent-hooks/loop-flow-guard.sh"; then
+  install -m 0755 \
+    "$repo/hermes/agent-hooks/loop-flow-guard.sh" \
+    "$hermes_home/agent-hooks/loop-flow-guard.sh"
+fi
 install -m 0755 \
   "$repo/hermes/scripts/ris-doorbell.sh" \
   "$hermes_home/scripts/ris-doorbell.sh"
@@ -177,7 +183,19 @@ if ! HERMES_HOME="$hermes_home" hermes -p ris-worker hooks list 2>/dev/null \
   echo "  a worker could complete a task without running its loop — refusing to finish silently" >&2
   exit 1
 fi
-echo "Loop flow guard armed on the ris-worker profile."
+# Hermes fingerprints an approved hook script, so reinstalling a changed copy
+# reports "modified since approval". Approval is granted when an agent starts,
+# not by any hooks subcommand, so it cannot be refreshed from here — say so
+# rather than leaving the operator to find out from a worker that skipped its
+# loop. Do not "fix" this by revoking: that disarms the hook outright until an
+# agent runs again.
+if HERMES_HOME="$hermes_home" hermes -p ris-worker hooks doctor 2>/dev/null \
+   | grep -q "modified since approval"; then
+  echo "Loop flow guard needs re-approval after this update. Run once:" >&2
+  echo "  hermes -p ris-worker --accept-hooks -z ok" >&2
+else
+  echo "Loop flow guard armed on the ris-worker profile."
+fi
 
 # The doorbell turns pipeline milestones into Slack messages. Run as a cron
 # rather than a daemon: a missed tick delivers late, a crashed daemon delivers
