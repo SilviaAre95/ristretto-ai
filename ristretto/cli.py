@@ -116,10 +116,6 @@ def parser() -> argparse.ArgumentParser:
         help="add or replace a project repository mapping",
     )
 
-    ops = commands.add_parser("ops-daemon", help="run the Telegram ops lane daemon")
-    ops.add_argument("--check", action="store_true", help="validate config and exit")
-
-    commands.add_parser("ops-init", help="scaffold Telegram ops lane config")
     return root
 
 
@@ -340,19 +336,6 @@ def main(argv: list[str] | None = None) -> int:
             write_user_config(config, target)
             print(f"configuration updated: {target}")
             return 0
-        if args.command == "ops-daemon":
-            from .ops_lane.cli import load_ops_env, ops_daemon_check, run_ops_daemon
-
-            if args.check:
-                load_ops_env()
-                code, msg = ops_daemon_check(os.environ)
-                print(msg)
-                return code
-            return run_ops_daemon(os.environ)
-        if args.command == "ops-init":
-            from .ops_lane.cli import ops_init
-
-            return ops_init(os.environ)
     except ConfigError as exc:
         print(f"ristretto: {exc}", file=sys.stderr)
         return 2

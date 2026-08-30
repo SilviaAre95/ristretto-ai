@@ -1,11 +1,7 @@
-.PHONY: setup install install-hermes install-push-guard update test check public-check doctor ops-setup
+.PHONY: setup install install-hermes install-push-guard update test check public-check doctor
 
 setup:
 	bash scripts/setup-dev.sh
-
-ops-setup:
-	.venv/bin/python -m pip install -e '.[ops]'
-	.venv/bin/ristretto ops-init
 
 install:
 	bash scripts/install.sh

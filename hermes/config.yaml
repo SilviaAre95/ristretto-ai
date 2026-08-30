@@ -15,7 +15,7 @@ terminal:
   home_mode: auto
   lifetime_seconds: 300
 approvals:
-  # How long a gateway approval card (Slack/Telegram Approve-Deny) stays
+  # How long a gateway approval card (Slack Approve-Deny) stays
   # actionable before the agent gives up and treats it as denied. Hermes
   # defaults to 300s, which expires while you are away from the desk: the
   # card stays clickable, but the click no longer reaches the agent.
