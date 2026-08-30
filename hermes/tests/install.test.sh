@@ -94,6 +94,15 @@ if [ "${1:-}" = "gateway" ] && [ "${2:-}" = "install" ]; then
   touch "$HERMES_HOME/service-installed"
   exit 0
 fi
+# The installer verifies the flow guard is really registered rather than
+# trusting that writing a config file was enough, so the stub has to answer
+# `hooks list` the way hermes does — from the profile config.
+case " $* " in
+  *" hooks list "*)
+    cat "$HERMES_HOME/profiles/ris-worker/config.yaml" 2>/dev/null
+    exit 0
+    ;;
+esac
 exit 0
 EOF
 chmod +x "$fakebin/ristretto" "$fakebin/hermes"
@@ -111,6 +120,12 @@ assert "Hermes installer leaves service unchanged by default" test ! -e "$fake_h
 PATH="$fakebin:$PATH" RISTRETTO_HERMES_HOME="$fake_home" \
   bash "$repo/scripts/install-hermes.sh" >/dev/null
 assert "Hermes installer is idempotent" test -L "$fake_home/skills/software-development/loop-runner"
+# The guard must survive a reinstall: `config set` used to store it as a
+# string, which loads as no hooks and silently disarmed it on every update.
+assert "reinstall keeps exactly one flow-guard block" \
+  test "$(grep -c 'ris:flow-guard begin' "$fake_home/profiles/ris-worker/config.yaml")" -eq 1
+assert "flow guard is declared as a list, not a string" \
+  grep -q '^    - matcher: "kanban_complete"' "$fake_home/profiles/ris-worker/config.yaml"
 
 PATH="$fakebin:$PATH" RISTRETTO_HERMES_HOME="$fake_home" \
   bash "$repo/scripts/install-hermes.sh" --service >/dev/null
