@@ -49,6 +49,7 @@ class Run:
     last_event: Mapping[str, Any] | None = None
     last_signal_at: int | None = None
     signal_source: str = "none"
+    flow_alive: bool = False
     failure: str | None = None
     events: list[Mapping[str, Any]] = field(default_factory=list)
 
@@ -61,6 +62,10 @@ class Run:
             return "failed" if self.failure else "done"
         if self.status not in ACTIVE_STATES:
             return "idle"
+        # A quiet run with a live flow process is working, not stalled. Only
+        # silence with nothing running behind it is a stall.
+        if self.flow_alive:
+            return "running"
         if self.age_of_signal is not None and self.age_of_signal > STALL_AFTER_SECONDS:
             return "stalled"
         return "running"
@@ -109,6 +114,36 @@ def humanise(seconds: int | None) -> str:
     if seconds < 86400:
         return f"{seconds // 3600}h {(seconds % 3600) // 60}m"
     return f"{seconds // 86400}d"
+
+
+def running_flows(timeout: int = 10) -> set[str]:
+    """Task ids with a live flow process on this machine.
+
+    Event age alone is a poor liveness test: a build stage emits nothing
+    between its start and its finish and legitimately runs for the better
+    part of an hour, so a healthy run reads as stalled. The dashboard is on
+    the same machine as the runner, so it can ask instead of inferring.
+    """
+    # Listing every process and filtering here, rather than pgrep -f: a
+    # pattern search matches the command line of whatever runs the search,
+    # so any shell mentioning "ristretto.runner --task-id" — including a
+    # monitor watching for one — reports itself as a live flow.
+    try:
+        listing = subprocess.run(
+            ["ps", "-eo", "command="],
+            capture_output=True, text=True, check=False, timeout=timeout,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    found = set()
+    for line in listing.stdout.splitlines():
+        if "-m ristretto.runner" not in line or "--task-id" not in line:
+            continue
+        # A shell that merely mentions the runner is not running it.
+        if line.lstrip().startswith(("/bin/sh", "/bin/bash", "/bin/zsh", "sh ", "bash ", "zsh ")):
+            continue
+        found.add(line.split("--task-id", 1)[1].split()[0])
+    return found
 
 
 def board(timeout: int = 30) -> list[dict[str, Any]]:
@@ -208,7 +243,12 @@ def fleet(limit_events: int = 200) -> list[Run]:
     recorded: dict[str, list[Mapping[str, Any]]] = {}
     for item in events.read(limit=limit_events * 10):
         recorded.setdefault(str(item.get("task_id")), []).append(item)
-    runs = [build_run(task, recorded.get(str(task.get("id")), [])) for task in board()]
+    live = running_flows()
+    runs = []
+    for task in board():
+        run = build_run(task, recorded.get(str(task.get("id")), []))
+        run.flow_alive = run.task_id in live
+        runs.append(run)
     runs.sort(key=lambda r: (r.last_signal_at or 0), reverse=True)
     return runs
 

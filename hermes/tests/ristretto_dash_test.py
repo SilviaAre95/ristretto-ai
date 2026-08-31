@@ -85,6 +85,33 @@ class RunTests(unittest.TestCase):
         run = data.build_run(task(), [event("stage.started", age=3600, stage="build")])
         self.assertEqual(run.health, "stalled")
 
+    def test_a_quiet_run_with_a_live_flow_is_not_stalled(self) -> None:
+        # A build stage emits nothing between its start and its finish and
+        # legitimately runs for the better part of an hour. Judging on event
+        # age alone reported healthy builds as stalled.
+        run = data.build_run(task(), [event("stage.started", age=3600, stage="build")])
+        self.assertEqual(run.health, "stalled")
+        run.flow_alive = True
+        self.assertEqual(run.health, "running")
+
+    def test_silence_with_nothing_running_is_still_a_stall(self) -> None:
+        run = data.build_run(task(), [event("stage.started", age=3600, stage="build")])
+        run.flow_alive = False
+        self.assertEqual(run.health, "stalled")
+
+    def test_a_shell_mentioning_the_runner_is_not_a_live_flow(self) -> None:
+        # A pattern search matches the command line of whatever runs the
+        # search, so a monitor watching for a runner reported itself as one.
+        listing = (
+            "/bin/zsh -c pgrep -f 'ristretto.runner --task-id t_faker'\n"
+            "/x/.venv/bin/python3 -m ristretto.runner --task-id t_real --issue A --flow tier1\n"
+        )
+        with mock.patch.object(
+            data.subprocess, "run",
+            return_value=subprocess.CompletedProcess([], 0, listing, ""),
+        ):
+            self.assertEqual(data.running_flows(), {"t_real"})
+
     def test_blocked_beats_signal_age(self) -> None:
         run = data.build_run(task(status="blocked"), [event("stage.started", age=5)])
         self.assertEqual(run.health, "blocked")
