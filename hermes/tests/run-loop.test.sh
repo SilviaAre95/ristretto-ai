@@ -162,7 +162,23 @@ LINKED_ROOT="$(cd -P "$LINKDIR/loop-runner/scripts/../../../.." && pwd -P)"
 t "symlinked skill resolves the repo root" "[ -f '$LINKED_ROOT/ristretto/runner.py' ]"
 t "symlinked skill does not resolve to HERMES_HOME" "[ '$LINKED_ROOT' != \"$HOME/.hermes\" ]"
 
-"$SCRIPT" t-flow PROJ-12 --flow tier1 >/dev/null 2>&1; RC=$?
+# Regression: a detached worker's PATH finds /usr/bin/python3, which has no
+# PyYAML, so `import ristretto` failed for a missing dependency while the
+# package itself was reachable. The runner must pick an interpreter that
+# works rather than trusting whatever python3 resolves to.
+REPO_PY="$REPO_ROOT/.venv/bin/python3"
+if [ -x "$REPO_PY" ]; then
+  t "repo venv interpreter can import ristretto" \
+    "PYTHONPATH='$REPO_ROOT' '$REPO_PY' -c 'import ristretto.runner' 2>/dev/null"
+  t "run-loop does not hardcode a bare python3 for the runner" \
+    "! grep -qE '^\\s*exec python3 -m ristretto.runner' '$SCRIPT'"
+  t "run-loop selects an interpreter that can import" \
+    "grep -q 'ris_python' '$SCRIPT'"
+  t "an explicit RIS_PYTHON override is honoured" \
+    "grep -q 'RIS_PYTHON' '$SCRIPT'"
+fi
+
+RIS_PYTHON="$FAKEBIN/python3" "$SCRIPT" t-flow PROJ-12 --flow tier1 >/dev/null 2>&1; RC=$?
 t "custom flow: succeeds"             "[ $RC -eq 0 ]"
 t "custom flow: runner module"        "grep -q -- '-m ristretto.runner' '$FAKEBIN/python_argv'"
 t "custom flow: passes selection"     "grep -q -- '--flow tier1' '$FAKEBIN/python_argv'"

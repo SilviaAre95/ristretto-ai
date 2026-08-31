@@ -89,17 +89,45 @@ RUN_MARKER="$PWD/.ristretto/runs/$TASK_ID"
 mkdir -p "$RUN_MARKER" 2>/dev/null && printf '{"task":"%s","issue":"%s","flow":"%s","started":%s}\n' \
   "$TASK_ID" "$ISSUE_KEY" "$FLOW" "$(date +%s)" > "$RUN_MARKER/loop.json" 2>/dev/null || true
 
-if [ "$FLOW" != "classic" ]; then
-  RISTRETTO_ROOT="$(cd -P "$SCRIPT_DIR/../../../.." && pwd -P)"
-  export PYTHONPATH="$RISTRETTO_ROOT${PYTHONPATH:+:$PYTHONPATH}"
-  # Fail with the cause rather than a Python traceback: a wrong root here
-  # means every non-classic flow dies before its first stage, and the
-  # traceback names the module, not the path that was wrong.
-  if ! python3 -c "import ristretto.runner" 2>/dev/null; then
-    echo "run-loop: cannot import ristretto from $RISTRETTO_ROOT — flow $FLOW cannot start" >&2
-    exit 2
+RISTRETTO_ROOT="$(cd -P "$SCRIPT_DIR/../../../.." && pwd -P)"
+export PYTHONPATH="$RISTRETTO_ROOT${PYTHONPATH:+:$PYTHONPATH}"
+
+# Pick an interpreter that can actually import ristretto rather than trusting
+# whatever `python3` resolves to. A detached worker's PATH is not a developer
+# shell's: it finds /usr/bin/python3, which has no PyYAML, so the import fails
+# for a missing *dependency* while the package itself is perfectly reachable.
+ris_python() {
+  local candidate
+  # An explicit choice wins outright — no import probe, because overriding
+  # is how you pin an interpreter the probe would reject.
+  if [ -n "${RIS_PYTHON:-}" ] && [ -x "${RIS_PYTHON}" ]; then
+    printf '%s' "$RIS_PYTHON"
+    return 0
   fi
-  exec python3 -m ristretto.runner \
+  for candidate in \
+    "$RISTRETTO_ROOT/.venv/bin/python3" \
+    "$(command -v ristretto >/dev/null 2>&1 && head -1 "$(command -v ristretto)" | sed 's/^#!//')" \
+    "$(command -v python3 || true)"
+  do
+    [ -n "$candidate" ] && [ -x "$candidate" ] || continue
+    if "$candidate" -c "import ristretto.runner" >/dev/null 2>&1; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+if [ "$FLOW" != "classic" ]; then
+  # Fail with the cause rather than a Python traceback: a wrong root or a
+  # dependency-less interpreter means every non-classic flow dies before its
+  # first stage, and the traceback names the module, not what was wrong.
+  RIS_PY="$(ris_python)" || {
+    echo "run-loop: no python3 can import ristretto from $RISTRETTO_ROOT — flow $FLOW cannot start" >&2
+    echo "run-loop: tried the repo venv, the ristretto CLI's interpreter, and python3 on PATH" >&2
+    exit 2
+  }
+  exec "$RIS_PY" -m ristretto.runner \
     --task-id "$TASK_ID" --issue "$ISSUE_KEY" --flow "$FLOW"
 fi
 
@@ -184,7 +212,11 @@ RIS_EVENT="$HOME/.hermes/scripts/ris-event.py"
 [ -f "$RIS_EVENT" ] || RIS_EVENT="$SCRIPT_DIR/../../../scripts/ris-event.py"
 ris_event() {
   [ -f "$RIS_EVENT" ] || return 0
-  python3 "$RIS_EVENT" "$TASK_ID" "$1" \
+  # Same interpreter problem as the runner, but silent here: the emitter
+  # imports ristretto, and `|| true` would hide a dependency-less python3
+  # as an event that simply never appeared.
+  [ -n "${RIS_PY:-}" ] || RIS_PY="$(ris_python || command -v python3)"
+  "$RIS_PY" "$RIS_EVENT" "$TASK_ID" "$1" \
     --issue "$ISSUE_KEY" --project "$(basename "$PWD")" "${@:2}" >/dev/null 2>&1 || true
 }
 
