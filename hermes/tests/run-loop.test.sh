@@ -9,6 +9,10 @@ REPO_ROOT="$(cd "$ROOT/.." && pwd)"
 SCRIPT="$ROOT/skills/loop-runner/scripts/run-loop.sh"
 export HOME="$(mktemp -d)"
 export HERMES_KANBAN_BOARD=testboard
+# Run synchronously here. In production the loop detaches into its own session
+# and returns immediately, which is the point of it — but a test that asserts
+# on exit codes and captured argv has to see the run through.
+export RIS_DETACHED=1
 PID_DIR="$HOME/.hermes/kanban/testboard/pids"
 
 # Stub claude: records its argv, proves the record exists while running, exits 7
@@ -177,6 +181,17 @@ if [ -x "$REPO_PY" ]; then
   t "an explicit RIS_PYTHON override is honoured" \
     "grep -q 'RIS_PYTHON' '$SCRIPT'"
 fi
+
+# Regression: the loop must lead its own session. An agent that launches it
+# ends its turn, Hermes tears down the terminal environment, and anything
+# still in that session dies mid-stage. setsid fails with EPERM for a process
+# that already leads its group, so the fork must come first — swallowing that
+# error looks like detaching and is not.
+t "run-loop detaches before doing anything" "grep -q 'RIS_DETACHED' '$SCRIPT'"
+t "detach forks before setsid" \
+  "grep -A3 'os.fork' '$SCRIPT' | grep -q 'os.setsid'"
+t "detach does not swallow a failed setsid" \
+  "! grep -B2 -A2 'os.setsid' '$SCRIPT' | grep -q 'except OSError'"
 
 RIS_PYTHON="$FAKEBIN/python3" "$SCRIPT" t-flow PROJ-12 --flow tier1 >/dev/null 2>&1; RC=$?
 t "custom flow: succeeds"             "[ $RC -eq 0 ]"

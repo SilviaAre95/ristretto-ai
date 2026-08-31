@@ -1,7 +1,7 @@
 ---
 name: loop-runner
-description: Use when your prompt says "work kanban task <id>" — you are a detached kanban worker executing a queued dev task in an isolated git worktree. Read the task, run the dev loop via the bundled script, post the milestone, and complete the task.
-version: 1.1.0
+description: Use when your prompt says "work kanban task <id>" — you are a detached kanban worker executing a queued dev task in an isolated git worktree. Read the task, launch the dev loop via the bundled script, and stop. The loop runs detached and reports itself.
+version: 2.0.0
 author: Silvia Arellano
 license: MIT
 metadata:
@@ -20,26 +20,30 @@ You are a detached worker. Your prompt names a task id (`work kanban task <TASK_
 
 2. **PR-first check (crash recovery).** Before running anything: `gh pr list --head <branch> --json url --jq '.[0].url'` (in the worktree). The loop opens its PR as its final act, so **an open PR means the work is already done** — a previous run finished but died before reporting. If a URL comes back: skip straight to step 4's complete-and-post. Do NOT re-run the loop.
 
-3. **Run the loop.** From the worktree root:
+3. **Launch the loop and stop.** From the worktree root:
    ```bash
    bash ~/.hermes/skills/software-development/loop-runner/scripts/run-loop.sh \
      <TASK_ID> <KEY> \
      [--model <model from the body, if present>] \
      --flow <flow from the body, default classic>
    ```
-   The script owns orphan reaping and every runner's permission/sandbox mode — do NOT invoke `claude` or `codex` yourself, do NOT add or remove flags, and never bypass permissions. **While it runs, stay alive and wait** — the script may take up to two hours for a local multi-stage flow; that is normal. If your terminal tool runs it in the background or returns control to you, remain in this session until the script actually finishes: send a kanban heartbeat at most every 5 minutes and run no other status commands. **NEVER end your session, post a summary, or "hand off" while the flow is still running — a worker that exits mid-flow crashes the task.** You are done only after completing step 4 or step 5.
+   The script detaches into its own session and returns immediately. That is
+   correct and expected — **do not wait for it, do not poll it, and do not
+   treat the fast return as a failure.** The loop is now running independently
+   of this conversation and will outlive it.
 
-4. **On exit 0 (or arriving from step 2):** get the PR URL: `gh pr list --head <branch> --json url --jq '.[0].url'` (run in the worktree).
-   - **URL empty** → fail the task: `hermes kanban block <TASK_ID> "<KEY>: loop exited 0 but no open PR found"` and exit non-zero. No complete, no Slack.
-   - **URL exists** → you MUST do BOTH of the following. The Slack milestone is not optional — it is how the user learns the PR is ready:
-   - `hermes kanban complete <TASK_ID> --result "<KEY>: PR ready" --metadata '{"pr": "<url>"}'`
-   - `prs_channel="$(ristretto instance get slack_prs_channel)" || exit 1`
-   - `HERMES_HOME="$HOME/.hermes" hermes send -t "slack:$prs_channel" "<one line what changed>
-<bare PR URL>
-<KEY>"`
-   URLs go bare — never wrapped in asterisks, backticks, or markdown. The `HERMES_HOME` prefix is REQUIRED: you run inside the worker profile, whose own config may have no Slack credentials — without the prefix every send fails "not configured". Resolve the target from user-owned configuration; do not hard-code a channel or use a channel name. If the send exits non-zero, retry the identical command once; if it still fails, note it in the task result — do not debug further.
+   The script owns orphan reaping and every runner's permission/sandbox mode —
+   do NOT invoke `claude` or `codex` yourself, do NOT add or remove flags, and
+   never bypass permissions.
 
-5. **On non-zero exit:** do NOT complete the task. Post nothing. Exit with the same non-zero code — the dispatcher records the failure and handles retry or block. (The next dispatch's step-2 check recovers automatically if the loop had already opened its PR.)
+4. **Reply with one line:** `On it. <KEY> queued.` — nothing else, then end
+   your turn.
+
+   Do not complete the task. Do not block it. Do not fetch the PR URL. Do not
+   post to Slack. **The loop reports its own outcome to the board when it
+   finishes, and the doorbell announces milestones in Slack.** A worker that
+   tries to do these itself is either duplicating them or guessing, because
+   the loop it is guessing about has not finished yet.
 
 ## Guardrails
 
