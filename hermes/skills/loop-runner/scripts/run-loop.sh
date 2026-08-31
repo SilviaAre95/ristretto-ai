@@ -6,6 +6,32 @@
 # loop re-runs ONCE on the local Ollama coder model instead of failing.
 # Run from the task's worktree (the dispatcher sets cwd to the workspace).
 set -u
+
+# Lead our own session before anything else — in particular before the
+# argument parsing below, which shifts through "$@" until it is empty. Placed
+# after it, the re-exec passed no arguments at all and the second pass died on
+# ${1:?usage}.
+#
+# A loop belongs to the task, not to the conversation that dispatched it: the agent that
+# launches this exits when its turn ends, and Hermes then tears down the
+# terminal environment. Without this the loop dies with it, mid-stage, having
+# done nothing wrong. The classic path needs this exactly as much as the
+# multi-stage one — it just used to hide behind an agent that waited.
+if [ -z "${RIS_DETACHED:-}" ]; then
+  export RIS_DETACHED=1
+  # Fork before setsid: a process that already leads its group cannot create
+  # a session, and setsid fails with EPERM. Swallowing that error looks like
+  # detaching and is not — the loop stays in the agent's session and dies
+  # with it. The child is never a group leader, so its setsid always takes.
+  exec "$(command -v python3)" -c '
+import os, sys
+if os.fork() > 0:
+    os._exit(0)
+os.setsid()
+os.execv(sys.argv[1], sys.argv[1:])
+' /bin/bash "${BASH_SOURCE[0]}" "$@"
+fi
+
 TASK_ID="${1:?usage: run-loop.sh <task_id> <issue_key> [--model tier] [--flow name]}"
 ISSUE_KEY="${2:?usage: run-loop.sh <task_id> <issue_key> [--model tier] [--flow name]}"
 shift 2
@@ -77,27 +103,6 @@ SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 SESSION_FILE="$PWD/.cc-ris-session"
 RESUME_FAILURE_WINDOW="${RIS_RESUME_FAILURE_WINDOW:-30}"
 [[ "$RESUME_FAILURE_WINDOW" =~ ^[0-9]+$ ]] || RESUME_FAILURE_WINDOW=30
-
-# Lead our own session before doing anything, for every flow. A loop belongs
-# to the task, not to the conversation that dispatched it: the agent that
-# launches this exits when its turn ends, and Hermes then tears down the
-# terminal environment. Without this the loop dies with it, mid-stage, having
-# done nothing wrong. The classic path needs this exactly as much as the
-# multi-stage one — it just used to hide behind an agent that waited.
-if [ -z "${RIS_DETACHED:-}" ]; then
-  export RIS_DETACHED=1
-  # Fork before setsid: a process that already leads its group cannot create
-  # a session, and setsid fails with EPERM. Swallowing that error looks like
-  # detaching and is not — the loop stays in the agent's session and dies
-  # with it. The child is never a group leader, so its setsid always takes.
-  exec "$(command -v python3)" -c '
-import os, sys
-if os.fork() > 0:
-    os._exit(0)
-os.setsid()
-os.execv(sys.argv[1], sys.argv[1:])
-' /bin/bash "${BASH_SOURCE[0]}" "$@"
-fi
 
 # Guard 4: reap a verified orphan from a previous run (no-op otherwise).
 bash "$SCRIPT_DIR/reap.sh" "$TASK_ID"

@@ -519,6 +519,12 @@ def detach() -> None:
     detach is worth a warning, not a refused run.
     """
     try:
+        # run-loop.sh normally detaches before exec'ing us, so we are usually
+        # already a session leader and setsid would fail with EPERM. That is
+        # success, not an error, and reporting it as one sends whoever reads
+        # the log hunting a problem that does not exist.
+        if os.getsid(0) == os.getpid():
+            return
         os.setsid()
     except (OSError, AttributeError) as exc:
         print(f"flow: could not detach from the parent session: {exc}", file=sys.stderr)
