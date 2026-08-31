@@ -122,6 +122,13 @@ HERMES_HOME="$hermes_home" hermes -p ris-worker config set model.base_url http:/
 HERMES_HOME="$hermes_home" hermes -p ris-worker config set agent.max_turns 300 >/dev/null
 HERMES_HOME="$hermes_home" hermes -p ris-worker config set tool_loop_guardrails.hard_stop_enabled true >/dev/null
 HERMES_HOME="$hermes_home" hermes -p ris-worker config set session_reset.idle_minutes 180 >/dev/null
+# The terminal tool returns control when it times out, and the default 180s is
+# far shorter than a loop. That leaves the worker "waiting" for its own flow —
+# which depends on the model choosing to wait, and one did not: it sat for 43
+# minutes, then ended its turn and killed the running build with it. A blocking
+# call cannot be abandoned, so the worker blocks and the task's own max-runtime
+# stays the real bound.
+HERMES_HOME="$hermes_home" hermes -p ris-worker config set terminal.timeout 7200 >/dev/null
 # Hooks are per profile, and the worker profile is the one that calls
 # kanban_complete — declaring the guard only in the top-level config would
 # leave the process it exists to gate completely ungated.

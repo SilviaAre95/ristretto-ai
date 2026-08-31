@@ -299,6 +299,38 @@ def pr_url(artifact: Path) -> str | None:
     return match.group(0) if match else None
 
 
+def report_outcome(task_id: str, issue: str, ok: bool, detail: str, pr: str | None) -> None:
+    """Tell the board how the run ended.
+
+    The skill asks the worker agent to do this once the script exits, which
+    only holds if the worker is still there — and one backgrounded the script,
+    returned in 0.08s, and ended its turn two seconds later. The flow carried
+    on correctly and orphaned, and the board recorded a crash.
+
+    So the process that knows the outcome reports it. Best effort: a board
+    that cannot be reached must not turn a finished run into a failed one,
+    and the worker's own call remains a harmless second opinion.
+    """
+    if not SAFE_ID.fullmatch(task_id):
+        return
+    if ok:
+        command = ["hermes", "kanban", "complete", task_id, "--result", f"{issue}: {detail}"[:300]]
+        if pr:
+            command += ["--metadata", json.dumps({"pr": pr})]
+    else:
+        command = ["hermes", "kanban", "block", task_id, f"{issue}: {detail}"[:300]]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, check=False, timeout=60)
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"flow: could not report outcome to the board: {exc}", file=sys.stderr)
+        return
+    if result.returncode != 0:
+        print(
+            f"flow: board rejected the outcome: {(result.stderr or '').strip()[:200]}",
+            file=sys.stderr,
+        )
+
+
 def _emitter(task_id: str, issue: str, cwd: Path, dry_run: bool):
     """Best-effort event emitter bound to this run.
 
@@ -474,7 +506,27 @@ def run_stage(
     return code
 
 
+def detach() -> None:
+    """Outlive the agent session that started the flow.
+
+    A worker backgrounded run-loop.sh, returned in 0.08s and ended its turn;
+    Hermes then tore down the terminal environment and the flow died with it,
+    mid-build, having done nothing wrong. A loop is a job owned by the task,
+    not by the conversation that dispatched it, so the runner leads its own
+    session and the agent's lifetime stops mattering.
+
+    Harmless when already a session leader, and never fatal: failing to
+    detach is worth a warning, not a refused run.
+    """
+    try:
+        os.setsid()
+    except (OSError, AttributeError) as exc:
+        print(f"flow: could not detach from the parent session: {exc}", file=sys.stderr)
+
+
 def execute(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        detach()
     config, _ = load_config(args.config)
     flow = resolved_flow(config, args.flow)
     if flow.get("builtin") == "classic":
@@ -502,6 +554,7 @@ def execute(args: argparse.Namespace) -> int:
     )
     emit = _emitter(args.task_id, args.issue, cwd, args.dry_run)
     emit("run.started", payload={"flow": args.flow, "base": base})
+    opened: str | None = None
     for stage in flow["stages"]:
         print(f"flow {args.flow}: starting {stage['id']} ({stage['role']})", file=sys.stderr)
         emit("stage.started", stage=stage["id"], payload={"role": stage["role"]})
@@ -529,6 +582,10 @@ def execute(args: argparse.Namespace) -> int:
                 payload={"role": stage["role"], "reason": reason, "duration_s": elapsed},
             )
             emit("run.ended", payload={"outcome": "failed", "stage": stage["id"]})
+            if not args.dry_run:
+                report_outcome(
+                    args.task_id, args.issue, False, f"{stage['id']} failed: {reason}", None
+                )
             return code
         if stage["role"] == "verify":
             emit("verify.green", stage=stage["id"])
@@ -538,10 +595,19 @@ def execute(args: argparse.Namespace) -> int:
             payload={"role": stage["role"], "duration_s": elapsed},
         )
         if stage["role"] == "pr":
-            url = pr_url(artifacts / str(stage.get("output", "")))
-            if url:
-                emit("pr.opened", stage=stage["id"], payload={"url": url})
+            opened = pr_url(artifacts / str(stage.get("output", "")))
+            if opened:
+                emit("pr.opened", stage=stage["id"], payload={"url": opened})
     emit("run.ended", payload={"outcome": "completed"})
+    if not args.dry_run:
+        # A flow that ran every stage but opened no pull request has not
+        # delivered, whatever its exit code says.
+        if opened:
+            report_outcome(args.task_id, args.issue, True, "PR ready", opened)
+        else:
+            report_outcome(
+                args.task_id, args.issue, False, "flow completed but opened no pull request", None
+            )
     return 0
 
 
