@@ -78,6 +78,27 @@ SESSION_FILE="$PWD/.cc-ris-session"
 RESUME_FAILURE_WINDOW="${RIS_RESUME_FAILURE_WINDOW:-30}"
 [[ "$RESUME_FAILURE_WINDOW" =~ ^[0-9]+$ ]] || RESUME_FAILURE_WINDOW=30
 
+# Lead our own session before doing anything, for every flow. A loop belongs
+# to the task, not to the conversation that dispatched it: the agent that
+# launches this exits when its turn ends, and Hermes then tears down the
+# terminal environment. Without this the loop dies with it, mid-stage, having
+# done nothing wrong. The classic path needs this exactly as much as the
+# multi-stage one — it just used to hide behind an agent that waited.
+if [ -z "${RIS_DETACHED:-}" ]; then
+  export RIS_DETACHED=1
+  # Fork before setsid: a process that already leads its group cannot create
+  # a session, and setsid fails with EPERM. Swallowing that error looks like
+  # detaching and is not — the loop stays in the agent's session and dies
+  # with it. The child is never a group leader, so its setsid always takes.
+  exec "$(command -v python3)" -c '
+import os, sys
+if os.fork() > 0:
+    os._exit(0)
+os.setsid()
+os.execv(sys.argv[1], sys.argv[1:])
+' /bin/bash "${BASH_SOURCE[0]}" "$@"
+fi
+
 # Guard 4: reap a verified orphan from a previous run (no-op otherwise).
 bash "$SCRIPT_DIR/reap.sh" "$TASK_ID"
 
@@ -261,4 +282,20 @@ if [ "$RC" -ne 0 ] && [ "$FALLBACK" = "1" ] && \
 fi
 [ "$RC" -eq 0 ] && rm -f "$SESSION_FILE"
 [ "$RC" -eq 0 ] && finish completed "$RUNTIME" || finish failed "$RUNTIME"
+
+# Tell the board how it went. The skill used to ask the agent to do this once
+# the script exited, which only holds if the agent is still there — and the
+# whole point of detaching is that it need not be.
+PR_URL="$(gh pr list --head "$(git branch --show-current 2>/dev/null)" \
+  --json url --jq '.[0].url' 2>/dev/null)"
+if [ "$RC" -eq 0 ] && [ -n "$PR_URL" ] && [ "$PR_URL" != "null" ]; then
+  hermes kanban complete "$TASK_ID" --result "$ISSUE_KEY: PR ready" \
+    --metadata "{\"pr\": \"$PR_URL\"}" >/dev/null 2>&1 || true
+  ris_event pr.opened --payload "{\"url\":\"$PR_URL\"}"
+elif [ "$RC" -eq 0 ]; then
+  hermes kanban block "$TASK_ID" \
+    "$ISSUE_KEY: loop exited 0 but opened no pull request" >/dev/null 2>&1 || true
+else
+  hermes kanban block "$TASK_ID" "$ISSUE_KEY: loop failed (rc=$RC)" >/dev/null 2>&1 || true
+fi
 exit "$RC"
