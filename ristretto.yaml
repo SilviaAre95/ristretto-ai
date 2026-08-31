@@ -103,11 +103,15 @@ flows:
         output: finish.md
 
   tier1:
-    description: Local builds, Claude judges and rescues. Claude plans, reviews, and repairs; the local coder does the token-heavy build.
+    description: Local builds, Claude judges and rescues. Opus plans, Sonnet reviews and repairs, the local coder does the token-heavy build.
     stages:
       - id: plan
         role: plan
-        provider: claude
+        # Opus, not Sonnet: the weaker the builder, the more the plan has to
+        # carry. A dense 27B follows a plan fairly literally and will not
+        # recover from an ambiguous one, and plan is the cheapest stage to
+        # spend a stronger model on — it reads little and runs once.
+        provider: claude-opus
         mutates: false
         output: plan.md
       - id: build

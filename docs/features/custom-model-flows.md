@@ -3,7 +3,7 @@ id: custom-model-flows
 title: Custom Model Flows
 status: in-progress  # proposed | in-progress | implemented | deprecated
 created_at: 2026-07-18
-last_modified: 2026-08-24
+last_modified: 2026-08-31
 owner: project
 depends_on: [autonomous-coding]
 acceptance_criteria:
@@ -28,7 +28,9 @@ stages. Four included tiers trade cloud spend for local compute while keeping
 one shape: plan, build, review, repair, deterministic verify, PR. `tier0` is
 all Claude (Opus plans and reviews, Sonnet builds and repairs, Haiku opens the
 PR). `tier1` lets the local coder do the token-heavy build while Claude plans,
-reviews, and repairs. `tier2` is mainly local with a single Claude call spent on
+reviews, and repairs — planning on Opus rather than Sonnet, because the
+weaker the builder the more the plan has to carry, and plan is the cheapest
+stage to spend a stronger model on. `tier2` is mainly local with a single Claude call spent on
 review. `tier3` is fully local. In every tier the reviewer is a different model
 from the builder. The existing Claude `/loop-dev` behavior remains available
 as `classic`.
