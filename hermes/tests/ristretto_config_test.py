@@ -33,6 +33,7 @@ from ristretto.config import (
 )
 from ristretto.runner import (
     FlowError,
+    report_outcome,
     artifact_dir,
     pid_record,
     pr_stage_failure,
@@ -292,6 +293,45 @@ class DoctorLocalModelTests(unittest.TestCase):
         doctor(self.config, {}, catalog=catalog)
         self.assertTrue(calls, "expected at least one endpoint lookup")
         self.assertEqual(len(calls), len(set(calls)), f"duplicate lookups: {calls}")
+
+
+class OutcomeReportingTests(unittest.TestCase):
+    """The process that knows how a run ended is the one that reports it.
+
+    The skill asks the worker agent to complete the task after the script
+    exits. One backgrounded the script, returned in 0.08s, and ended its turn
+    two seconds later: the flow ran on correctly and orphaned, and the board
+    recorded a crash.
+    """
+
+    def test_success_completes_with_the_pull_request(self) -> None:
+        with mock.patch.object(subprocess, "run") as spawned:
+            spawned.return_value = subprocess.CompletedProcess([], 0, "", "")
+            report_outcome("t_a1b2c3d4", "XARI-1", True, "PR ready", "https://x/pull/1")
+        argv = spawned.call_args.args[0]
+        self.assertEqual(argv[:3], ["hermes", "kanban", "complete"])
+        self.assertIn("https://x/pull/1", " ".join(argv))
+
+    def test_failure_blocks_with_the_reason(self) -> None:
+        with mock.patch.object(subprocess, "run") as spawned:
+            spawned.return_value = subprocess.CompletedProcess([], 0, "", "")
+            report_outcome("t_a1b2c3d4", "XARI-1", False, "build failed: no output", None)
+        argv = spawned.call_args.args[0]
+        self.assertEqual(argv[:3], ["hermes", "kanban", "block"])
+        self.assertIn("build failed", " ".join(argv))
+
+    def test_an_unreachable_board_does_not_raise(self) -> None:
+        # A board that cannot be reached must not turn a finished run into a
+        # failed one.
+        with mock.patch.object(subprocess, "run", side_effect=OSError("no hermes")), \
+             contextlib.redirect_stderr(io.StringIO()) as noise:
+            report_outcome("t_a1b2c3d4", "XARI-1", True, "PR ready", None)
+        self.assertIn("could not report", noise.getvalue())
+
+    def test_an_unsafe_task_id_never_shells_out(self) -> None:
+        with mock.patch.object(subprocess, "run") as spawned:
+            report_outcome("../../etc/passwd", "XARI-1", True, "PR ready", None)
+            spawned.assert_not_called()
 
 
 class StageOutcomeTests(unittest.TestCase):
