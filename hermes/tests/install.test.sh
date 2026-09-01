@@ -131,5 +131,14 @@ PATH="$fakebin:$PATH" RISTRETTO_HERMES_HOME="$fake_home" \
   bash "$repo/scripts/install-hermes.sh" --service >/dev/null
 assert "explicit service option installs the service" test -f "$fake_home/service-installed"
 
+# Regression: linking a plugin is not enabling it. A discovered-but-disabled
+# plugin registers no commands, so !ris-approve silently does nothing — which
+# is exactly how it shipped the first time.
+assert "installer links the approvals plugin" \
+  test -e "$fake_home/plugins/ris-approvals/plugin.yaml"
+assert "installer enables the approvals plugin" \
+  grep -q "plugins enable ris-approvals" "$repo/scripts/install-hermes.sh"
+
 printf '%d passed, %d failed\n' "$pass" "$fail"
 test "$fail" -eq 0
+
