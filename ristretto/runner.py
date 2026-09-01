@@ -11,6 +11,7 @@ import shlex
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any, Mapping
@@ -506,14 +507,62 @@ def run_stage(
     return code
 
 
+# How often the keeper below tells the board the flow is alive. Hermes
+# reclaims a claim whose heartbeat is over an hour old even when the pid is
+# alive, so this has to be comfortably inside that hour with room for a run
+# of failed sends.
+HEARTBEAT_SECONDS = 5 * 60
+
+
+class Heartbeat:
+    """Keep the board's claim alive for as long as the flow is running.
+
+    Heartbeating at stage boundaries is not enough, which the first live run
+    showed: a local build stage ran 35 minutes without reaching one. A single
+    stage outlasting the hour gets the task reclaimed under a live pid and a
+    second worker started on the same worktree.
+
+    So the signal is time-based rather than progress-based. It says only "the
+    flow is still running", which is exactly what it is asked, and the stage
+    name rides along so the board shows where it is.
+    """
+
+    def __init__(self, task_id: str, interval: int = HEARTBEAT_SECONDS) -> None:
+        self.task_id = task_id
+        self.interval = interval
+        self.stage = "starting"
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if self._thread is not None:
+            return
+        # A daemon thread so a crashed flow cannot be held open by its own
+        # liveness signal.
+        self._thread = threading.Thread(target=self._run, name="ris-heartbeat", daemon=True)
+        self._thread.start()
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            heartbeat(self.task_id, self.stage)
+            self._stop.wait(self.interval)
+
+    def enter(self, stage: str) -> None:
+        """Name the stage now running, and say so immediately."""
+        self.stage = stage
+        heartbeat(self.task_id, stage)
+
+    def stop(self) -> None:
+        self._stop.set()
+
+
 def heartbeat(task_id: str, stage: str) -> None:
-    """Tell the board the flow is still making progress.
+    """Tell the board the flow is still alive.
 
     The worker blocks on run-loop.sh for the whole flow, so it makes no API
     calls and Hermes's activity-derived heartbeat goes stale. After an hour a
-    stale heartbeat is reclaimed *even though the pid is alive* — the
-    dispatcher would then start a second worker on the same worktree. Stage
-    boundaries are minutes apart, comfortably inside that hour.
+    stale heartbeat is reclaimed *even though the pid is alive*, and the
+    dispatcher would then start a second worker on the same worktree.
 
     This is the mechanism Hermes documents for a worker with a long-lived
     child, and it is a liveness signal only: a board that cannot be reached
@@ -570,12 +619,36 @@ def execute(args: argparse.Namespace) -> int:
     )
     emit = _emitter(args.task_id, args.issue, cwd, args.dry_run)
     emit("run.started", payload={"flow": args.flow, "base": base})
+    pulse = Heartbeat(args.task_id)
+    if not args.dry_run:
+        pulse.start()
+    try:
+        return _run_stages(args, config, flow, artifacts, cwd, base, record, emit, pulse, expected_verify_digest)
+    finally:
+        # Stop claiming to be alive the moment we are not, including when a
+        # stage raises: a heartbeat outliving its flow is a lie the board
+        # acts on.
+        pulse.stop()
+
+
+def _run_stages(
+    args: argparse.Namespace,
+    config: Mapping[str, Any],
+    flow: Mapping[str, Any],
+    artifacts: Path,
+    cwd: Path,
+    base: str,
+    record: Path,
+    emit: Any,
+    pulse: "Heartbeat",
+    expected_verify_digest: str | None,
+) -> int:
     opened: str | None = None
     for stage in flow["stages"]:
         print(f"flow {args.flow}: starting {stage['id']} ({stage['role']})", file=sys.stderr)
         emit("stage.started", stage=stage["id"], payload={"role": stage["role"]})
         if not args.dry_run:
-            heartbeat(args.task_id, stage["id"])
+            pulse.enter(stage["id"])
         started = time.monotonic()
         code = run_stage(
             config,

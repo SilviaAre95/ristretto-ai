@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 import os
 import sys
 from pathlib import Path
@@ -89,6 +90,23 @@ def parser() -> argparse.ArgumentParser:
     events_command.add_argument("task_id", nargs="?", help="limit to one task")
     events_command.add_argument("--limit", type=int, default=50)
     events_command.add_argument("--json", action="store_true", help="print raw JSON")
+
+    approvals_command = commands.add_parser(
+        "approvals", help="answer approval requests raised by a running flow"
+    )
+    approvals_commands = approvals_command.add_subparsers(
+        dest="approvals_command", required=True
+    )
+    approvals_commands.add_parser("pending", help="list unanswered requests")
+    approve = approvals_commands.add_parser("approve", help="allow a pending request")
+    # Optional so a single pending request can be answered without naming it:
+    # the whole point is answering from a phone.
+    approve.add_argument("request_id", nargs="?", help="omit when exactly one is pending")
+    approve.add_argument("--actor", default="cli", help="who is deciding")
+    deny = approvals_commands.add_parser("deny", help="refuse a pending request")
+    deny.add_argument("request_id", nargs="?", help="omit when exactly one is pending")
+    deny.add_argument("--actor", default="cli", help="who is deciding")
+    deny.add_argument("--reason", default="", help="why, relayed to the flow")
 
     instance = commands.add_parser("instance", help="read resolved instance settings")
     instance_commands = instance.add_subparsers(dest="instance_command", required=True)
@@ -288,6 +306,43 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"{sent} milestone(s) {'would be sent' if args.dry_run else 'sent'}")
                 return 0
             return bell.watch(base, channel, args.interval)
+        if args.command == "approvals":
+            from . import approvals
+
+            waiting = approvals.pending()
+            if args.approvals_command == "pending":
+                if not waiting:
+                    print("nothing waiting on you")
+                    return 0
+                for item in waiting:
+                    left = max(0, item["expires_at"] - int(time.time())) // 60
+                    print(f"{item['id']}  {item['task_id']}  {item['what']}  ({left}m left)")
+                return 0
+
+            # Answering without an id is only safe when there is exactly one
+            # question. Two pending requests and a bare "yes" is a coin flip
+            # over which one you just allowed, so refuse and name them.
+            target = args.request_id
+            if not target:
+                if len(waiting) == 1:
+                    target = waiting[0]["id"]
+                elif not waiting:
+                    print("nothing waiting on you")
+                    return 1
+                else:
+                    print(f"{len(waiting)} requests are pending — name one:")
+                    for item in waiting:
+                        print(f"  {item['id']}  {item['what']}")
+                    return 1
+
+            verdict = approvals.ALLOW if args.approvals_command == "approve" else approvals.DENY
+            reason = getattr(args, "reason", "")
+            won, message = approvals.decide(
+                target, verdict, actor=args.actor, reason=reason
+            )
+            print(f"{target}: {message}" if won else f"{target}: not applied — {message}")
+            return 0 if won else 1
+
         if args.command == "events":
             from . import events as event_log
 

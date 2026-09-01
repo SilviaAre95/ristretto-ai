@@ -9,10 +9,13 @@ if [ -x "$repo/.venv/bin/python" ]; then
   python_bin="$repo/.venv/bin/python"
 fi
 
-"$python_bin" -m unittest hermes/tests/ristretto_config_test.py
+# Discovered, not listed. A hand-maintained list means a new test file runs
+# green locally and never runs here at all, which is worse than no test:
+# ristretto_approvals_test.py sat uncollected until its absence was noticed
+# by the suite total not moving.
 # Dashboard tests skip their route cases when the [dash] extra is absent.
-"$python_bin" -m unittest hermes/tests/ristretto_dash_test.py
-"$python_bin" -m unittest hermes/tests/ristretto_doorbell_test.py
+PYTHONPATH="$repo${PYTHONPATH:+:$PYTHONPATH}" \
+  "$python_bin" -m unittest discover -s hermes/tests -p '*_test.py' -t hermes/tests
 "$python_bin" -m unittest discover -s tests
 bash -n scripts/*.sh hermes/tests/*.sh hermes/skills/loop-runner/scripts/*.sh
 bash hermes/tests/install.test.sh
