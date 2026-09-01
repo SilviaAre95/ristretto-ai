@@ -296,10 +296,11 @@ def main(argv: list[str] | None = None) -> int:
 
             base = args.base_url
             if not base:
-                from .dash.serve import resolve_host
+                from .dash.serve import link_host
 
-                host, _ = resolve_host()
-                base = f"http://{host}:8787"
+                # The link is opened on a phone, not by this process, so it
+                # wants the resolvable name rather than the bind address.
+                base = f"http://{link_host()}:8787"
             channel = bell.resolve_channel(config)
             if args.once or args.dry_run:
                 sent = bell.ring(base, channel, dry_run=args.dry_run)

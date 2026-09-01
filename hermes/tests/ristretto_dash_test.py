@@ -15,7 +15,7 @@ from pathlib import Path
 from unittest import mock
 
 from ristretto import approvals, events
-from ristretto.dash import chat, control, data
+from ristretto.dash import chat, control, data, serve
 from ristretto.dash.serve import BindRefused, resolve_host
 
 try:
@@ -433,3 +433,48 @@ class ApprovalRouteTests(unittest.TestCase):
             page = self.client.get("/task/t_a1b2c3d4").text
         self.assertIn("git push --force", page)
         self.assertIn("/approval/r1/approve", page)
+
+
+class LinkHostTests(unittest.TestCase):
+    """What a phone can resolve is not what this process binds to.
+
+    The doorbell wrote a bare 100.x address into every Slack link. That is
+    opaque on a phone and dies the moment the machine is re-added to the
+    tailnet and gets a new address — taking every link already sent with it.
+    """
+
+    def test_the_magicdns_name_wins(self) -> None:
+        with mock.patch.object(serve, "tailnet_name", return_value="mac.tailnet.ts.net"), \
+             mock.patch.object(serve, "tailnet_address", return_value="100.1.2.3"):
+            self.assertEqual(serve.link_host(), "mac.tailnet.ts.net")
+
+    def test_it_falls_back_to_the_address(self) -> None:
+        with mock.patch.object(serve, "tailnet_name", return_value=None), \
+             mock.patch.object(serve, "tailnet_address", return_value="100.1.2.3"):
+            self.assertEqual(serve.link_host(), "100.1.2.3")
+
+    def test_it_falls_back_to_loopback(self) -> None:
+        with mock.patch.object(serve, "tailnet_name", return_value=None), \
+             mock.patch.object(serve, "tailnet_address", return_value=None):
+            self.assertEqual(serve.link_host(), "127.0.0.1")
+
+    def test_a_bare_hostname_is_not_used(self) -> None:
+        # Resolvable here, meaningless on the phone that receives the link.
+        with mock.patch.object(serve.shutil, "which", return_value="/usr/bin/tailscale"), \
+             mock.patch.object(serve.subprocess, "run") as run:
+            run.return_value = serve.subprocess.CompletedProcess(
+                [], 0, '{"Self": {"DNSName": "macstudio"}}', ""
+            )
+            self.assertIsNone(serve.tailnet_name())
+
+    def test_the_trailing_dot_is_stripped(self) -> None:
+        with mock.patch.object(serve.shutil, "which", return_value="/usr/bin/tailscale"), \
+             mock.patch.object(serve.subprocess, "run") as run:
+            run.return_value = serve.subprocess.CompletedProcess(
+                [], 0, '{"Self": {"DNSName": "mac.tailnet.ts.net."}}', ""
+            )
+            self.assertEqual(serve.tailnet_name(), "mac.tailnet.ts.net")
+
+    def test_tailscale_being_down_is_not_fatal(self) -> None:
+        with mock.patch.object(serve.shutil, "which", return_value=None):
+            self.assertIsNone(serve.tailnet_name())
