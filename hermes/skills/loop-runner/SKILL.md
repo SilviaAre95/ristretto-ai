@@ -1,7 +1,7 @@
 ---
 name: loop-runner
-description: Use when your prompt says "work kanban task <id>" — you are a detached kanban worker executing a queued dev task in an isolated git worktree. Read the task, launch the dev loop via the bundled script, and stop. The loop runs detached and reports itself.
-version: 2.0.0
+description: Use when your prompt says "work kanban task <id>" — you are a kanban worker executing a queued dev task in an isolated git worktree. Read the task, run the dev loop via the bundled script, and wait for it. The loop reports its own outcome to the board.
+version: 2.1.0
 author: Silvia Arellano
 license: MIT
 metadata:
@@ -12,7 +12,7 @@ metadata:
 
 # Loop Runner (kanban worker)
 
-You are a detached worker. Your prompt names a task id (`work kanban task <TASK_ID>`). Your working directory is the task's isolated git worktree. Work silently — no Slack narration; milestones only.
+You are a kanban worker. Your prompt names a task id (`work kanban task <TASK_ID>`). Your working directory is the task's isolated git worktree. Work silently — no Slack narration; milestones only.
 
 ## Steps
 
@@ -20,30 +20,32 @@ You are a detached worker. Your prompt names a task id (`work kanban task <TASK_
 
 2. **PR-first check (crash recovery).** Before running anything: `gh pr list --head <branch> --json url --jq '.[0].url'` (in the worktree). The loop opens its PR as its final act, so **an open PR means the work is already done** — a previous run finished but died before reporting. If a URL comes back: skip straight to step 4's complete-and-post. Do NOT re-run the loop.
 
-3. **Launch the loop and stop.** From the worktree root:
+3. **Run the loop and wait for it.** From the worktree root:
    ```bash
    bash ~/.hermes/skills/software-development/loop-runner/scripts/run-loop.sh \
      <TASK_ID> <KEY> \
      [--model <model from the body, if present>] \
      --flow <flow from the body, default classic>
    ```
-   The script detaches into its own session and returns immediately. That is
-   correct and expected — **do not wait for it, do not poll it, and do not
-   treat the fast return as a failure.** The loop is now running independently
-   of this conversation and will outlive it.
+   **Run it in the foreground and let it finish.** A multi-stage flow takes
+   tens of minutes and the script stays silent for long stretches; that is
+   what a running loop looks like. Do NOT background it with `&`, do NOT add
+   a timeout, do NOT poll it, and do NOT decide it has hung. Your process
+   staying alive is what tells Hermes the task is still being worked — a
+   worker that returns early gets the task recorded as crashed even though
+   the loop was fine.
 
    The script owns orphan reaping and every runner's permission/sandbox mode —
    do NOT invoke `claude` or `codex` yourself, do NOT add or remove flags, and
    never bypass permissions.
 
-4. **Reply with one line:** `On it. <KEY> queued.` — nothing else, then end
-   your turn.
+4. **When the script exits, reply with one line:** `<KEY> loop finished.` —
+   nothing else, then end your turn.
 
    Do not complete the task. Do not block it. Do not fetch the PR URL. Do not
-   post to Slack. **The loop reports its own outcome to the board when it
-   finishes, and the doorbell announces milestones in Slack.** A worker that
-   tries to do these itself is either duplicating them or guessing, because
-   the loop it is guessing about has not finished yet.
+   post to Slack. **The loop has already reported its own outcome to the
+   board, and the doorbell announces milestones in Slack.** A worker that
+   reports as well is either duplicating that or contradicting it.
 
 ## Guardrails
 

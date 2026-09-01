@@ -9,10 +9,8 @@ REPO_ROOT="$(cd "$ROOT/.." && pwd)"
 SCRIPT="$ROOT/skills/loop-runner/scripts/run-loop.sh"
 export HOME="$(mktemp -d)"
 export HERMES_KANBAN_BOARD=testboard
-# Run synchronously here. In production the loop detaches into its own session
-# and returns immediately, which is the point of it — but a test that asserts
-# on exit codes and captured argv has to see the run through.
-export RIS_DETACHED=1
+# The loop runs in the foreground in production too, so these tests exercise
+# it exactly as Hermes does: launch it, wait, read the exit status.
 PID_DIR="$HOME/.hermes/kanban/testboard/pids"
 
 # Stub claude: records its argv, proves the record exists while running, exits 7
@@ -182,16 +180,21 @@ if [ -x "$REPO_PY" ]; then
     "grep -q 'RIS_PYTHON' '$SCRIPT'"
 fi
 
-# Regression: the loop must lead its own session. An agent that launches it
-# ends its turn, Hermes tears down the terminal environment, and anything
-# still in that session dies mid-stage. setsid fails with EPERM for a process
-# that already leads its group, so the fork must come first — swallowing that
-# error looks like detaching and is not.
-t "run-loop detaches before doing anything" "grep -q 'RIS_DETACHED' '$SCRIPT'"
-t "detach forks before setsid" \
-  "grep -A3 'os.fork' '$SCRIPT' | grep -q 'os.setsid'"
-t "detach does not swallow a failed setsid" \
-  "! grep -B2 -A2 'os.setsid' '$SCRIPT' | grep -q 'except OSError'"
+# Regression: the loop must NOT detach. Hermes supervises a task by the
+# liveness of the worker pid it spawned and records a worker that exits while
+# its task is still running as a protocol violation, tripping the breaker on
+# the first occurrence — so a detached loop got every run marked crashed
+# minutes in, no matter how well it was going. The worker holds the script.
+t "run-loop does not fork itself into the background" \
+  "! grep -q 'os.fork' '$SCRIPT'"
+t "run-loop does not start a new session" \
+  "! grep -q 'os.setsid\|[^a-z]setsid ' '$SCRIPT'"
+t "no re-exec guard is left behind" "! grep -q 'RIS_DETACHED' '$SCRIPT'"
+
+# The runner's exit status must survive the tee. Reporting a failed flow as a
+# success is the one outcome this script may never produce.
+t "runner status is taken from the pipeline head" \
+  "grep -q 'PIPESTATUS\[0\]' '$SCRIPT'"
 
 RIS_PYTHON="$FAKEBIN/python3" "$SCRIPT" t-flow PROJ-12 --flow tier1 >/dev/null 2>&1; RC=$?
 t "custom flow: succeeds"             "[ $RC -eq 0 ]"

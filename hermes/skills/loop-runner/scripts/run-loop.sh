@@ -7,30 +7,24 @@
 # Run from the task's worktree (the dispatcher sets cwd to the workspace).
 set -u
 
-# Lead our own session before anything else — in particular before the
-# argument parsing below, which shifts through "$@" until it is empty. Placed
-# after it, the re-exec passed no arguments at all and the second pass died on
-# ${1:?usage}.
+# This script runs in the FOREGROUND and must keep doing so. It used to
+# detach into its own session, which was wrong for a reason that is not
+# obvious: Hermes supervises a task by the liveness of the worker pid it
+# spawned, and a worker that exits while its task is still `running` is
+# recorded as a protocol violation that trips the circuit breaker on the
+# FIRST occurrence. Detaching therefore got every run marked crashed about
+# two minutes in, however well the flow was going. Heartbeats do not help —
+# `heartbeat_worker` is explicitly "orthogonal to the PID check".
 #
-# A loop belongs to the task, not to the conversation that dispatched it: the agent that
-# launches this exits when its turn ends, and Hermes then tears down the
-# terminal environment. Without this the loop dies with it, mid-stage, having
-# done nothing wrong. The classic path needs this exactly as much as the
-# multi-stage one — it just used to hide behind an agent that waited.
-if [ -z "${RIS_DETACHED:-}" ]; then
-  export RIS_DETACHED=1
-  # Fork before setsid: a process that already leads its group cannot create
-  # a session, and setsid fails with EPERM. Swallowing that error looks like
-  # detaching and is not — the loop stays in the agent's session and dies
-  # with it. The child is never a group leader, so its setsid always takes.
-  exec "$(command -v python3)" -c '
-import os, sys
-if os.fork() > 0:
-    os._exit(0)
-os.setsid()
-os.execv(sys.argv[1], sys.argv[1:])
-' /bin/bash "${BASH_SOURCE[0]}" "$@"
-fi
+# So the worker holds this script for the whole flow, and the pid Hermes
+# watches is a pid that is genuinely doing the work. The runner reports the
+# outcome itself, which moves the task out of `running` BEFORE the worker
+# exits, so the clean-exit sweep never sees it.
+#
+# The corollary, for whoever is tempted to background this again: the loop
+# now dies if the gateway restarts mid-flow. That is a real cost and the
+# accepted one. Taking the loop out of Hermes's dispatcher entirely is the
+# fix, not detaching underneath a supervisor that is counting pids.
 
 TASK_ID="${1:?usage: run-loop.sh <task_id> <issue_key> [--model tier] [--flow name]}"
 ISSUE_KEY="${2:?usage: run-loop.sh <task_id> <issue_key> [--model tier] [--flow name]}"
@@ -153,8 +147,17 @@ if [ "$FLOW" != "classic" ]; then
     echo "run-loop: tried the repo venv, the ristretto CLI's interpreter, and python3 on PATH" >&2
     exit 2
   }
-  exec "$RIS_PY" -m ristretto.runner \
-    --task-id "$TASK_ID" --issue "$ISSUE_KEY" --flow "$FLOW"
+  # Keep a copy of the runner's own output. The per-stage logs record what
+  # each model said; this records what the harness did around them, which is
+  # where the last several failures actually lived.
+  LOOP_LOG="$PWD/.ristretto/runs/$TASK_ID/loop.log"
+  mkdir -p "$(dirname "$LOOP_LOG")" 2>/dev/null || true
+  "$RIS_PY" -m ristretto.runner \
+    --task-id "$TASK_ID" --issue "$ISSUE_KEY" --flow "$FLOW" 2>&1 \
+    | tee -a "$LOOP_LOG"
+  # tee's exit status is not the runner's, and reporting a failed flow as a
+  # success is the one thing this script must never do.
+  exit "${PIPESTATUS[0]}"
 fi
 
 mkdir -p "$PID_DIR"
@@ -288,9 +291,10 @@ fi
 [ "$RC" -eq 0 ] && rm -f "$SESSION_FILE"
 [ "$RC" -eq 0 ] && finish completed "$RUNTIME" || finish failed "$RUNTIME"
 
-# Tell the board how it went. The skill used to ask the agent to do this once
-# the script exited, which only holds if the agent is still there — and the
-# whole point of detaching is that it need not be.
+# Tell the board how it went, here rather than from the worker. Reporting
+# from the process that knows the outcome is what moves the task out of
+# `running` before the worker exits, which is what stops Hermes recording a
+# finished run as a protocol violation.
 PR_URL="$(gh pr list --head "$(git branch --show-current 2>/dev/null)" \
   --json url --jq '.[0].url' 2>/dev/null)"
 if [ "$RC" -eq 0 ] && [ -n "$PR_URL" ] && [ "$PR_URL" != "null" ]; then
