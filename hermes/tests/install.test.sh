@@ -141,4 +141,3 @@ assert "installer enables the approvals plugin" \
 
 printf '%d passed, %d failed\n' "$pass" "$fail"
 test "$fail" -eq 0
-
