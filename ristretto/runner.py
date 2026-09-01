@@ -506,33 +506,17 @@ def run_stage(
     return code
 
 
-def detach() -> None:
-    """Outlive the agent session that started the flow.
-
-    A worker backgrounded run-loop.sh, returned in 0.08s and ended its turn;
-    Hermes then tore down the terminal environment and the flow died with it,
-    mid-build, having done nothing wrong. A loop is a job owned by the task,
-    not by the conversation that dispatched it, so the runner leads its own
-    session and the agent's lifetime stops mattering.
-
-    Harmless when already a session leader, and never fatal: failing to
-    detach is worth a warning, not a refused run.
-    """
-    try:
-        # run-loop.sh normally detaches before exec'ing us, so we are usually
-        # already a session leader and setsid would fail with EPERM. That is
-        # success, not an error, and reporting it as one sends whoever reads
-        # the log hunting a problem that does not exist.
-        if os.getsid(0) == os.getpid():
-            return
-        os.setsid()
-    except (OSError, AttributeError) as exc:
-        print(f"flow: could not detach from the parent session: {exc}", file=sys.stderr)
+# The runner deliberately does NOT leave its parent's session. It used to,
+# so that a flow would outlive the agent that dispatched it — but Hermes
+# supervises a task by the liveness of the worker pid it spawned, and a
+# worker that exits while its task is still running is recorded as a protocol
+# violation on the first occurrence. Leading our own session let the worker
+# return early, so healthy runs were marked crashed minutes after they began.
+# The runner is now an ordinary child of run-loop.sh, which is an ordinary
+# child of the worker, and the pid Hermes watches is doing the work.
 
 
 def execute(args: argparse.Namespace) -> int:
-    if not args.dry_run:
-        detach()
     config, _ = load_config(args.config)
     flow = resolved_flow(config, args.flow)
     if flow.get("builtin") == "classic":
