@@ -33,6 +33,7 @@ from ristretto.config import (
 )
 from ristretto.runner import (
     FlowError,
+    heartbeat,
     report_outcome,
     artifact_dir,
     pid_record,
@@ -327,6 +328,33 @@ class OutcomeReportingTests(unittest.TestCase):
              contextlib.redirect_stderr(io.StringIO()) as noise:
             report_outcome("t_a1b2c3d4", "XARI-1", True, "PR ready", None)
         self.assertIn("could not report", noise.getvalue())
+
+
+class HeartbeatTest(unittest.TestCase):
+    """The worker blocks on the script for the whole flow, so it makes no API
+    calls and Hermes's activity-derived heartbeat goes stale. An hour of
+    staleness is reclaimed even with a live pid, which would put a second
+    worker on the same worktree.
+    """
+
+    def test_heartbeat_names_the_task_and_stage(self) -> None:
+        with mock.patch.object(subprocess, "run") as spawned:
+            spawned.return_value = subprocess.CompletedProcess([], 0, "", "")
+            heartbeat("t_a1b2c3d4", "build")
+        argv = spawned.call_args.args[0]
+        self.assertEqual(argv[:4], ["hermes", "kanban", "heartbeat", "t_a1b2c3d4"])
+        self.assertIn("build", " ".join(argv))
+
+    def test_a_hostile_task_id_is_never_spawned(self) -> None:
+        with mock.patch.object(subprocess, "run") as spawned:
+            heartbeat("t_a1; rm -rf /", "build")
+        self.assertFalse(spawned.called)
+
+    def test_an_unreachable_board_does_not_raise(self) -> None:
+        with mock.patch.object(subprocess, "run", side_effect=OSError("no hermes")), \
+             contextlib.redirect_stderr(io.StringIO()) as noise:
+            heartbeat("t_a1b2c3d4", "build")
+        self.assertIn("heartbeat failed", noise.getvalue())
 
     def test_an_unsafe_task_id_never_shells_out(self) -> None:
         with mock.patch.object(subprocess, "run") as spawned:

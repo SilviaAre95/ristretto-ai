@@ -506,6 +506,32 @@ def run_stage(
     return code
 
 
+def heartbeat(task_id: str, stage: str) -> None:
+    """Tell the board the flow is still making progress.
+
+    The worker blocks on run-loop.sh for the whole flow, so it makes no API
+    calls and Hermes's activity-derived heartbeat goes stale. After an hour a
+    stale heartbeat is reclaimed *even though the pid is alive* — the
+    dispatcher would then start a second worker on the same worktree. Stage
+    boundaries are minutes apart, comfortably inside that hour.
+
+    This is the mechanism Hermes documents for a worker with a long-lived
+    child, and it is a liveness signal only: a board that cannot be reached
+    must not turn a healthy run into a failed one.
+    """
+    if not SAFE_ID.fullmatch(task_id):
+        return
+    try:
+        subprocess.run(
+            ["hermes", "kanban", "heartbeat", task_id, "--note", f"stage: {stage}"[:80]],
+            capture_output=True,
+            check=False,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"flow: heartbeat failed: {exc}", file=sys.stderr)
+
+
 # The runner deliberately does NOT leave its parent's session. It used to,
 # so that a flow would outlive the agent that dispatched it — but Hermes
 # supervises a task by the liveness of the worker pid it spawned, and a
@@ -548,6 +574,8 @@ def execute(args: argparse.Namespace) -> int:
     for stage in flow["stages"]:
         print(f"flow {args.flow}: starting {stage['id']} ({stage['role']})", file=sys.stderr)
         emit("stage.started", stage=stage["id"], payload={"role": stage["role"]})
+        if not args.dry_run:
+            heartbeat(args.task_id, stage["id"])
         started = time.monotonic()
         code = run_stage(
             config,
