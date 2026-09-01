@@ -1,8 +1,10 @@
 """Fleet view over the kanban board and Ristretto's event log.
 
-Reading is open to anyone who can reach the tailnet address. The two
-mutating routes are not: there is no login here, so they are same-origin
-only and every action they take is recorded in the event log.
+Reading is open to anyone who can reach the tailnet address. The mutating
+routes are not: there is no login here, so they are same-origin only and
+every action they take is recorded in the event log. Approving a tool call a
+flow is blocked on is the most consequential of them, and answers race
+against Slack, so the store decides the winner rather than this layer.
 
 Starting work is deliberately absent. Stopping a run costs a restart;
 launching one spends tokens and writes code, and that deserves its own
@@ -27,7 +29,7 @@ from fastapi.responses import (
 )
 from fastapi.templating import Jinja2Templates
 
-from .. import events
+from .. import approvals, events
 from . import chat, control, data
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -52,6 +54,9 @@ def _snapshot(show_all: bool = False) -> dict[str, Any]:
         "live": len([r for r in everything if r.status in data.LIVE_STATES]),
         "stalled": len([r for r in everything if r.health == "stalled"]),
         "blocked": len([r for r in everything if r.health == "blocked"]),
+        # A flow stopped waiting on a person is the one thing that must not
+        # need drilling into a task page to notice.
+        "waiting": approvals.pending(),
     }
 
 
@@ -66,6 +71,11 @@ def task(request: Request, task_id: str, ok: str | None = None, failed: str | No
     task_row = detail.get("task") or {}
     recorded = events.read(task_id, limit=500)
     run = data.build_run(task_row, recorded) if task_row else None
+    now = int(time.time())
+    waiting = [
+        {**item, "minutes_left": max(0, item["expires_at"] - now) // 60}
+        for item in approvals.pending(task_id=task_id)
+    ]
     return TEMPLATES.TemplateResponse(
         request,
         "task.html",
@@ -75,6 +85,7 @@ def task(request: Request, task_id: str, ok: str | None = None, failed: str | No
             "runs": detail.get("runs") or [],
             "comments": detail.get("comments") or [],
             "timeline": list(reversed(recorded)),
+            "waiting": waiting,
             "ok": ok,
             "failed": failed,
         },
@@ -102,6 +113,34 @@ def require_same_origin(request: Request) -> None:
         if origin and host and origin.split("://")[-1] == host:
             return
     raise HTTPException(status_code=403, detail="cross-site requests are refused")
+
+
+@app.post("/approval/{request_id}/approve")
+def approve(request: Request, request_id: str) -> RedirectResponse:
+    return _answer(request, request_id, approvals.ALLOW)
+
+
+@app.post("/approval/{request_id}/deny")
+def deny(request: Request, request_id: str) -> RedirectResponse:
+    return _answer(request, request_id, approvals.DENY)
+
+
+def _answer(request: Request, request_id: str, verdict: str) -> RedirectResponse:
+    """Answer a pending approval, then go back to the task that asked.
+
+    Same-origin like every other mutating route. Losing the race to Slack is
+    reported plainly rather than as a failure: the question was answered,
+    just not here.
+    """
+    require_same_origin(request)
+    item = approvals.get(request_id)
+    won, message = approvals.decide(request_id, verdict, actor="dashboard")
+    task_id = (item or {}).get("task_id", "")
+    status = "ok" if won else "failed"
+    detail = quote((f"{verdict}ed" if won else message)[:300])
+    if not task_id:
+        return RedirectResponse(f"/?{status}={detail}", status_code=303)
+    return RedirectResponse(f"/task/{quote(task_id)}?{status}={detail}", status_code=303)
 
 
 @app.post("/task/{task_id}/stop")

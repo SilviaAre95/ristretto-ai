@@ -23,6 +23,18 @@
 
 {% for project, runs in grouped.items() %}
   <h2 class="project">{{ project }}</h2>
+  {% if waiting %}
+    <div class="waiting-banner">
+      <p class="asks">{{ waiting | length }} waiting on you</p>
+      {% for item in waiting %}
+        <a class="waiting-row" href="/task/{{ item.task_id }}">
+          <code>{{ item.what }}</code>
+          <span class="meta">{{ item.issue_key or item.task_id }}</span>
+        </a>
+      {% endfor %}
+    </div>
+  {% endif %}
+
   {% for run in runs %}
     <a class="card h-{{ run.health }}" href="/task/{{ run.task_id }}" id="card-{{ run.task_id }}">
       <span class="stripe"></span>

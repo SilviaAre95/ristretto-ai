@@ -14,6 +14,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import sys
 import time
 
 from ristretto import approvals, broker, events, runner
@@ -236,6 +237,50 @@ class HeartbeatKeeperTest(unittest.TestCase):
             settled = len(beats)
             time.sleep(0.05)
         self.assertEqual(len(beats), settled)
+
+
+
+class BrokerWiringTest(unittest.TestCase):
+    """How the broker is put on Claude Code's command line."""
+
+    def command(self, mutates: bool) -> list[str]:
+        cmd, _, _ = runner.runner_command(
+            {"runner": "claude-code", "model": "m"},
+            {"mutates": mutates},
+            "THE PROMPT",
+            Path("/tmp"),
+            Path("/tmp/out.md"),
+        )
+        return cmd
+
+    def test_mcp_config_is_never_the_last_flag_before_the_prompt(self) -> None:
+        # --mcp-config takes a LIST, so anything following it is swallowed as
+        # another config path. Ending on it made Claude Code treat the prompt
+        # as a file and die with "MCP config file not found: <prompt>". Found
+        # live, not by unit test, because the runner happened to append
+        # --model afterwards and hid it.
+        cmd = self.command(True)
+        after = cmd[cmd.index("--mcp-config") + 2]
+        self.assertTrue(after.startswith("--"), f"a value follows --mcp-config: {after}")
+
+    def test_the_prompt_survives_as_the_last_argument(self) -> None:
+        self.assertEqual(self.command(True)[-1], "THE PROMPT")
+
+    def test_the_tool_id_matches_the_server_and_tool_names(self) -> None:
+        cmd = self.command(True)
+        self.assertEqual(
+            cmd[cmd.index("--permission-prompt-tool") + 1],
+            f"mcp__{runner.BROKER_SERVER}__{broker.TOOL_NAME}",
+        )
+
+    def test_a_read_only_stage_gets_no_gate(self) -> None:
+        # A reviewer that needs consent is doing more than reviewing.
+        self.assertNotIn("--permission-prompt-tool", self.command(False))
+
+    def test_the_broker_runs_on_an_interpreter_that_can_import_it(self) -> None:
+        config = runner.broker_config()["mcpServers"][runner.BROKER_SERVER]
+        self.assertEqual(config["command"], sys.executable)
+        self.assertEqual(config["args"], ["-m", "ristretto.broker"])
 
 if __name__ == "__main__":
     unittest.main()

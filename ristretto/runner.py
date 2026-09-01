@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 from typing import Any, Mapping
 
-from . import events
+from . import broker, events
 from .config import ConfigError, load_config, resolved_flow, resolved_provider
 
 
@@ -156,6 +156,29 @@ def role_prompt(
     )
 
 
+# The MCP server name the permission tool is addressed by. Claude Code builds
+# the tool id as mcp__<server>__<tool>, so this and broker.TOOL_NAME together
+# are the --permission-prompt-tool value.
+BROKER_SERVER = "ris-approve"
+
+
+def broker_config() -> dict[str, Any]:
+    """The stdio MCP server Claude Code should ask for permission.
+
+    sys.executable rather than "python3": the runner already had to find an
+    interpreter that can import ristretto, and whatever is first on a
+    worker's PATH usually cannot.
+    """
+    return {
+        "mcpServers": {
+            BROKER_SERVER: {
+                "command": sys.executable,
+                "args": ["-m", "ristretto.broker"],
+            }
+        }
+    }
+
+
 def runner_command(
     provider: Mapping[str, Any],
     stage: Mapping[str, Any],
@@ -170,6 +193,23 @@ def runner_command(
         command = ["claude", "-p"]
         mode = "acceptEdits" if stage["mutates"] else "plan"
         command += ["--permission-mode", mode, "--no-session-persistence"]
+        if stage["mutates"]:
+            # Without this a headless stage cannot prompt, so anything the
+            # permission mode does not already cover is refused on the spot
+            # and the stage works around it silently. Routing the prompt to
+            # a person makes the refusal visible and answerable instead.
+            # Read-only stages are left alone: a reviewer that needs consent
+            # to do something is a reviewer doing more than reviewing.
+            # Order matters: --mcp-config takes a LIST, so whatever follows it
+            # is swallowed as another config path. Ending on the single-valued
+            # --permission-prompt-tool terminates it. Reversed, the prompt is
+            # eaten and Claude dies with "MCP config file not found: <prompt>".
+            command += [
+                "--mcp-config",
+                json.dumps(broker_config()),
+                "--permission-prompt-tool",
+                f"mcp__{BROKER_SERVER}__{broker.TOOL_NAME}",
+            ]
         if model:
             command += ["--model", str(model)]
         if provider.get("base_url"):
@@ -617,6 +657,10 @@ def execute(args: argparse.Namespace) -> int:
         + "\n",
         encoding="utf-8",
     )
+    # Claude Code passes no cwd to a permission tool, so the broker learns
+    # which task is asking from here.
+    os.environ["RISTRETTO_TASK_ID"] = args.task_id
+    os.environ["RISTRETTO_ISSUE_KEY"] = args.issue
     emit = _emitter(args.task_id, args.issue, cwd, args.dry_run)
     emit("run.started", payload={"flow": args.flow, "base": base})
     pulse = Heartbeat(args.task_id)
@@ -647,6 +691,7 @@ def _run_stages(
     for stage in flow["stages"]:
         print(f"flow {args.flow}: starting {stage['id']} ({stage['role']})", file=sys.stderr)
         emit("stage.started", stage=stage["id"], payload={"role": stage["role"]})
+        os.environ["RISTRETTO_STAGE"] = str(stage["id"])
         if not args.dry_run:
             pulse.enter(stage["id"])
         started = time.monotonic()

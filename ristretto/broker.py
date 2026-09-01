@@ -118,8 +118,18 @@ def main() -> None:  # pragma: no cover - exercised as a live MCP server
         return [types.TextContent(type="text", text=json.dumps(result))]
 
     async def serve() -> None:
+        from mcp.server.lowlevel import NotificationOptions
+
+        # Advertise the tools capability explicitly. Left implicit, Claude Code
+        # logs "server does not advertise tools capability - returning empty
+        # list" and only finds the tool because it was named on the command
+        # line — which is luck, not a contract.
+        options = server.create_initialization_options(
+            notification_options=NotificationOptions(tools_changed=False),
+            experimental_capabilities={},
+        )
         async with stdio_server() as (read, write):
-            await server.run(read, write, server.create_initialization_options())
+            await server.run(read, write, options)
 
     anyio.run(serve)
 

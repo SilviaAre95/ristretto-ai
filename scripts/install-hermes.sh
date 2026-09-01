@@ -83,6 +83,14 @@ for skill in durable-dev issue-closeout loop-runner; do
     "$hermes_home/skills/software-development/$skill"
 done
 
+# Linked, not copied, so the answering path cannot drift from the store it
+# writes to. A plugin that disagrees with the CLI about what "approve" means
+# is worse than no plugin.
+mkdir -p "$hermes_home/plugins"
+link_skill \
+  "$repo/hermes/plugins/ris-approvals" \
+  "$hermes_home/plugins/ris-approvals"
+
 install -m 0755 \
   "$repo/hermes/scripts/morning-brief-precheck.py" \
   "$hermes_home/scripts/morning-brief-precheck.py"
