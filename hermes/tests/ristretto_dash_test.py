@@ -535,8 +535,25 @@ class LaunchCoreTests(unittest.TestCase):
     """Guards on the one action that spends money and writes to a branch."""
 
     def setUp(self) -> None:
-        from ristretto.config import load_config
-        self.config, _ = load_config()
+        # A fixture, not the machine's config. Repositories live in the user
+        # layer (~/.config/ristretto/config.yaml), which CI does not have, so
+        # tests that lean on a real configured project pass here and fail
+        # there — which is exactly what happened.
+        self.repo = Path(tempfile.mkdtemp())
+        (self.repo / ".git").mkdir()
+        self.config = {
+            "base_branch": "main",
+            "repositories": {"Kaffecard": str(self.repo)},
+            "flows": {
+                "classic": {"description": "existing loop"},
+                "tier1": {"description": "local builds, Claude judges"},
+            },
+        }
+        patcher = mock.patch.object(
+            launch, "load_config", return_value=(self.config, Path("fixture.yaml"))
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def test_a_typo_is_refused_before_anything_is_spent(self) -> None:
         repo, error = launch.validate(self.config, "Kaffecard", "kaffecard-42", "tier1")
@@ -645,12 +662,15 @@ class LaunchRouteTests(unittest.TestCase):
             self.skipTest("dashboard extras not installed")
         self.client = TestClient(app)
 
-    def test_the_form_offers_configured_projects_and_flows(self) -> None:
+    def test_the_form_offers_the_configured_flows(self) -> None:
+        # Flows ship in the repo layer, so they are present everywhere.
+        # Projects come from the user layer and are deliberately not asserted:
+        # a test that needs one passes locally and fails in CI.
         with mock.patch.object(launch, "active_runs", return_value=[]):
             page = self.client.get("/launch").text
-        self.assertIn("Kaffecard", page)
         self.assertIn("tier1", page)
-        self.assertIn("/launch", page)
+        self.assertIn('action="/launch"', page)
+        self.assertIn("Start a run", page)
 
     def test_a_cross_site_post_cannot_start_work(self) -> None:
         # The costliest route on a dashboard with no login.
