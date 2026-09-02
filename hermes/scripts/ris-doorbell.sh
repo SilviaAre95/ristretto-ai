@@ -5,6 +5,9 @@
 # crashed daemon delivers never, and nobody notices a silent notifier. The
 # cursor makes catching up free, so lateness is the only cost.
 set -u
-export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/bin:/bin"
+# tailscale lives in /usr/local/bin. Without it on PATH the dashboard address
+# cannot be resolved and every link in every notification silently became
+# http://127.0.0.1:8787 — which on a phone points at the phone.
+export PATH="$HOME/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin"
 command -v ristretto >/dev/null 2>&1 || exit 0
 ristretto doorbell --once 2>&1 | tail -1

@@ -296,11 +296,24 @@ def main(argv: list[str] | None = None) -> int:
 
             base = args.base_url
             if not base:
-                from .dash.serve import link_host
+                from .dash.serve import LOOPBACK, link_host
 
                 # The link is opened on a phone, not by this process, so it
                 # wants the resolvable name rather than the bind address.
-                base = f"http://{link_host()}:8787"
+                host = link_host()
+                base = f"http://{host}:8787"
+                if host == LOOPBACK:
+                    # Every notification carried http://127.0.0.1:8787 for a
+                    # day because cron's PATH had no tailscale and the
+                    # fallback was silent. A link to the reader's own machine
+                    # is not a degraded link, it is a broken one, so say so
+                    # where the cron log will show it.
+                    print(
+                        "doorbell: WARNING cannot resolve this machine's tailnet address "
+                        "(is tailscale on PATH?) — links will point at the reader's own "
+                        "localhost and will not work. Pass --base-url to override.",
+                        file=sys.stderr,
+                    )
             channel = bell.resolve_channel(config)
             if args.once or args.dry_run:
                 sent = bell.ring(base, channel, dry_run=args.dry_run)

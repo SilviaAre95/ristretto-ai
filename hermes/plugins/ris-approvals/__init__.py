@@ -17,12 +17,19 @@ inside threads, and threads are where these conversations happen.
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 
 # Long enough for a cold Python start, short enough that a wedged CLI does not
 # hold a chat turn open.
 TIMEOUT_SECONDS = 30
+
+# What a request id can look like. Anything else in the first position is
+# prose, not an id: chat clients append their own text ("Sent using ..."),
+# and people write "!ris-approve please". Treating that as an id produced
+# "not applied — no such approval", which reads like the approval vanished.
+REQUEST_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@+-]*$")
 
 
 def _ristretto() -> str | None:
@@ -52,6 +59,19 @@ def pending(_raw_args: str = "") -> str:
     return output or "nothing waiting on you"
 
 
+def _pending_ids() -> set[str]:
+    """The ids currently answerable, as the store reports them."""
+    code, output = _run(["pending"])
+    if code != 0:
+        return set()
+    found = set()
+    for line in output.splitlines():
+        head = line.split(maxsplit=1)
+        if head and REQUEST_ID.fullmatch(head[0]):
+            found.add(head[0])
+    return found
+
+
 def _decide(verdict: str, raw_args: str) -> str:
     """Answer, naming a request only when the operator did.
 
@@ -62,11 +82,19 @@ def _decide(verdict: str, raw_args: str) -> str:
     """
     args = [verdict]
     parts = (raw_args or "").split()
-    if parts:
+    # Only a genuinely pending id counts as an id. Shape alone is not enough:
+    # "not" in "!ris-deny not right now" is perfectly id-shaped, and chat
+    # clients append their own trailing text. The store knows which ids exist,
+    # so ask it rather than guessing from the characters.
+    named = bool(parts) and parts[0] in _pending_ids()
+    if named:
         args.append(parts[0])
     args += ["--actor", "slack"]
-    if verdict == "deny" and len(parts) > 1:
-        args += ["--reason", " ".join(parts[1:])[:200]]
+    if verdict == "deny":
+        # Everything that is not the id is the reason.
+        reason = " ".join(parts[1:] if named else parts).strip()
+        if reason:
+            args += ["--reason", reason[:200]]
     _, output = _run(args)
     return output or "no response from the approval store"
 

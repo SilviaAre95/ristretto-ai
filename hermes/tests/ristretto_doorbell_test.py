@@ -128,3 +128,32 @@ class CursorTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ApprovalNotificationTest(unittest.TestCase):
+    """The notification has to be answerable, not just informative."""
+
+    def event(self, **payload):
+        return {
+            "kind": "awaiting.approval",
+            "task_id": "t_a1b2c3d4",
+            "issue_key": "XARI-36",
+            "stage": "build",
+            "payload": {"what": "Bash: npm run db:migrate", **payload},
+        }
+
+    def test_it_says_how_to_answer_and_says_DM(self) -> None:
+        # A reply in a channel is not delivered unless it mentions the bot,
+        # and a mention puts itself first so the command is never parsed.
+        text = doorbell.compose(self.event(id="a1b2"), "http://ris:8787")
+        self.assertIn("DM me", text)
+        self.assertIn("!ris-approve a1b2", text)
+        self.assertIn("!ris-deny a1b2", text)
+
+    def test_it_still_links_to_the_dashboard(self) -> None:
+        text = doorbell.compose(self.event(id="a1b2"), "http://ris:8787")
+        self.assertIn("http://ris:8787/task/t_a1b2c3d4", text)
+
+    def test_a_missing_id_does_not_produce_a_dangling_command(self) -> None:
+        text = doorbell.compose(self.event(), "http://ris:8787")
+        self.assertNotIn("!ris-approve  ", text)

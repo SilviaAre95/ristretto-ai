@@ -503,3 +503,25 @@ class BuildStampTests(unittest.TestCase):
         with mock.patch.object(data.subprocess, "run") as run:
             run.return_value = subprocess.CompletedProcess([], 0, "abc1234\n M file.py\n", "")
             self.assertTrue(data.build_stamp()["dirty"])
+
+
+class LinkAndCopyTests(unittest.TestCase):
+    """Details that only ever show up in front of a person."""
+
+    def test_loopback_is_named_not_repeated(self) -> None:
+        # Callers that build links compare against this rather than a literal,
+        # so the check cannot drift from the fallback it guards.
+        self.assertEqual(serve.LOOPBACK, "127.0.0.1")
+        with mock.patch.object(serve, "tailnet_name", return_value=None), \
+             mock.patch.object(serve, "tailnet_address", return_value=None):
+            self.assertEqual(serve.link_host(), serve.LOOPBACK)
+
+    def test_a_denial_is_spelled_denied(self) -> None:
+        # It read "denyed" in the confirmation banner. Read the file rather
+        # than import it: the module needs the [dash] extra, which CI does
+        # not install, and a copy check has no business requiring fastapi.
+        source = (
+            Path(__file__).resolve().parents[2] / "ristretto" / "dash" / "app.py"
+        ).read_text()
+        self.assertNotIn("denyed", source)
+        self.assertIn('"denied"', source)
