@@ -517,8 +517,11 @@ class LinkAndCopyTests(unittest.TestCase):
             self.assertEqual(serve.link_host(), serve.LOOPBACK)
 
     def test_a_denial_is_spelled_denied(self) -> None:
-        # It read "denyed" in the confirmation banner.
-        import ristretto.dash.app as app_module
-        source = Path(app_module.__file__).read_text()
+        # It read "denyed" in the confirmation banner. Read the file rather
+        # than import it: the module needs the [dash] extra, which CI does
+        # not install, and a copy check has no business requiring fastapi.
+        source = (
+            Path(__file__).resolve().parents[2] / "ristretto" / "dash" / "app.py"
+        ).read_text()
         self.assertNotIn("denyed", source)
         self.assertIn('"denied"', source)
