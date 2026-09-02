@@ -130,15 +130,80 @@ def describe(tool_name: str, tool_input: Mapping[str, Any] | None) -> str:
 
     A notification that says only "permission needed" forces you to open a
     laptop to find out what you are approving, which is the whole problem
-    this is meant to remove.
+    this is meant to remove. The first live request read "Waiting on you:
+    AskUserQuestion" and nothing else, which is the same failure in a nicer
+    font: the tool's name is not what you are being asked.
     """
     data = dict(tool_input or {})
-    for key in ("command", "file_path", "path", "url", "pattern"):
+    question = _first_question(data)
+    if question:
+        return _clip(question, 160)
+    for key in ("command", "file_path", "path", "url", "pattern", "prompt", "description"):
         value = data.get(key)
         if value:
-            flat = " ".join(str(value).split())
-            return f"{tool_name}: {flat[:119]}…" if len(flat) > 120 else f"{tool_name}: {flat}"
+            return f"{tool_name}: {_clip(' '.join(str(value).split()), 120)}"
     return tool_name
+
+
+def _clip(text: str, limit: int) -> str:
+    flat = " ".join(str(text).split())
+    return flat if len(flat) <= limit else flat[: limit - 1].rstrip() + "…"
+
+
+def _first_question(data: Mapping[str, Any]) -> str:
+    """The question text, for tools that ask rather than act."""
+    questions = data.get("questions")
+    if isinstance(questions, (list, tuple)) and questions:
+        first = questions[0]
+        if isinstance(first, Mapping):
+            return str(first.get("question") or "")
+    return ""
+
+
+def detail(tool_name: str, tool_input: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Everything a person needs on screen to answer without a terminal.
+
+    Deliberately structured rather than a blob: a question with options is
+    not the same shape as a command, and rendering both as raw JSON is how
+    you end up approving something you did not read.
+    """
+    data = dict(tool_input or {})
+    questions = data.get("questions")
+    if isinstance(questions, (list, tuple)) and questions:
+        asked = []
+        for item in questions:
+            if not isinstance(item, Mapping):
+                continue
+            asked.append(
+                {
+                    "question": str(item.get("question") or ""),
+                    "options": [
+                        {
+                            "label": str(option.get("label") or ""),
+                            "description": _clip(str(option.get("description") or ""), 400),
+                        }
+                        for option in (item.get("options") or [])
+                        if isinstance(option, Mapping)
+                    ],
+                }
+            )
+        return {"kind": "question", "tool": tool_name, "questions": asked}
+    for key in ("command", "file_path", "path", "url", "pattern"):
+        if data.get(key):
+            return {"kind": "action", "tool": tool_name, "target": str(data[key])}
+    # Unknown shape: show it rather than hiding it behind a tool name.
+    try:
+        rendered = json.dumps(data, indent=2, default=str)
+    except (TypeError, ValueError):
+        rendered = str(data)
+    return {"kind": "raw", "tool": tool_name, "payload": _clip_lines(rendered, 40)}
+
+
+def _clip_lines(text: str, limit: int) -> str:
+    lines = text.splitlines()
+    if len(lines) <= limit:
+        return text
+    return "\n".join(lines[:limit] + [f"… {len(lines) - limit} more lines"])
 
 
 def decide(
@@ -254,4 +319,5 @@ def _row(row: sqlite3.Row) -> dict[str, Any]:
     except (TypeError, ValueError):
         item["tool_input"] = {}
     item["what"] = describe(item.get("tool_name", ""), item["tool_input"])
+    item["detail"] = detail(item.get("tool_name", ""), item["tool_input"])
     return item

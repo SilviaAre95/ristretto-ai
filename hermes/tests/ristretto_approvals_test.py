@@ -284,3 +284,57 @@ class BrokerWiringTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RequestDetailTest(unittest.TestCase):
+    """What the card shows. The first live request rendered as "Waiting on
+    you: AskUserQuestion" and nothing else — the tool's name is not what you
+    are being asked, and approving a black box is not approving.
+    """
+
+    QUESTION = {
+        "questions": [
+            {
+                "question": "How should the rate limiter be implemented?",
+                "options": [
+                    {"label": "@fastify/rate-limit 9.1.0", "description": "Maintained plugin."},
+                    {"label": "hand-rolled", "description": "No new dependency."},
+                ],
+            }
+        ]
+    }
+
+    def test_a_question_is_summarised_by_its_question(self) -> None:
+        self.assertEqual(
+            approvals.describe("AskUserQuestion", self.QUESTION),
+            "How should the rate limiter be implemented?",
+        )
+
+    def test_a_question_keeps_its_options(self) -> None:
+        detail = approvals.detail("AskUserQuestion", self.QUESTION)
+        self.assertEqual(detail["kind"], "question")
+        labels = [o["label"] for o in detail["questions"][0]["options"]]
+        self.assertEqual(labels, ["@fastify/rate-limit 9.1.0", "hand-rolled"])
+
+    def test_an_action_still_names_its_target(self) -> None:
+        detail = approvals.detail("Bash", {"command": "git push --force"})
+        self.assertEqual(detail["kind"], "action")
+        self.assertEqual(detail["target"], "git push --force")
+
+    def test_an_unknown_shape_is_shown_not_hidden(self) -> None:
+        # Better a readable blob than a tool name that says nothing.
+        detail = approvals.detail("Mystery", {"alpha": 1, "beta": "two"})
+        self.assertEqual(detail["kind"], "raw")
+        self.assertIn("alpha", detail["payload"])
+
+    def test_a_huge_payload_is_bounded(self) -> None:
+        detail = approvals.detail("Mystery", {"rows": list(range(500))})
+        self.assertLessEqual(len(detail["payload"].splitlines()), 41)
+
+    def test_the_stored_row_carries_the_detail(self) -> None:
+        directory = Path(tempfile.mkdtemp())
+        path = directory / "approvals.db"
+        with mock.patch.object(events, "store_path", return_value=directory / "events.db"):
+            approvals.request("q1", "t_a1b2c3d4", "AskUserQuestion", self.QUESTION, path=path)
+        row = approvals.get("q1", path=path)
+        self.assertEqual(row["detail"]["kind"], "question")
