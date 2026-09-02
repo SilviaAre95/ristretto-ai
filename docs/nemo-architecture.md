@@ -75,10 +75,18 @@ answer. That is the entire assistant. Everything else in this repository —
 the runner, the flows, the fleet view, approvals — is carefully built; the
 part the product is named after is a proxy.
 
-Nemo needs its own loop: conversation state, a memory it controls, and an
-explicit tool boundary. Proxying Hermes' agent means memory, tool policy and
-continuity are defined by another project — and the day this was written,
-that project dropped inbound Slack messages for hours without a log line.
+**Decided: Nemo owns its loop.** Conversation state, a memory it controls, an
+explicit and small tool boundary. Four reasons that compound — memory is the
+defining feature and cannot be someone else's to shape; continuity across
+surfaces requires owning session state; Nemo needs a specific tool set rather
+than an inherited one; and not requiring Hermes is what makes this repository
+installable by a stranger. That the same layer dropped inbound Slack messages
+for hours on the day this was written is a real argument but the weakest of
+the four, and should not carry more weight than it deserves.
+
+Hermes is not being replaced. It keeps Slack transport, the board and the
+dispatcher, all of which work and none of which is where the value is. The
+agent moves out; the rest shrinks over time or does not, as it earns.
 
 ### Memory is the vault
 
@@ -124,10 +132,21 @@ what leaves the machine, that is a bug.
 Nemo to remember anything, and a database would trade an inspectable,
 portable memory for an opaque one.
 
-**A project management tool, optional and pluggable, over MCP.** Nemo needs to
-know what is on your plate; it does not need that to be Linear. Linear is
-this instance's choice, connected like any other MCP server. Nemo should work
-with Jira, with GitHub Issues, or with nothing but the vault.
+**Linear, deliberately, with a shallow seam.** Nemo needs to know what is on
+your plate, and for now that is Linear over MCP. Not abstracted: an interface
+designed without a second implementation is invented rather than discovered,
+and would encode a guess about what Jira and GitHub Issues have in common.
+"Requires Linear" is an honest documented constraint.
+
+The seam is kept shallow instead. Nemo reaches the work source through a
+handful of operations — what is on my plate, get this issue, move it — rather
+than scattering Linear-shaped assumptions through the code. When a second
+source genuinely exists, the interface is derived from two real cases.
+
+What that forbids today: widening the coupling. No new `linear_*`
+configuration keys. The issue-key shape is already assumed in the launch
+surface, the voice vocabulary and branch naming; each further place is cheap
+now and tedious later.
 
 **A model.** Ollama for local, or an API key for hosted. The tiers already
 express this choice for coding flows; the assistant loop needs the same
@@ -136,11 +155,8 @@ switch.
 ### What that costs us today
 
 Two things in this repository contradict the above and need fixing before
-anyone else can use it.
-
-**Linear is hardcoded.** `linear_team` is a first-class configuration key, a
-CLI flag, and a reference in `voice.py`. It should be one instance of a
-configured MCP work source, not a field in the schema.
+anyone else can use it. (Linear staying hardcoded is deliberate, not a
+contradiction — see the requirement above.)
 
 **Hermes is a prerequisite.** `make install-hermes` is the main install path,
 so a stranger must install a third-party agent runtime before Nemo runs at
@@ -148,12 +164,14 @@ all. That is a heavy ask for a personal assistant, and it is the layer that
 failed silently three times on the day this was written. Local-first and
 easy-to-install both argue the same way: the assistant should not need it.
 
-**A stranger's vault has no `_agent/` rules.** This vault has a bespoke
-folder map, frontmatter schema and write instructions, and Nemo reads them.
-A fresh Obsidian vault has none of that. Nemo must either bring its own
-convention and scaffold it on first run, or adapt to what it finds — and
-"assume the layout I was developed against" is not an option. This is
-undecided and needs deciding before phase 1 ships.
+**A stranger's vault has no `_agent/` rules.** Decided: Nemo brings its own
+convention and scaffolds it on first run — *when the vault does not already
+have one*. Where a vault carries agent rules already, Nemo obeys them.
+
+That order matters. This vault has a folder map, a frontmatter schema and
+write instructions; an assistant that overwrote them with its own scheme would
+be doing exactly what those rules exist to prevent. Scaffold when absent,
+respect when present, and never silently restructure someone's second brain.
 
 ### Setup, as it must become
 
@@ -185,11 +203,6 @@ want Claude even where the coding flows stay local.
 dispatcher and Slack delivery are all Hermes. It is not worth replacing now,
 but nothing new should depend on it, and the assistant should be built
 outside it.
-
-**Generalising the work source is not cosmetic.** Removing `linear_team`
-touches configuration, the CLI, the voice vocabulary and anything that assumes
-an issue-key shape. Done badly it becomes a plugin system nobody asked for;
-done well it is one configured MCP server and a small interface.
 
 **Naming churn is not free.** The repository, package, service labels, config
 keys and persona all say Ristretto. Renaming touches everything and collides
