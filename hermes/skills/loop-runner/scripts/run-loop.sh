@@ -26,6 +26,38 @@ set -u
 # accepted one. Taking the loop out of Hermes's dispatcher entirely is the
 # fix, not detaching underneath a supervisor that is counting pids.
 
+# The loop needs claude, codex and the node toolchain, and it does not get to
+# choose who launches it. A run started from the dashboard inherits launchd's
+# PATH; one started from cron inherits cron's; one started from a terminal
+# inherits a login shell's. Only the last has any of these tools.
+#
+# claude in particular is a node global installed through fnm, and fnm gives
+# each shell a per-session bin directory that no daemon will ever have. The
+# alias directory is the stable one. Resolving here rather than trusting the
+# ambient PATH is the difference between "works when I run it" and "works".
+#
+# The first dashboard launch died on exactly this, with
+# "[Errno 2] No such file or directory: 'claude'" one second in.
+#
+# Appended, never prepended: this repairs a PATH that is missing tools, and
+# must not outrank one a caller chose deliberately. Prepending shadowed the
+# test suite's stub claude with the real binary, which is the same mistake in
+# miniature — silently overriding an environment someone set on purpose.
+for _dir in \
+  "${FNM_DIR:-$HOME/.local/share/fnm}/aliases/default/bin" \
+  "$HOME/.local/bin" \
+  /opt/homebrew/bin \
+  /usr/local/bin
+do
+  [ -d "$_dir" ] || continue
+  case ":$PATH:" in
+    *":$_dir:"*) ;;
+    *) PATH="$PATH:$_dir" ;;
+  esac
+done
+export PATH
+unset _dir
+
 TASK_ID="${1:?usage: run-loop.sh <task_id> <issue_key> [--model tier] [--flow name]}"
 ISSUE_KEY="${2:?usage: run-loop.sh <task_id> <issue_key> [--model tier] [--flow name]}"
 shift 2
