@@ -38,6 +38,46 @@ class Heard(NamedTuple):
     seconds: float = 0.0
 
 
+# Words this system uses that a general speech model has no reason to know.
+# Whisper takes a decoding prompt and biases towards what it contains, which
+# is the cheap fix for proper nouns: the first thing Nemo ever heard was
+# "Hello, Neymar, are you there?".
+#
+# Deliberately generic. Project names live in the user's configuration, not
+# in this file, and are added at runtime — a public repository has no reason
+# to carry a list of someone's private projects.
+VOCABULARY = (
+    "Nemo", "Ris", "Ristretto", "Hermes", "Linear", "Slack",
+    "tier0", "tier1", "tier2", "tier3", "kanban", "worktree",
+    "pull request", "approval", "the fleet", "the dashboard",
+)
+
+
+def prompt(environ: Mapping[str, str] | None = None) -> str:
+    """The decoding hint: names this machine actually says out loud."""
+    words = list(VOCABULARY)
+    try:
+        from .config import load_config
+
+        config, _ = load_config()
+        words += sorted(config.get("repositories") or {})
+        words += sorted(config.get("flows") or {})
+        # The issue prefix is said constantly and heard as anything — "XARI
+        # forty" came back as "sorry, 40". It lives in the user's config, so
+        # it is picked up here rather than written down anywhere public.
+        from .config import ConfigError, instance_value
+
+        try:
+            team = instance_value(config, "linear_team")
+        except ConfigError:
+            team = ""
+        if team:
+            words.append(str(team))
+    except Exception:  # noqa: BLE001 - a hint is an optimisation, never a gate
+        pass
+    return "Words that may appear: " + ", ".join(words) + "."
+
+
 def model_name(environ: Mapping[str, str] | None = None) -> str:
     env = os.environ if environ is None else environ
     return env.get("RISTRETTO_WHISPER_MODEL", DEFAULT_MODEL)
@@ -61,7 +101,11 @@ def transcribe(audio: bytes, suffix: str = ".wav", environ: Mapping[str, str] | 
         # fleet view has no use for.
         import mlx_whisper
 
-        result = mlx_whisper.transcribe(str(path), path_or_hf_repo=model_name(environ))
+        result = mlx_whisper.transcribe(
+            str(path),
+            path_or_hf_repo=model_name(environ),
+            initial_prompt=prompt(environ),
+        )
         text = str(result.get("text") or "").strip()
         elapsed = round(time.monotonic() - started, 2)
         if not text:

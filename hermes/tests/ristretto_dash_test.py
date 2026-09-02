@@ -881,3 +881,30 @@ class NemoStateTests(unittest.TestCase):
             response = self.client.get("/nemo/state")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["waiting"], 0)
+
+
+class VocabularyTests(unittest.TestCase):
+    """The decoding hint. Nemo's own name came back as "Neymar"."""
+
+    def test_it_knows_its_own_name(self) -> None:
+        from ristretto import voice
+        self.assertIn("Nemo", voice.prompt())
+
+    def test_it_knows_the_flows_it_will_be_asked_for(self) -> None:
+        from ristretto import voice
+        self.assertIn("tier1", voice.prompt())
+
+    def test_no_private_names_are_written_down_here(self) -> None:
+        # Projects and the issue prefix are read from the user's config at
+        # runtime. A public repository has no business carrying a list of
+        # someone's private projects.
+        from ristretto import voice
+        source = (Path(__file__).resolve().parents[2] / "ristretto" / "voice.py").read_text()
+        self.assertNotIn("XARI", source)
+        for name in ("Kaffecard", "Crema", "Votion", "Krome"):
+            self.assertNotIn(name, source)
+
+    def test_an_unreadable_config_still_produces_a_hint(self) -> None:
+        from ristretto import voice
+        with mock.patch("ristretto.config.load_config", side_effect=RuntimeError("gone")):
+            self.assertIn("Nemo", voice.prompt())
