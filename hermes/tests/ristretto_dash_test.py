@@ -908,3 +908,33 @@ class VocabularyTests(unittest.TestCase):
         from ristretto import voice
         with mock.patch("ristretto.config.load_config", side_effect=RuntimeError("gone")):
             self.assertIn("Nemo", voice.prompt())
+
+
+class ReloadTests(unittest.TestCase):
+    """How the dashboard deploys.
+
+    Four times in one day it served code older than the checkout, and every
+    time the remedy was "restart it by hand" — which is not a remedy, it is a
+    thing to forget.
+    """
+
+    def test_reload_watches_the_package_and_nothing_else(self) -> None:
+        # Editing docs or tests must not bounce a server someone is reading.
+        with mock.patch.object(serve, "resolve_host", return_value=("127.0.0.1", "test")), \
+             mock.patch("uvicorn.run") as run:
+            serve.run(port=9999, reload=True)
+        watched = run.call_args.kwargs["reload_dirs"]
+        self.assertEqual(len(watched), 1)
+        self.assertTrue(watched[0].endswith("ristretto"))
+
+    def test_without_reload_nothing_is_watched(self) -> None:
+        with mock.patch.object(serve, "resolve_host", return_value=("127.0.0.1", "test")), \
+             mock.patch("uvicorn.run") as run:
+            serve.run(port=9999, reload=False)
+        self.assertIsNone(run.call_args.kwargs["reload_dirs"])
+
+    def test_the_service_deploys_itself(self) -> None:
+        # The installer must actually turn it on; the flag existing is not
+        # the same as the service using it.
+        script = (Path(__file__).resolve().parents[2] / "scripts" / "install-dash-service.sh").read_text()
+        self.assertIn("<string>--reload</string>", script)
