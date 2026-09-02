@@ -29,7 +29,7 @@ from fastapi.responses import (
 )
 from fastapi.templating import Jinja2Templates
 
-from .. import approvals, events
+from .. import approvals, events, voice
 from . import chat, control, data, launch as launcher
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -226,6 +226,39 @@ async def ask_ris(request: Request) -> JSONResponse:
     body = await request.json()
     reply = chat.ask(str(body.get("message", "")))
     return JSONResponse({"ok": reply.ok, "text": reply.text}, status_code=200 if reply.ok else 400)
+
+
+@app.get("/nemo/state")
+def nemo_state() -> JSONResponse:
+    """What the desktop face needs to know, and nothing else.
+
+    Deliberately tiny: it is polled on a timer forever, and a face that costs
+    a board query every twenty seconds is a face you turn off.
+    """
+    try:
+        waiting = len(approvals.pending())
+    except Exception:  # noqa: BLE001 - a glance must never raise
+        waiting = 0
+    return JSONResponse({"waiting": waiting})
+
+
+@app.post("/voice")
+async def hear(request: Request) -> JSONResponse:
+    """Words from a recording Nemo made while you held the key.
+
+    Same-origin like the other mutating routes, which for the desktop client
+    means it sends an Origin matching the host — as a page would. That is not
+    a weakened check: the check exists to stop a browser being driven from
+    another site, and a native client could always set any header it liked.
+    What actually limits this route is that reaching it requires the tailnet.
+    """
+    require_same_origin(request)
+    body = await request.body()
+    heard = voice.transcribe(body)
+    return JSONResponse(
+        {"ok": heard.ok, "text": heard.text, "detail": heard.detail, "seconds": heard.seconds},
+        status_code=200 if heard.ok else 400,
+    )
 
 
 @app.get("/healthz")

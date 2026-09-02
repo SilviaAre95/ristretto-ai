@@ -1,6 +1,6 @@
 # Nemo — feasibility check
 
-**Status:** draft · **Created:** 2026-09-02 · **Owner's note, reviewed**
+**Status:** v1 built · **Created:** 2026-09-02 · **Owner's note, reviewed**
 
 Nemo is the working name for the embodied version of Ristretto: an
 always-present character on the Mac Studio you can talk to out loud and hand
@@ -151,3 +151,47 @@ priority.
 - Whether unprompted milestones should ever animate or only appear.
 - Screen awareness: deferred, and should stay deferred until v1 has been
   lived with.
+
+## v1, as built (2026-09-02)
+
+`nemo/Nemo.swift`, built by `scripts/build-nemo.sh` into `Nemo.app`.
+
+An `NSPanel` at `.floating` level with `canJoinAllSpaces` and
+`fullScreenAuxiliary`, so it is present over every application and every
+Space — including full-screen ones, which is when you are actually working.
+`nonactivatingPanel` so clicking it never pulls focus out of what you were
+doing; `LSUIElement` so there is no Dock icon and no app to switch to.
+
+**Hold the mouse on Nemo to talk.** The microphone opens on mouse-down and
+closes on mouse-up. There is no wake word and no voice-activity detector, so
+there is no window in which a room, a call or a video can be recorded without
+a deliberate act.
+
+The recording goes to the dashboard's `/voice`, transcribed on this machine
+by mlx-whisper (`whisper-base-mlx`, ~0.1s warm). The text is shown first, then
+sent to `/chat`, and the reply appears under it. Seeing what it heard before
+what it thinks means a bad transcription is obvious immediately rather than
+explaining a strange answer afterwards.
+
+A badge on the face carries the number of decisions waiting on a person,
+polled from `/nemo/state` every 20 seconds.
+
+Nemo has no tools and no board access. It posts to two endpoints and renders
+what comes back; anything that changes the world still goes through the
+approval gate.
+
+### Bundled, not a bare binary
+
+macOS refuses the microphone to an executable without a bundle identifier —
+TCC has nothing to attribute the request to and no sentence to show. Hence
+`Info.plist`, `NSMicrophoneUsageDescription`, and an ad-hoc signature.
+
+### Not done
+
+- The dashboard address is read from `~/.ristretto/dash-url`, written by the
+  installer. It is a fact about the machine and does not belong in the repo.
+- Voice from a phone needs HTTPS on the tailnet (`CertDomains` is currently
+  empty); browsers refuse microphone access on a non-secure origin. Text chat
+  already works there.
+- The avatar is a circle with a letter in it. It is a placeholder for a face.
+- No TTS. You talk, Nemo writes.
