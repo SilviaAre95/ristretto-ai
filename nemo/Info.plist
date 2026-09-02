@@ -17,5 +17,29 @@
   <!-- Agent, not application: no Dock icon, no menu bar, never in the
        app switcher. Nemo is furniture. -->
   <key>LSUIElement</key><true/>
+  <!-- App Transport Security blocks plain HTTP from an app, so the first
+       thing Nemo ever said was "the App Transport Security policy requires
+       the use of a secure connection" — the request never left the machine.
+       The dashboard is HTTP on a tailnet address.
+
+       Narrow rather than blanket: NSAllowsArbitraryLoads would switch ATS off
+       for everything Nemo ever loads. These two exceptions cover exactly
+       where the dashboard can live — a tailnet name (*.ts.net) or this
+       machine's own network — and nothing else.
+
+       The real fix is HTTPS on the tailnet (tailscale cert/serve), which also
+       unlocks microphone access from a phone. Until that is enabled, this. -->
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsLocalNetworking</key><true/>
+    <key>NSExceptionDomains</key>
+    <dict>
+      <key>ts.net</key>
+      <dict>
+        <key>NSIncludesSubdomains</key><true/>
+        <key>NSExceptionAllowsInsecureHTTPLoads</key><true/>
+      </dict>
+    </dict>
+  </dict>
 </dict>
 </plist>
