@@ -20,3 +20,10 @@ Ristretto is preparing its first public `0.1.0` release.
 
 Personal instance state, issue exports, channel IDs, repository mappings, and
 runtime logs intentionally live outside this public repository.
+
+## Nemo (exploration)
+
+`docs/nemo-feasibility.md` — feasibility check on giving Ristretto a body, a
+push-to-talk input and an on-screen presence. Not scheduled. Records the
+resolved rule for voice and authority (voice composes, a click commits) and
+notes that the launch surface is a prerequisite.
