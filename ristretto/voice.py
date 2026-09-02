@@ -62,9 +62,9 @@ def prompt(environ: Mapping[str, str] | None = None) -> str:
         config, _ = load_config()
         words += sorted(config.get("repositories") or {})
         words += sorted(config.get("flows") or {})
-        # The issue prefix is said constantly and heard as anything — "XARI
-        # forty" came back as "sorry, 40". It lives in the user's config, so
-        # it is picked up here rather than written down anywhere public.
+        # The issue prefix is said constantly and heard as anything — one
+        # test key came back as "sorry, 40". It lives in the user's config,
+        # so it is read from there rather than written down anywhere public.
         from .config import ConfigError, instance_value
 
         try:
