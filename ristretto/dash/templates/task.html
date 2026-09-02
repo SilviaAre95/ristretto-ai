@@ -17,16 +17,44 @@
     <div class="approvals">
       {% for item in waiting %}
         <div class="approval">
-          <p class="asks">Waiting on you: <code>{{ item.what }}</code></p>
+          {% if item.detail.kind == "question" %}
+            <p class="asks">The build is asking you:</p>
+            {% for q in item.detail.questions %}
+              <p class="question">{{ q.question }}</p>
+              {% if q.options %}
+                <ul class="choices">
+                  {% for o in q.options %}
+                    <li><b>{{ o.label }}</b>{% if o.description %} — {{ o.description }}{% endif %}</li>
+                  {% endfor %}
+                </ul>
+              {% endif %}
+            {% endfor %}
+          {% elif item.detail.kind == "action" %}
+            <p class="asks">Waiting on you: <code>{{ item.what }}</code></p>
+          {% else %}
+            <p class="asks">Waiting on you: <code>{{ item.detail.tool }}</code></p>
+            <pre class="payload">{{ item.detail.payload }}</pre>
+          {% endif %}
+
           <p class="meta">asked {{ item.requested_at | ago }} · denied automatically in {{ item.minutes_left }}m</p>
+
           <div class="actions">
             <form method="post" action="/approval/{{ item.id }}/approve">
               <button type="submit">Approve</button>
             </form>
-            <form method="post" action="/approval/{{ item.id }}/deny">
+            <form method="post" action="/approval/{{ item.id }}/deny" class="with-reason">
+              <input name="reason" maxlength="400" autocomplete="off"
+                     placeholder="{% if item.detail.kind == 'question' %}your answer, sent back to the build{% else %}why (optional){% endif %}">
               <button class="danger" type="submit">Deny</button>
             </form>
           </div>
+
+          {% if item.detail.kind == "question" %}
+            <p class="hint">
+              Approving only lets it ask, and a headless run has nobody to answer.
+              To choose, type it in the box — that text is relayed to the build.
+            </p>
+          {% endif %}
         </div>
       {% endfor %}
     </div>

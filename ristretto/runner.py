@@ -156,6 +156,56 @@ def role_prompt(
     )
 
 
+# Commands that only read. Passed to --allowedTools so a build does not stop
+# a person to run `cat`, which is what the first live gated run did.
+#
+# Conservative on purpose. Absent here and deliberately so:
+#   node  — `node -e` writes files and opens sockets
+#   find  — `-exec` runs anything
+#   sed   — `-i` edits in place
+#   xargs — runs whatever it is fed
+# A command that merely looks like a read is not a read.
+#
+# This only helps simple invocations: Claude Code matches a prefix, so
+# `cat x; node -e ...` still reaches the gate. That is the correct outcome —
+# the compound form is exactly how a read smuggles in a write.
+READ_ONLY_TOOLS = (
+    "Bash(cat:*)",
+    "Bash(ls:*)",
+    "Bash(head:*)",
+    "Bash(tail:*)",
+    "Bash(wc:*)",
+    "Bash(grep:*)",
+    "Bash(rg:*)",
+    "Bash(stat:*)",
+    "Bash(file:*)",
+    "Bash(which:*)",
+    "Bash(echo:*)",
+)
+
+
+def attended(task_id: str) -> bool:
+    """Whether a person is expected to answer this run's approval prompts.
+
+    Read from the task body rather than threaded through the worker: the
+    worker is a model, and a flag that has to survive a model rewriting a
+    command line is a flag that will not survive.
+
+    Defaults to attended. An unattended run skips the gate entirely, so
+    getting this wrong must fail towards asking rather than towards acting.
+    """
+    if not SAFE_ID.fullmatch(task_id):
+        return True
+    try:
+        shown = subprocess.run(
+            ["hermes", "kanban", "show", task_id],
+            capture_output=True, text=True, check=False, timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return True
+    return "unattended: true" not in (shown.stdout or "").lower()
+
+
 # The MCP server name the permission tool is addressed by. Claude Code builds
 # the tool id as mcp__<server>__<tool>, so this and broker.TOOL_NAME together
 # are the --permission-prompt-tool value.
@@ -185,6 +235,7 @@ def runner_command(
     prompt: str,
     cwd: Path,
     output: Path,
+    gated: bool = True,
 ) -> tuple[list[str], dict[str, str], str]:
     env = os.environ.copy()
     model = provider.get("model")
@@ -193,20 +244,24 @@ def runner_command(
         command = ["claude", "-p"]
         mode = "acceptEdits" if stage["mutates"] else "plan"
         command += ["--permission-mode", mode, "--no-session-persistence"]
-        if stage["mutates"]:
+        if stage["mutates"] and gated:
             # Without this a headless stage cannot prompt, so anything the
             # permission mode does not already cover is refused on the spot
             # and the stage works around it silently. Routing the prompt to
             # a person makes the refusal visible and answerable instead.
             # Read-only stages are left alone: a reviewer that needs consent
             # to do something is a reviewer doing more than reviewing.
-            # Order matters: --mcp-config takes a LIST, so whatever follows it
-            # is swallowed as another config path. Ending on the single-valued
-            # --permission-prompt-tool terminates it. Reversed, the prompt is
-            # eaten and Claude dies with "MCP config file not found: <prompt>".
+            #
+            # Order matters twice over: --mcp-config and --allowedTools both
+            # take LISTS, so whatever follows either is swallowed. Ending on
+            # the single-valued --permission-prompt-tool terminates both.
+            # Reversed, the prompt is eaten and Claude dies with
+            # "MCP config file not found: <the entire prompt>".
             command += [
                 "--mcp-config",
                 json.dumps(broker_config()),
+                "--allowedTools",
+                *READ_ONLY_TOOLS,
                 "--permission-prompt-tool",
                 f"mcp__{BROKER_SERVER}__{broker.TOOL_NAME}",
             ]
@@ -476,6 +531,7 @@ def run_stage(
     record_path: Path,
     dry_run: bool,
     expected_verify_digest: str | None,
+    gated: bool = True,
 ) -> int:
     output = artifacts / stage.get("output", f"{stage['id']}.txt")
     log = artifacts / f"{stage['id']}.log"
@@ -490,7 +546,7 @@ def run_stage(
     else:
         provider = stage["provider_config"]
         prompt = role_prompt(stage["role"], issue, stage, artifacts, base)
-        command, env, runner = runner_command(provider, stage, prompt, cwd, output)
+        command, env, runner = runner_command(provider, stage, prompt, cwd, output, gated)
         output_from_stdout = provider["runner"] == "claude-code"
     if dry_run:
         printable = list(command)
@@ -663,11 +719,20 @@ def execute(args: argparse.Namespace) -> int:
     os.environ["RISTRETTO_ISSUE_KEY"] = args.issue
     emit = _emitter(args.task_id, args.issue, cwd, args.dry_run)
     emit("run.started", payload={"flow": args.flow, "base": base})
+    # Asked once, at the start: an unattended run must not stop for a prompt
+    # nobody will answer, and a mid-run change of mind is worse than either
+    # answer.
+    gated = args.dry_run or attended(args.task_id)
+    if not gated:
+        print("flow: unattended — approval prompts are disabled for this run", file=sys.stderr)
     pulse = Heartbeat(args.task_id)
     if not args.dry_run:
         pulse.start()
     try:
-        return _run_stages(args, config, flow, artifacts, cwd, base, record, emit, pulse, expected_verify_digest)
+        return _run_stages(
+            args, config, flow, artifacts, cwd, base, record, emit, pulse,
+            expected_verify_digest, gated,
+        )
     finally:
         # Stop claiming to be alive the moment we are not, including when a
         # stage raises: a heartbeat outliving its flow is a lie the board
@@ -686,6 +751,7 @@ def _run_stages(
     emit: Any,
     pulse: "Heartbeat",
     expected_verify_digest: str | None,
+    gated: bool = True,
 ) -> int:
     opened: str | None = None
     for stage in flow["stages"]:
@@ -705,6 +771,7 @@ def _run_stages(
             record,
             args.dry_run,
             expected_verify_digest,
+            gated,
         )
         elapsed = round(time.monotonic() - started, 1)
         if code != 0:

@@ -143,6 +143,7 @@ async def start_run(request: Request) -> RedirectResponse:
         str(form.get("flow", "")),
         actor="dashboard",
         allow_busy=bool(form.get("allow_busy")),
+        unattended=bool(form.get("unattended")),
     )
     if outcome.ok and outcome.task_id:
         return RedirectResponse(
@@ -160,11 +161,20 @@ def approve(request: Request, request_id: str) -> RedirectResponse:
 
 
 @app.post("/approval/{request_id}/deny")
-def deny(request: Request, request_id: str) -> RedirectResponse:
-    return _answer(request, request_id, approvals.DENY)
+async def deny(request: Request, request_id: str) -> RedirectResponse:
+    """Refuse, optionally saying why.
+
+    The reason is not decoration: the broker relays it as the deny message,
+    which is the one channel that reaches the model. For a stage asking a
+    question rather than asking permission, that text is the answer.
+    """
+    form = await request.form()
+    return _answer(request, request_id, approvals.DENY, reason=str(form.get("reason", "")).strip())
 
 
-def _answer(request: Request, request_id: str, verdict: str) -> RedirectResponse:
+def _answer(
+    request: Request, request_id: str, verdict: str, reason: str = ""
+) -> RedirectResponse:
     """Answer a pending approval, then go back to the task that asked.
 
     Same-origin like every other mutating route. Losing the race to Slack is
@@ -173,7 +183,7 @@ def _answer(request: Request, request_id: str, verdict: str) -> RedirectResponse
     """
     require_same_origin(request)
     item = approvals.get(request_id)
-    won, message = approvals.decide(request_id, verdict, actor="dashboard")
+    won, message = approvals.decide(request_id, verdict, actor="dashboard", reason=reason)
     task_id = (item or {}).get("task_id", "")
     status = "ok" if won else "failed"
     detail = quote((("allowed" if verdict == approvals.ALLOW else "denied") if won else message)[:300])

@@ -127,6 +127,23 @@
     overflow-wrap: anywhere;
   }
   .approval .meta, .waiting-row .meta { color: var(--ink-faint); font-size: 12px; }
+  .approval .question { margin: 0 0 10px; font-size: 15px; line-height: 1.5; }
+  .approval .choices { margin: 0 0 4px; padding-left: 20px; font-size: 14px; line-height: 1.55; }
+  .approval .choices li { margin-bottom: 6px; }
+  .approval .choices b { font-weight: 600; }
+  .approval .payload {
+    font-family: var(--mono); font-size: 12px; background: var(--sunk);
+    padding: 10px 12px; overflow-x: auto; margin: 0 0 4px; max-height: 260px;
+  }
+  .approval .hint { margin-top: 10px; }
+  form.with-reason { display: flex; gap: 8px; flex: 1; min-width: 0; }
+  form.with-reason input {
+    flex: 1; min-width: 0; font-family: var(--sans); font-size: 16px;
+    padding: 9px 12px; min-height: 40px; color: var(--ink);
+    background: var(--surface); border: 1px solid var(--hairline); border-radius: 2px;
+  }
+  form.with-reason input:focus-visible { outline: 2px solid var(--ris); outline-offset: 2px; }
+  .approval .actions { flex-wrap: wrap; }
   .approval .meta { margin: 6px 0 0; }
   .waiting-row {
     display: flex; justify-content: space-between; gap: 12px;
