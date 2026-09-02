@@ -23,6 +23,10 @@
 
 {% for project, runs in grouped.items() %}
   <h2 class="project">{{ project }}</h2>
+  <p class="note" style="border:0;padding:0 0 4px">
+    <a href="/launch" style="color:var(--ris);text-decoration:none">+ start a run</a>
+  </p>
+
   {% if waiting %}
     <div class="waiting-banner">
       <p class="asks">{{ waiting | length }} waiting on you</p>

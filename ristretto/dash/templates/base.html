@@ -134,6 +134,23 @@
   }
   .waiting-row:hover code { color: var(--ris); }
 
+  form.launch { display: flex; flex-direction: column; gap: 14px; max-width: 460px; margin-top: 18px; }
+  form.launch label { display: flex; flex-direction: column; gap: 5px; }
+  form.launch label.inline { flex-direction: row; align-items: center; gap: 9px; }
+  form.launch label span {
+    font-family: var(--mono); font-size: 11px; text-transform: uppercase;
+    letter-spacing: 0.1em; color: var(--ink-faint);
+  }
+  form.launch select, form.launch input[type="text"], form.launch input:not([type]) {
+    font-family: var(--sans); font-size: 16px; padding: 11px 13px; min-height: 44px;
+    color: var(--ink); background: var(--surface);
+    border: 1px solid var(--hairline); border-radius: 2px;
+  }
+  form.launch select:focus-visible, form.launch input:focus-visible {
+    outline: 2px solid var(--ris); outline-offset: 2px;
+  }
+  .flow-note { margin: -4px 0 0; font-size: 13px; color: var(--ink-soft); }
+
   .actions { display: flex; gap: 10px; margin: 18px 0 4px; }
   .actions form { margin: 0; }
   .actions button {

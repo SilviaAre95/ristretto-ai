@@ -15,7 +15,7 @@ from pathlib import Path
 from unittest import mock
 
 from ristretto import approvals, events
-from ristretto.dash import chat, control, data, serve
+from ristretto.dash import chat, control, data, launch, serve
 from ristretto.dash.serve import BindRefused, resolve_host
 
 try:
@@ -208,9 +208,12 @@ class RouteTests(unittest.TestCase):
     def test_the_post_surface_is_exactly_what_we_intend(self) -> None:
         # Every POST here is a deliberate decision, so the set is pinned:
         #   stop/unblock change running work,
-        #   chat spends a model turn but changes nothing and has no acting tools.
-        # Launching work is absent — it writes code to a branch and must not
-        # arrive as another route added by analogy to these.
+        #   chat spends a model turn but changes nothing and has no acting tools,
+        #   launch spends tokens and writes to a branch.
+        # Launch was deliberately absent until it had its own design: its own
+        # page rather than a fleet-view button, and four guards (preflight,
+        # idempotency, busy, same-origin) that live in launch.launch() so the
+        # CLI cannot drift from the surface. It did not arrive by analogy.
         posting = {
             route.path
             for route in app.routes
@@ -226,6 +229,7 @@ class RouteTests(unittest.TestCase):
                 "/approval/{request_id}/approve",
                 "/approval/{request_id}/deny",
                 "/chat",
+                "/launch",
             },
         )
         others = {
@@ -525,3 +529,195 @@ class LinkAndCopyTests(unittest.TestCase):
         ).read_text()
         self.assertNotIn("denyed", source)
         self.assertIn('"denied"', source)
+
+
+class LaunchCoreTests(unittest.TestCase):
+    """Guards on the one action that spends money and writes to a branch."""
+
+    def setUp(self) -> None:
+        # A fixture, not the machine's config. Repositories live in the user
+        # layer (~/.config/ristretto/config.yaml), which CI does not have, so
+        # tests that lean on a real configured project pass here and fail
+        # there — which is exactly what happened.
+        self.repo = Path(tempfile.mkdtemp())
+        (self.repo / ".git").mkdir()
+        self.config = {
+            "base_branch": "main",
+            "repositories": {"Kaffecard": str(self.repo)},
+            "flows": {
+                "classic": {"description": "existing loop"},
+                "tier1": {"description": "local builds, Claude judges"},
+            },
+        }
+        patcher = mock.patch.object(
+            launch, "load_config", return_value=(self.config, Path("fixture.yaml"))
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_a_typo_is_refused_before_anything_is_spent(self) -> None:
+        repo, error = launch.validate(self.config, "Kaffecard", "kaffecard-42", "tier1")
+        self.assertIsNone(repo)
+        self.assertIn("not an issue key", error)
+
+    def test_an_unknown_flow_names_the_ones_that_exist(self) -> None:
+        _, error = launch.validate(self.config, "Kaffecard", "XARI-42", "tier9")
+        self.assertIn("tier1", error)
+
+    def test_an_unconfigured_project_is_refused(self) -> None:
+        repo, error = launch.validate(self.config, "Nonexistent", "XARI-42", "tier1")
+        self.assertIsNone(repo)
+        self.assertTrue(error)
+
+    def test_the_branch_is_derived_from_the_issue_alone(self) -> None:
+        # Deterministic: two launches of one issue cannot land on two branches.
+        self.assertEqual(launch.branch_for("XARI-42"), "xariprojects/xari-42")
+        self.assertEqual(launch.branch_for("XARI-42"), launch.branch_for("XARI-42"))
+
+    def test_the_idempotency_key_is_stable_within_a_day(self) -> None:
+        # A tap that looks like nothing happened gets tapped again.
+        a = launch.idempotency_key("XARI-42", "tier1", now=1788346615)
+        b = launch.idempotency_key("XARI-42", "tier1", now=1788346615 + 3600)
+        self.assertEqual(a, b)
+
+    def test_a_different_day_may_relaunch(self) -> None:
+        a = launch.idempotency_key("XARI-42", "tier1", now=1788346615)
+        b = launch.idempotency_key("XARI-42", "tier1", now=1788346615 + 86400 * 2)
+        self.assertNotEqual(a, b)
+
+    def test_preflight_failure_refuses_the_launch(self) -> None:
+        # Refusing costs a second; not refusing costs an hour and reads like
+        # a model failure.
+        with mock.patch.object(launch, "blocking_findings", return_value=["no .cc-verify"]), \
+             mock.patch.object(launch.subprocess, "run") as spawned:
+            outcome = launch.launch("Kaffecard", "XARI-42", "tier1")
+        self.assertFalse(outcome.ok)
+        self.assertIn("cannot run a loop", outcome.message)
+        spawned.assert_not_called()
+
+    def test_a_busy_fleet_refuses_by_default(self) -> None:
+        with mock.patch.object(launch, "blocking_findings", return_value=[]), \
+             mock.patch.object(launch, "active_runs", return_value=["t_aaaaaa"]), \
+             mock.patch.object(launch.subprocess, "run") as spawned:
+            outcome = launch.launch("Kaffecard", "XARI-42", "tier1")
+        self.assertFalse(outcome.ok)
+        self.assertIn("already active", outcome.message)
+        spawned.assert_not_called()
+
+    def test_a_busy_fleet_can_be_overridden(self) -> None:
+        with mock.patch.object(launch, "blocking_findings", return_value=[]), \
+             mock.patch.object(launch, "active_runs", return_value=["t_aaaaaa"]), \
+             mock.patch.object(events, "emit"), \
+             mock.patch.object(launch.subprocess, "run") as spawned:
+            spawned.return_value = subprocess.CompletedProcess([], 0, "created t_b1c2d3e4", "")
+            outcome = launch.launch("Kaffecard", "XARI-42", "tier1", allow_busy=True)
+        self.assertTrue(outcome.ok)
+        self.assertEqual(outcome.task_id, "t_b1c2d3e4")
+
+    def test_the_task_carries_what_the_worker_reads(self) -> None:
+        with mock.patch.object(launch, "blocking_findings", return_value=[]), \
+             mock.patch.object(launch, "active_runs", return_value=[]), \
+             mock.patch.object(events, "emit"), \
+             mock.patch.object(launch.subprocess, "run") as spawned:
+            spawned.return_value = subprocess.CompletedProcess([], 0, "created t_b1c2d3e4", "")
+            launch.launch("Kaffecard", "XARI-42", "tier1")
+        argv = spawned.call_args_list[0].args[0]
+        body = argv[argv.index("--body") + 1]
+        for line in ("issue: XARI-42", "branch: xariprojects/xari-42", "flow: tier1"):
+            self.assertIn(line, body)
+        self.assertIn("--idempotency-key", argv)
+        self.assertEqual(argv[argv.index("--assignee") + 1], "ris-worker")
+        self.assertEqual(argv[argv.index("--skill") + 1], "loop-runner")
+
+    def test_a_board_refusal_is_not_reported_as_a_launch(self) -> None:
+        with mock.patch.object(launch, "blocking_findings", return_value=[]), \
+             mock.patch.object(launch, "active_runs", return_value=[]), \
+             mock.patch.object(launch.subprocess, "run") as spawned:
+            spawned.return_value = subprocess.CompletedProcess([], 1, "", "duplicate key")
+            outcome = launch.launch("Kaffecard", "XARI-42", "tier1")
+        self.assertFalse(outcome.ok)
+        self.assertIn("duplicate key", outcome.message)
+
+    def test_a_failed_dispatch_is_a_delay_not_a_failure(self) -> None:
+        # The task exists; the dispatcher picks it up on its next pass.
+        def fake(argv, **kwargs):
+            if "dispatch" in argv:
+                return subprocess.CompletedProcess(argv, 1, "", "lock held")
+            return subprocess.CompletedProcess(argv, 0, "created t_b1c2d3e4", "")
+
+        with mock.patch.object(launch, "blocking_findings", return_value=[]), \
+             mock.patch.object(launch, "active_runs", return_value=[]), \
+             mock.patch.object(events, "emit"), \
+             mock.patch.object(launch.subprocess, "run", side_effect=fake):
+            outcome = launch.launch("Kaffecard", "XARI-42", "tier1")
+        self.assertTrue(outcome.ok)
+        self.assertIn("queued", outcome.message)
+
+
+class LaunchRouteTests(unittest.TestCase):
+    """The launch page, driven the way a browser drives it."""
+
+    def setUp(self) -> None:
+        if not WEB:
+            self.skipTest("dashboard extras not installed")
+        self.client = TestClient(app)
+
+    def test_the_form_offers_the_configured_flows(self) -> None:
+        # Flows ship in the repo layer, so they are present everywhere.
+        # Projects come from the user layer and are deliberately not asserted:
+        # a test that needs one passes locally and fails in CI.
+        with mock.patch.object(launch, "active_runs", return_value=[]):
+            page = self.client.get("/launch").text
+        self.assertIn("tier1", page)
+        self.assertIn('action="/launch"', page)
+        self.assertIn("Start a run", page)
+
+    def test_a_cross_site_post_cannot_start_work(self) -> None:
+        # The costliest route on a dashboard with no login.
+        with mock.patch.object(launch, "launch") as started:
+            response = self.client.post(
+                "/launch",
+                data={"project": "Kaffecard", "issue": "XARI-42", "flow": "tier1"},
+                headers={"sec-fetch-site": "cross-site"},
+                follow_redirects=False,
+            )
+        self.assertEqual(response.status_code, 403)
+        started.assert_not_called()
+
+    def test_a_refusal_returns_to_the_form_with_the_reason(self) -> None:
+        with mock.patch.object(
+            launch, "launch", return_value=launch.Outcome(False, "Kaffecard cannot run a loop yet")
+        ):
+            response = self.client.post(
+                "/launch",
+                data={"project": "Kaffecard", "issue": "XARI-42", "flow": "tier1"},
+                headers={"sec-fetch-site": "same-origin"},
+                follow_redirects=False,
+            )
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("/launch?failed=", response.headers["location"])
+        self.assertIn("cannot%20run%20a%20loop", response.headers["location"])
+
+    def test_a_launch_lands_on_the_task_it_started(self) -> None:
+        with mock.patch.object(
+            launch, "launch", return_value=launch.Outcome(True, "XARI-42 started on tier1", "t_b1c2d3e4")
+        ):
+            response = self.client.post(
+                "/launch",
+                data={"project": "Kaffecard", "issue": "XARI-42", "flow": "tier1"},
+                headers={"sec-fetch-site": "same-origin"},
+                follow_redirects=False,
+            )
+        self.assertIn("/task/t_b1c2d3e4", response.headers["location"])
+
+    def test_a_lowercase_key_is_accepted(self) -> None:
+        # Phone keyboards autocapitalize inconsistently; the key is upcased
+        # before validation rather than rejected.
+        with mock.patch.object(launch, "launch", return_value=launch.Outcome(True, "ok", "t_a1")) as started:
+            self.client.post(
+                "/launch",
+                data={"project": "Kaffecard", "issue": "xari-42", "flow": "tier1"},
+                headers={"sec-fetch-site": "same-origin"},
+                follow_redirects=False,
+            )
+        self.assertEqual(started.call_args.args[1], "XARI-42")
