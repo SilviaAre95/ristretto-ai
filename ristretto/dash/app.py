@@ -143,6 +143,7 @@ async def start_run(request: Request) -> RedirectResponse:
         str(form.get("flow", "")),
         actor="dashboard",
         allow_busy=bool(form.get("allow_busy")),
+        unattended=bool(form.get("unattended")),
     )
     if outcome.ok and outcome.task_id:
         return RedirectResponse(

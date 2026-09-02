@@ -51,6 +51,16 @@
     </label>
   {% endif %}
 
+  <label class="inline">
+    <input type="checkbox" name="unattended" value="1">
+    <span>Unattended — nobody will answer approval prompts</span>
+  </label>
+  <p class="flow-note">
+    An attended run stops and asks before anything it cannot decide alone.
+    Unattended, it never asks: it proceeds where it may and refuses itself
+    where it may not, exactly as it did before approvals existed.
+  </p>
+
   <div class="actions">
     <button type="submit">Launch</button>
   </div>

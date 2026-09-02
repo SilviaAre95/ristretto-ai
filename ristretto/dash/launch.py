@@ -124,6 +124,7 @@ def launch(
     *,
     actor: str = "dashboard",
     allow_busy: bool = False,
+    unattended: bool = False,
     config_path: Path | None = None,
 ) -> Outcome:
     """Create the task and dispatch it. Returns what happened, plainly."""
@@ -153,9 +154,13 @@ def launch(
             )
 
     branch = branch_for(issue)
-    body = "\n".join(
-        [f"issue: {issue}", f"repo: {repo}", f"branch: {branch}", f"flow: {flow}"]
-    )
+    lines = [f"issue: {issue}", f"repo: {repo}", f"branch: {branch}", f"flow: {flow}"]
+    if unattended:
+        # The runner reads this from the task body rather than from a flag
+        # threaded through the worker, because the worker is a model and a
+        # flag that must survive a model rewriting a command line will not.
+        lines.append("unattended: true")
+    body = "\n".join(lines)
     created = subprocess.run(
         [
             "hermes", "kanban", "create", f"{issue} · loop-dev",
@@ -195,6 +200,7 @@ def launch(
             "flow": flow,
             "branch": branch,
             "actor": actor,
+            "unattended": unattended,
             "dispatched": dispatched.returncode == 0,
         },
     )

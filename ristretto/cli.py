@@ -103,6 +103,11 @@ def parser() -> argparse.ArgumentParser:
         action="store_true",
         help="launch even though runs are already active",
     )
+    launch_command.add_argument(
+        "--unattended",
+        action="store_true",
+        help="nobody will answer approval prompts; disable the gate for this run",
+    )
 
     approvals_command = commands.add_parser(
         "approvals", help="answer approval requests raised by a running flow"
@@ -342,6 +347,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.flow,
                 actor=args.actor,
                 allow_busy=args.allow_busy,
+                unattended=args.unattended,
                 config_path=args.config,
             )
             print(outcome.message if outcome.ok else f"not launched: {outcome.message}")

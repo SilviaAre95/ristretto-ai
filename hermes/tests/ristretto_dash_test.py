@@ -721,3 +721,104 @@ class LaunchRouteTests(unittest.TestCase):
                 follow_redirects=False,
             )
         self.assertEqual(started.call_args.args[1], "XARI-42")
+
+
+class GateScopeTests(unittest.TestCase):
+    """Which stages stop for a person, and which do not.
+
+    The first live run gated a read-only `cat`, stopping a build for 11
+    seconds of attention it did not need — and would have stalled an
+    unattended run for the full timeout.
+    """
+
+    def command(self, mutates: bool = True, gated: bool = True) -> list[str]:
+        from ristretto import runner
+        cmd, _, _ = runner.runner_command(
+            {"runner": "claude-code", "model": "m"},
+            {"mutates": mutates},
+            "THE PROMPT",
+            Path("/tmp"),
+            Path("/tmp/out.md"),
+            gated,
+        )
+        return cmd
+
+    def test_reads_are_allowed_without_asking(self) -> None:
+        cmd = self.command()
+        allowed = cmd[cmd.index("--allowedTools") + 1:]
+        self.assertIn("Bash(cat:*)", allowed)
+        self.assertIn("Bash(grep:*)", allowed)
+
+    def test_commands_that_only_look_like_reads_are_not_allowed(self) -> None:
+        # `node -e` writes files and opens sockets; find -exec runs anything;
+        # sed -i edits in place. A read-shaped command is not a read.
+        from ristretto import runner
+        joined = " ".join(runner.READ_ONLY_TOOLS)
+        for dangerous in ("node", "find", "sed", "xargs", "python"):
+            self.assertNotIn(f"Bash({dangerous}:", joined)
+
+    def test_a_variadic_flag_is_never_last_before_the_prompt(self) -> None:
+        # --allowedTools and --mcp-config both take lists, so a positional
+        # after either is swallowed. This already cost one broken run.
+        cmd = self.command()
+        for variadic in ("--allowedTools", "--mcp-config"):
+            following = cmd[cmd.index(variadic) + 1:]
+            self.assertTrue(
+                any(item.startswith("--") for item in following),
+                f"{variadic} has no flag after it",
+            )
+        self.assertEqual(cmd[-1], "THE PROMPT")
+
+    def test_an_unattended_run_has_no_gate_at_all(self) -> None:
+        cmd = self.command(gated=False)
+        self.assertNotIn("--permission-prompt-tool", cmd)
+        self.assertNotIn("--mcp-config", cmd)
+        self.assertNotIn("--allowedTools", cmd)
+
+    def test_a_read_only_stage_is_never_gated(self) -> None:
+        self.assertNotIn("--permission-prompt-tool", self.command(mutates=False))
+
+
+class AttendedTests(unittest.TestCase):
+    """Reading the run's own intent, from the one place a model cannot edit."""
+
+    def test_the_body_marks_an_unattended_run(self) -> None:
+        from ristretto import runner
+        with mock.patch.object(runner.subprocess, "run") as shown:
+            shown.return_value = subprocess.CompletedProcess(
+                [], 0, "Body:\nissue: XARI-3\nflow: tier0\nunattended: true\n", ""
+            )
+            self.assertFalse(runner.attended("t_a1b2c3d4"))
+
+    def test_a_normal_run_is_attended(self) -> None:
+        from ristretto import runner
+        with mock.patch.object(runner.subprocess, "run") as shown:
+            shown.return_value = subprocess.CompletedProcess(
+                [], 0, "Body:\nissue: XARI-3\nflow: tier0\n", ""
+            )
+            self.assertTrue(runner.attended("t_a1b2c3d4"))
+
+    def test_an_unreadable_board_fails_towards_asking(self) -> None:
+        # Getting this wrong must never silently remove the gate.
+        from ristretto import runner
+        with mock.patch.object(runner.subprocess, "run", side_effect=OSError("no hermes")):
+            self.assertTrue(runner.attended("t_a1b2c3d4"))
+
+    def test_a_hostile_task_id_is_never_spawned(self) -> None:
+        from ristretto import runner
+        with mock.patch.object(runner.subprocess, "run") as shown:
+            self.assertTrue(runner.attended("t_a1; rm -rf /"))
+        shown.assert_not_called()
+
+    def test_the_launch_records_the_choice(self) -> None:
+        with mock.patch.object(launch, "blocking_findings", return_value=[]), \
+             mock.patch.object(launch, "active_runs", return_value=[]), \
+             mock.patch.object(launch, "load_config", return_value=(
+                 {"base_branch": "main", "repositories": {"P": "/tmp"},
+                  "flows": {"tier1": {}}}, Path("f.yaml"))), \
+             mock.patch.object(events, "emit"), \
+             mock.patch.object(launch.subprocess, "run") as spawned:
+            spawned.return_value = subprocess.CompletedProcess([], 0, "created t_b1c2d3e4", "")
+            launch.launch("P", "XARI-42", "tier1", unattended=True)
+        argv = spawned.call_args_list[0].args[0]
+        self.assertIn("unattended: true", argv[argv.index("--body") + 1])
