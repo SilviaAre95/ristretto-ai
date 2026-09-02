@@ -139,5 +139,11 @@ assert "installer links the approvals plugin" \
 assert "installer enables the approvals plugin" \
   grep -q "plugins enable ris-approvals" "$repo/scripts/install-hermes.sh"
 
+# Regression: cron's PATH had no /usr/local/bin, so tailscale was never found,
+# link_host() fell back to loopback, and every notification for a day carried
+# http://127.0.0.1:8787 — a link that points at whatever device opened it.
+assert "doorbell can find tailscale on PATH" \
+  grep -q "/usr/local/bin" "$repo/hermes/scripts/ris-doorbell.sh"
+
 printf '%d passed, %d failed\n' "$pass" "$fail"
 test "$fail" -eq 0

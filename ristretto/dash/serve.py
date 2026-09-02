@@ -69,6 +69,11 @@ def tailnet_name(timeout: int = 5) -> str | None:
     return name if name and "." in name else None
 
 
+# The address that means "this machine, to itself". Useless in a link that
+# someone else opens, so callers that build links check for it.
+LOOPBACK = "127.0.0.1"
+
+
 def link_host() -> str:
     """The host to put in a link someone will open on another device.
 
@@ -76,7 +81,7 @@ def link_host() -> str:
     and what a phone can resolve are different questions, and conflating them
     is how a link ends up pointing at 127.0.0.1.
     """
-    return tailnet_name() or tailnet_address() or "127.0.0.1"
+    return tailnet_name() or tailnet_address() or LOOPBACK
 
 
 def resolve_host(requested: str | None = None) -> tuple[str, str]:

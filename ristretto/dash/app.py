@@ -139,7 +139,7 @@ def _answer(request: Request, request_id: str, verdict: str) -> RedirectResponse
     won, message = approvals.decide(request_id, verdict, actor="dashboard")
     task_id = (item or {}).get("task_id", "")
     status = "ok" if won else "failed"
-    detail = quote((f"{verdict}ed" if won else message)[:300])
+    detail = quote((("allowed" if verdict == approvals.ALLOW else "denied") if won else message)[:300])
     if not task_id:
         return RedirectResponse(f"/?{status}={detail}", status_code=303)
     return RedirectResponse(f"/task/{quote(task_id)}?{status}={detail}", status_code=303)
