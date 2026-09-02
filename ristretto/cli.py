@@ -91,6 +91,19 @@ def parser() -> argparse.ArgumentParser:
     events_command.add_argument("--limit", type=int, default=50)
     events_command.add_argument("--json", action="store_true", help="print raw JSON")
 
+    launch_command = commands.add_parser(
+        "launch", help="start a supervised run on a configured project"
+    )
+    launch_command.add_argument("project", help="configured project name")
+    launch_command.add_argument("issue", help="issue key, e.g. XARI-42")
+    launch_command.add_argument("--flow", default="tier1", help="coding flow (default: tier1)")
+    launch_command.add_argument("--actor", default="cli", help="who is launching")
+    launch_command.add_argument(
+        "--allow-busy",
+        action="store_true",
+        help="launch even though runs are already active",
+    )
+
     approvals_command = commands.add_parser(
         "approvals", help="answer approval requests raised by a running flow"
     )
@@ -320,6 +333,22 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"{sent} milestone(s) {'would be sent' if args.dry_run else 'sent'}")
                 return 0
             return bell.watch(base, channel, args.interval)
+        if args.command == "launch":
+            from .dash.launch import launch as start_run
+
+            outcome = start_run(
+                args.project,
+                args.issue,
+                args.flow,
+                actor=args.actor,
+                allow_busy=args.allow_busy,
+                config_path=args.config,
+            )
+            print(outcome.message if outcome.ok else f"not launched: {outcome.message}")
+            if outcome.ok and outcome.task_id:
+                print(f"task: {outcome.task_id}")
+            return 0 if outcome.ok else 1
+
         if args.command == "approvals":
             from . import approvals
 

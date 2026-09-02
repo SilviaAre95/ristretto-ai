@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Ris — launch{% endblock %}
+{% block content %}
+<a class="back" href="/">← fleet</a>
+<h2 style="margin:16px 0 4px; font-size:19px;">Start a run</h2>
+
+{% if ok %}<p class="banner good">{{ ok }}</p>{% endif %}
+{% if failed %}<p class="banner bad">{{ failed }}</p>{% endif %}
+
+{% if active %}
+  <p class="note" style="border:0;padding-top:8px">
+    {{ active | length }} run{{ "s" if active | length != 1 }} already active.
+    Starting another queues it behind them.
+  </p>
+{% endif %}
+
+<form method="post" action="/launch" class="launch">
+  <label>
+    <span>Project</span>
+    <select name="project" required>
+      {% for name in projects %}<option value="{{ name }}">{{ name }}</option>{% endfor %}
+    </select>
+  </label>
+
+  <label>
+    <span>Issue</span>
+    <input name="issue" required placeholder="XARI-42" autocapitalize="characters"
+           autocomplete="off" spellcheck="false" pattern="[A-Za-z][A-Za-z0-9]{1,9}-[0-9]{1,6}">
+  </label>
+
+  <label>
+    <span>Flow</span>
+    <select name="flow" required>
+      {% for flow in flows %}
+        <option value="{{ flow.name }}" {% if flow.name == default_flow %}selected{% endif %}>
+          {{ flow.name }}
+        </option>
+      {% endfor %}
+    </select>
+  </label>
+
+  {% for flow in flows %}
+    <p class="flow-note" data-flow="{{ flow.name }}"
+       {% if flow.name != default_flow %}hidden{% endif %}>{{ flow.description }}</p>
+  {% endfor %}
+
+  {% if active %}
+    <label class="inline">
+      <input type="checkbox" name="allow_busy" value="1">
+      <span>Start anyway, with {{ active | length }} already running</span>
+    </label>
+  {% endif %}
+
+  <div class="actions">
+    <button type="submit">Launch</button>
+  </div>
+  <p class="hint">
+    Spends tokens and pushes to <code>xariprojects/&lt;issue&gt;</code>.
+    The branch is derived from the issue key.
+  </p>
+</form>
+{% endblock %}
+
+{% block script %}
+<script>
+  // Show only the chosen flow's description — five at once is a wall.
+  const select = document.querySelector('select[name="flow"]');
+  const notes = document.querySelectorAll(".flow-note");
+  if (select) {
+    select.addEventListener("change", () => {
+      notes.forEach((n) => { n.hidden = n.dataset.flow !== select.value; });
+    });
+  }
+</script>
+{% endblock %}

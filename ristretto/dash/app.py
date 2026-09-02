@@ -30,7 +30,7 @@ from fastapi.responses import (
 from fastapi.templating import Jinja2Templates
 
 from .. import approvals, events
-from . import chat, control, data
+from . import chat, control, data, launch as launcher
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 TEMPLATES.env.filters["duration"] = data.humanise
@@ -115,6 +115,43 @@ def require_same_origin(request: Request) -> None:
         if origin and host and origin.split("://")[-1] == host:
             return
     raise HTTPException(status_code=403, detail="cross-site requests are refused")
+
+
+@app.get("/launch", response_class=HTMLResponse)
+def launch_form(request: Request, ok: str | None = None, failed: str | None = None) -> HTMLResponse:
+    context = launcher.options()
+    context.update(
+        {"active": launcher.active_runs(), "ok": ok, "failed": failed, "build": data.build_stamp()}
+    )
+    return TEMPLATES.TemplateResponse(request, "launch.html", context)
+
+
+@app.post("/launch")
+async def start_run(request: Request) -> RedirectResponse:
+    """Start a supervised run.
+
+    The only route here that spends money and writes to a branch, so it is a
+    deliberate page rather than a control added to the fleet view by analogy
+    with stop. Every guard lives in launch.launch(), which the CLI calls too,
+    so the surface that is tested is the surface that is used.
+    """
+    require_same_origin(request)
+    form = await request.form()
+    outcome = launcher.launch(
+        str(form.get("project", "")),
+        str(form.get("issue", "")).strip().upper(),
+        str(form.get("flow", "")),
+        actor="dashboard",
+        allow_busy=bool(form.get("allow_busy")),
+    )
+    if outcome.ok and outcome.task_id:
+        return RedirectResponse(
+            f"/task/{quote(outcome.task_id)}?ok={quote(outcome.message[:300])}", status_code=303
+        )
+    field = "ok" if outcome.ok else "failed"
+    return RedirectResponse(
+        f"/launch?{field}={quote(outcome.message[:300])}", status_code=303
+    )
 
 
 @app.post("/approval/{request_id}/approve")
