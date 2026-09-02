@@ -104,6 +104,15 @@ launchctl bootout "gui/$UID/$label" 2>/dev/null || true
 launchctl bootstrap "gui/$UID" "$plist"
 launchctl kickstart -k "gui/$UID/$label" 2>/dev/null || true
 
+# Tell Nemo where to find this dashboard. The address is a fact about this
+# machine, so it is written here rather than compiled into the app.
+link_host="$("$python_bin" -c "
+import sys; sys.path.insert(0, '$repo')
+from ristretto.dash.serve import link_host
+print(link_host())" 2>/dev/null || echo 127.0.0.1)"
+mkdir -p "$HOME/.ristretto"
+printf 'http://%s:%s\n' "$link_host" "$port" > "$HOME/.ristretto/dash-url"
+
 echo "dash service installed: $plist"
 echo "  logs:    $logs/ristretto-dash.log"
 echo "  restart: launchctl kickstart -k gui/$UID/$label"

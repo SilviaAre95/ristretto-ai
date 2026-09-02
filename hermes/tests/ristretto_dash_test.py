@@ -230,6 +230,10 @@ class RouteTests(unittest.TestCase):
                 "/approval/{request_id}/deny",
                 "/chat",
                 "/launch",
+                # Nemo's ear. It changes nothing and spends no tokens, but it
+                # runs a model on audio, and an endpoint anyone can drive is
+                # one anyone can drain.
+                "/voice",
             },
         )
         others = {
@@ -822,3 +826,58 @@ class AttendedTests(unittest.TestCase):
             launch.launch("P", "XARI-42", "tier1", unattended=True)
         argv = spawned.call_args_list[0].args[0]
         self.assertIn("unattended: true", argv[argv.index("--body") + 1])
+
+
+class VoiceTests(unittest.TestCase):
+    """Transcription. Nemo must never die on a bad clip."""
+
+    def test_nothing_recorded_is_not_a_crash(self) -> None:
+        from ristretto import voice
+        heard = voice.transcribe(b"")
+        self.assertFalse(heard.ok)
+        self.assertIn("nothing recorded", heard.detail)
+
+    def test_an_oversized_clip_is_refused_before_the_model_loads(self) -> None:
+        from ristretto import voice
+        heard = voice.transcribe(b"x" * (voice.MAX_BYTES + 1))
+        self.assertFalse(heard.ok)
+        self.assertIn("too large", heard.detail)
+
+    def test_junk_audio_is_reported_not_raised(self) -> None:
+        from ristretto import voice
+        self.assertFalse(voice.transcribe(b"this is not audio").ok)
+
+    def test_the_model_is_overridable(self) -> None:
+        from ristretto import voice
+        self.assertEqual(
+            voice.model_name({"RISTRETTO_WHISPER_MODEL": "mlx-community/whisper-large-v3-mlx"}),
+            "mlx-community/whisper-large-v3-mlx",
+        )
+        self.assertEqual(voice.model_name({}), voice.DEFAULT_MODEL)
+
+    def test_a_missing_engine_says_so(self) -> None:
+        # The dashboard runs without mlx-whisper; only Nemo needs it.
+        from ristretto import voice
+        with mock.patch.dict("sys.modules", {"mlx_whisper": None}):
+            heard = voice.transcribe(b"x" * 100)
+        self.assertFalse(heard.ok)
+
+
+class NemoStateTests(unittest.TestCase):
+    """The glance Nemo takes on a timer, forever."""
+
+    def setUp(self) -> None:
+        if not WEB:
+            self.skipTest("dashboard extras not installed")
+        self.client = TestClient(app)
+
+    def test_it_reports_what_is_waiting(self) -> None:
+        with mock.patch.object(approvals, "pending", return_value=[{"id": "a"}, {"id": "b"}]):
+            body = self.client.get("/nemo/state").json()
+        self.assertEqual(body["waiting"], 2)
+
+    def test_an_unreadable_store_does_not_break_the_face(self) -> None:
+        with mock.patch.object(approvals, "pending", side_effect=RuntimeError("gone")):
+            response = self.client.get("/nemo/state")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["waiting"], 0)
