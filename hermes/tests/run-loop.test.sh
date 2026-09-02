@@ -196,6 +196,27 @@ t "no re-exec guard is left behind" "! grep -q 'RIS_DETACHED' '$SCRIPT'"
 t "runner status is taken from the pipeline head" \
   "grep -q 'PIPESTATUS\[0\]' '$SCRIPT'"
 
+# Regression: the loop must find its own tools. The first dashboard launch
+# died one second in with "No such file or directory: 'claude'" because the
+# dashboard runs under launchd, whose PATH has no node toolchain — and claude
+# is a node global installed through fnm, whose per-shell bin directory no
+# daemon will ever have.
+t "loop resolves tools rather than trusting the caller's PATH" \
+  "grep -q 'aliases/default/bin' '$SCRIPT'"
+# Appended, not prepended: repairing a broken PATH must not outrank one the
+# caller set on purpose. Prepending shadowed this suite's own stub claude.
+t "the repair appends, so a caller's PATH still wins" \
+  "grep -q 'PATH=\"\$PATH:\$_dir\"' '$SCRIPT'"
+t "an entry already present is not duplicated" \
+  "grep -q 'case \":\$PATH:\" in' '$SCRIPT'"
+# Ordering: the repair is useless after something has already tried to run.
+PATH_LINE="$(grep -n 'export PATH' "$SCRIPT" | head -1 | cut -d: -f1)"
+# The invocation, not the comment that mentions it on line 4.
+REAP_LINE="$(grep -n 'bash "$SCRIPT_DIR/reap.sh"' "$SCRIPT" | head -1 | cut -d: -f1)"
+t "PATH is repaired before any tool is invoked" \
+  "[ -n '$PATH_LINE' ] && [ -n '$REAP_LINE' ] && [ '$PATH_LINE' -lt '$REAP_LINE' ]"
+
+
 RIS_PYTHON="$FAKEBIN/python3" "$SCRIPT" t-flow PROJ-12 --flow tier1 >/dev/null 2>&1; RC=$?
 t "custom flow: succeeds"             "[ $RC -eq 0 ]"
 t "custom flow: runner module"        "grep -q -- '-m ristretto.runner' '$FAKEBIN/python_argv'"
