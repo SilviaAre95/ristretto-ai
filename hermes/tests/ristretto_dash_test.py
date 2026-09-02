@@ -918,6 +918,13 @@ class ReloadTests(unittest.TestCase):
     thing to forget.
     """
 
+    def setUp(self) -> None:
+        # These patch uvicorn.run, which means importing uvicorn. CI does not
+        # install the [dash] extra, so an unguarded test here passes locally
+        # and errors there — which is exactly what happened.
+        if not WEB:
+            self.skipTest("dashboard extras not installed")
+
     def test_reload_watches_the_package_and_nothing_else(self) -> None:
         # Editing docs or tests must not bounce a server someone is reading.
         with mock.patch.object(serve, "resolve_host", return_value=("127.0.0.1", "test")), \
@@ -933,8 +940,13 @@ class ReloadTests(unittest.TestCase):
             serve.run(port=9999, reload=False)
         self.assertIsNone(run.call_args.kwargs["reload_dirs"])
 
+
+class ServiceDeployTests(unittest.TestCase):
+    """Reads a file, so it runs everywhere — including where uvicorn is not
+    installed. A flag that exists but is never passed is how this whole class
+    of bug survives.
+    """
+
     def test_the_service_deploys_itself(self) -> None:
-        # The installer must actually turn it on; the flag existing is not
-        # the same as the service using it.
         script = (Path(__file__).resolve().parents[2] / "scripts" / "install-dash-service.sh").read_text()
         self.assertIn("<string>--reload</string>", script)
