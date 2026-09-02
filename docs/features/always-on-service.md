@@ -37,3 +37,20 @@ None.
 
 - Service: `ai.hermes.gateway.plist`
 - Manage with `hermes gateway status` and `hermes gateway restart`.
+
+## It deploys itself
+
+The service runs with `--reload`, watching the `ristretto` package only.
+Editing docs or tests does not bounce a server someone is reading; changing
+the code does.
+
+This is not a convenience. The dashboard served code older than its checkout
+four times in one day — a live run reported as stalled because the process
+predated the fix, the approval banner missing for the same reason, a question
+mis-transcribed after transcription had been fixed, and a footer displaying
+the commit that contained the fix while running without it. Each time the
+remedy was "restart it by hand", which is a thing to forget, not a remedy.
+
+The footer still stamps the commit the process loaded and says plainly when
+the checkout has moved ahead — belt as well as braces, because a reloader
+that dies leaves a server that looks fine.

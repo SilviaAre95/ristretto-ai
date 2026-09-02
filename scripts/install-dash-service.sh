@@ -61,6 +61,13 @@ cat > "$plist" <<PLIST
     <string>dash</string>
     <string>--port</string>
     <string>$port</string>
+    <!-- This is the deployment. Without it the service runs whatever was
+         checked out when it last started, which cost most of a day: a run
+         reported stalled because the process predated the fix, an approval
+         banner missing for the same reason, a question mis-transcribed after
+         transcription had been fixed. "Restart it by hand" is not a remedy,
+         it is a thing to forget. -->
+    <string>--reload</string>
   </array>
   <key>WorkingDirectory</key><string>$repo</string>
   <key>EnvironmentVariables</key>

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from pathlib import Path
 import subprocess
 
 
@@ -100,15 +101,28 @@ def resolve_host(requested: str | None = None) -> tuple[str, str]:
 
 
 def run(host: str | None = None, port: int = 8787, reload: bool = False) -> int:
+    """Serve the fleet view.
+
+    `reload` is how this deploys. Four times in one day the dashboard served
+    code hours older than the checkout — a run reported stalled because the
+    process predated the fix, the approval banner missing for the same reason,
+    a question mis-transcribed after the transcription had been fixed. Every
+    time the remedy was "restart it by hand", which is not a remedy, it is a
+    thing to forget.
+
+    Watching only the package: editing docs or tests should not bounce a
+    server someone is looking at.
+    """
     import uvicorn
 
     bind, why = resolve_host(host)
-    print(f"ris-dash: http://{bind}:{port}  ({why})")
+    print(f"ris-dash: http://{bind}:{port}  ({why}){'  [reloading]' if reload else ''}")
     uvicorn.run(
         "ristretto.dash.app:app",
         host=bind,
         port=port,
         reload=reload,
+        reload_dirs=[str(Path(__file__).resolve().parents[1])] if reload else None,
         log_level="warning",
         access_log=False,
     )
