@@ -151,6 +151,10 @@
   }
   .banner.good { color: var(--running); }
   .banner.bad  { color: var(--failed); }
+  .build {
+    font-family: var(--mono); font-size: 11px; color: var(--ink-faint);
+    margin: 40px 0 0; padding-top: 12px; border-top: 1px solid var(--hairline);
+  }
   .note {
     font-size: 13px; color: var(--ink-faint); border-top: 1px solid var(--hairline);
     margin-top: 32px; padding-top: 14px;
@@ -192,6 +196,9 @@
     {% block counts %}{% endblock %}
   </header>
   {% block content %}{% endblock %}
+  <p class="build">
+    {{ build.commit }}{% if build.dirty %} +local{% endif %} · up {{ build.uptime }}
+  </p>
 </div>
 {% block script %}{% endblock %}
 </body>

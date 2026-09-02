@@ -283,3 +283,36 @@ def grouped(runs: list[Run]) -> dict[str, list[Run]]:
         ),
     )
     return {name: buckets[name] for name in order}
+
+
+# When this process started and what it was built from. A long-running server
+# quietly serving month-old code is its own kind of outage: the fleet view
+# reported a live run as stalled for an hour because the process predated the
+# fix. Stamped once at import — the answer cannot change without a restart,
+# which is exactly the point.
+STARTED_AT = int(time.time())
+
+
+def build_stamp() -> dict[str, str | bool]:
+    """What this process is running, for the footer."""
+    repo = Path(__file__).resolve().parents[2]
+    commit, dirty = "unknown", False
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, check=False, timeout=5,
+        )
+        if result.returncode == 0:
+            commit = result.stdout.strip() or "unknown"
+        status = subprocess.run(
+            ["git", "-C", str(repo), "status", "--porcelain"],
+            capture_output=True, text=True, check=False, timeout=5,
+        )
+        dirty = bool(status.stdout.strip())
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return {
+        "commit": commit,
+        "dirty": dirty,
+        "uptime": humanise(int(time.time()) - STARTED_AT) or "0s",
+    }

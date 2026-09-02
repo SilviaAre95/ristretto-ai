@@ -57,6 +57,7 @@ def _snapshot(show_all: bool = False) -> dict[str, Any]:
         # A flow stopped waiting on a person is the one thing that must not
         # need drilling into a task page to notice.
         "waiting": approvals.pending(),
+        "build": data.build_stamp(),
     }
 
 
@@ -86,6 +87,7 @@ def task(request: Request, task_id: str, ok: str | None = None, failed: str | No
             "comments": detail.get("comments") or [],
             "timeline": list(reversed(recorded)),
             "waiting": waiting,
+            "build": data.build_stamp(),
             "ok": ok,
             "failed": failed,
         },

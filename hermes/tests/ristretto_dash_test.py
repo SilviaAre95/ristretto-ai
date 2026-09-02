@@ -478,3 +478,28 @@ class LinkHostTests(unittest.TestCase):
     def test_tailscale_being_down_is_not_fatal(self) -> None:
         with mock.patch.object(serve.shutil, "which", return_value=None):
             self.assertIsNone(serve.tailnet_name())
+
+
+class BuildStampTests(unittest.TestCase):
+    """A long-running server quietly on old code is its own kind of outage.
+
+    The fleet view called a live run stalled for an hour because the process
+    predated the fix, then rendered without the approval banner for the same
+    reason. Both were invisible: the page looked fine.
+    """
+
+    def test_it_reports_a_commit_and_uptime(self) -> None:
+        stamp = data.build_stamp()
+        self.assertIn("commit", stamp)
+        self.assertIn("uptime", stamp)
+
+    def test_an_unavailable_git_is_not_fatal(self) -> None:
+        with mock.patch.object(data.subprocess, "run", side_effect=OSError("no git")):
+            stamp = data.build_stamp()
+        self.assertEqual(stamp["commit"], "unknown")
+        self.assertFalse(stamp["dirty"])
+
+    def test_local_edits_are_flagged(self) -> None:
+        with mock.patch.object(data.subprocess, "run") as run:
+            run.return_value = subprocess.CompletedProcess([], 0, "abc1234\n M file.py\n", "")
+            self.assertTrue(data.build_stamp()["dirty"])
