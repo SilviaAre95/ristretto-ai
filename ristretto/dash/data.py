@@ -293,8 +293,8 @@ def grouped(runs: list[Run]) -> dict[str, list[Run]]:
 STARTED_AT = int(time.time())
 
 
-def build_stamp() -> dict[str, str | bool]:
-    """What this process is running, for the footer."""
+def _read_commit() -> tuple[str, bool]:
+    """The checkout as it stands right now."""
     repo = Path(__file__).resolve().parents[2]
     commit, dirty = "unknown", False
     try:
@@ -311,8 +311,26 @@ def build_stamp() -> dict[str, str | bool]:
         dirty = bool(status.stdout.strip())
     except (OSError, subprocess.SubprocessError):
         pass
+    return commit, dirty
+
+
+# Stamped once, at import, alongside STARTED_AT. Read per request it was
+# worse than useless: it reported whatever the checkout says *now*, so a
+# process running three-hour-old code displayed the newest commit and looked
+# current. The whole point of the stamp is to catch that, and it could not.
+LOADED_COMMIT, LOADED_DIRTY = _read_commit()
+
+
+def build_stamp() -> dict[str, str | bool]:
+    """What this process is running — not what the checkout says today."""
+    current, _ = _read_commit()
     return {
-        "commit": commit,
-        "dirty": dirty,
+        "commit": LOADED_COMMIT,
+        "dirty": LOADED_DIRTY,
         "uptime": humanise(int(time.time()) - STARTED_AT) or "0s",
+        # A running process older than the checkout is the failure this
+        # exists to surface, so it is stated rather than left to be inferred
+        # from two hex strings.
+        "stale": current != LOADED_COMMIT and current != "unknown",
+        "current": current,
     }

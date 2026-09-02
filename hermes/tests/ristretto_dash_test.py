@@ -496,21 +496,46 @@ class BuildStampTests(unittest.TestCase):
     reason. Both were invisible: the page looked fine.
     """
 
+    def test_it_reports_the_commit_it_loaded_not_the_one_checked_out(self) -> None:
+        # The stamp existed to catch a stale process and could not: it shelled
+        # git per request, so a server running three-hour-old code displayed
+        # the newest commit and looked current.
+        with mock.patch.object(data, "_read_commit", return_value=("ffffff1", False)):
+            stamp = data.build_stamp()
+        self.assertEqual(stamp["commit"], data.LOADED_COMMIT)
+        self.assertNotEqual(stamp["commit"], "ffffff1")
+
+    def test_a_process_older_than_the_checkout_says_so(self) -> None:
+        with mock.patch.object(data, "_read_commit", return_value=("ffffff1", False)):
+            self.assertTrue(data.build_stamp()["stale"])
+
+    def test_a_current_process_is_not_flagged(self) -> None:
+        with mock.patch.object(data, "_read_commit", return_value=(data.LOADED_COMMIT, False)):
+            self.assertFalse(data.build_stamp()["stale"])
+
+    def test_an_unreadable_checkout_is_not_called_stale(self) -> None:
+        # No git is not the same as out of date, and crying stale forever
+        # teaches people to ignore the line.
+        with mock.patch.object(data, "_read_commit", return_value=("unknown", False)):
+            self.assertFalse(data.build_stamp()["stale"])
+
     def test_it_reports_a_commit_and_uptime(self) -> None:
         stamp = data.build_stamp()
         self.assertIn("commit", stamp)
         self.assertIn("uptime", stamp)
 
     def test_an_unavailable_git_is_not_fatal(self) -> None:
+        # The property moved with the code: the commit is stamped once at
+        # import, so this is now about reading the checkout, not the footer.
         with mock.patch.object(data.subprocess, "run", side_effect=OSError("no git")):
-            stamp = data.build_stamp()
-        self.assertEqual(stamp["commit"], "unknown")
-        self.assertFalse(stamp["dirty"])
+            commit, dirty = data._read_commit()
+        self.assertEqual(commit, "unknown")
+        self.assertFalse(dirty)
 
     def test_local_edits_are_flagged(self) -> None:
         with mock.patch.object(data.subprocess, "run") as run:
             run.return_value = subprocess.CompletedProcess([], 0, "abc1234\n M file.py\n", "")
-            self.assertTrue(data.build_stamp()["dirty"])
+            self.assertTrue(data._read_commit()[1])
 
 
 class LinkAndCopyTests(unittest.TestCase):
