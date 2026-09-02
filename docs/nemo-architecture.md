@@ -31,15 +31,18 @@ view is a fleet of Hermes kanban tasks; the event spine records stages; the
 launch surface starts flows. An execution detail — Hermes' internal queue —
 was promoted to the main view because it was the thing that existed.
 
-What Nemo needs is organised around **your work**, which lives in Linear and
-in the vault. A run is something Nemo *does about* a piece of work, the way
-sending a Slack message is. It is not the subject.
+What Nemo needs is organised around **your work**, which lives in a work
+source and in the vault. (A work source is whatever tracks your tasks,
+connected over MCP — Linear here, but the design must not care.)
+
+A run is something Nemo *does about* a piece of work, the way sending a Slack
+message is. It is not the subject.
 
 Concretely, that inverts three things:
 
 | | today | Nemo |
 |---|---|---|
-| The board | Hermes kanban, shown as "the fleet" | Linear. Hermes' queue becomes invisible plumbing |
+| The board | Hermes kanban, shown as "the fleet" | your work source over MCP. Hermes' queue becomes invisible plumbing |
 | The memory | none — every message is a fresh turn | the Obsidian vault |
 | The centre | a run | a conversation with continuity |
 
@@ -56,8 +59,8 @@ Concretely, that inverts three things:
             └────────────┬────────────┘
                          │ tools
    ┌──────────┬──────────┼──────────┬───────────┬──────────┐
- Linear    Obsidian    Flows    Approvals    Fleet      Slack
-the work    memory    execute     gate       status     reach
+ work src  Obsidian    Flows    Approvals    Fleet      Slack
+  (MCP)     memory     execute     gate       status     reach
 ```
 
 **Surfaces are views of one conversation, not three assistants.** The desktop
@@ -97,10 +100,77 @@ that you confirm by voice-then-click, from the dashboard, or from Slack.
 Nothing mutating commits on transcription alone. That rule was settled in
 `docs/nemo-feasibility.md` and it holds here.
 
+## It is something a stranger installs
+
+Nemo is a repository you download and run on your own Mac. That is a product
+decision with architectural teeth.
+
+### Local by default, with one marked edge
+
+Everything stays on the machine: memory, speech, the event log, the board
+mirror, the conversation. The **only** outbound traffic is a model call, and
+only when the user has chosen a hosted model. A user who runs local models
+sends nothing anywhere.
+
+This is not a privacy feature bolted on. It is why speech is mlx-whisper and
+not an API, why memory is a vault on disk and not a service, and why the
+dashboard binds the tailnet or loopback and refuses `0.0.0.0`. The boundary
+should stay auditable in one place: if a reader cannot tell from the code
+what leaves the machine, that is a bug.
+
+### Requirements
+
+**Obsidian, required.** Memory is a vault. Without one there is nowhere for
+Nemo to remember anything, and a database would trade an inspectable,
+portable memory for an opaque one.
+
+**A project management tool, optional and pluggable, over MCP.** Nemo needs to
+know what is on your plate; it does not need that to be Linear. Linear is
+this instance's choice, connected like any other MCP server. Nemo should work
+with Jira, with GitHub Issues, or with nothing but the vault.
+
+**A model.** Ollama for local, or an API key for hosted. The tiers already
+express this choice for coding flows; the assistant loop needs the same
+switch.
+
+### What that costs us today
+
+Two things in this repository contradict the above and need fixing before
+anyone else can use it.
+
+**Linear is hardcoded.** `linear_team` is a first-class configuration key, a
+CLI flag, and a reference in `voice.py`. It should be one instance of a
+configured MCP work source, not a field in the schema.
+
+**Hermes is a prerequisite.** `make install-hermes` is the main install path,
+so a stranger must install a third-party agent runtime before Nemo runs at
+all. That is a heavy ask for a personal assistant, and it is the layer that
+failed silently three times on the day this was written. Local-first and
+easy-to-install both argue the same way: the assistant should not need it.
+
+**A stranger's vault has no `_agent/` rules.** This vault has a bespoke
+folder map, frontmatter schema and write instructions, and Nemo reads them.
+A fresh Obsidian vault has none of that. Nemo must either bring its own
+convention and scaffold it on first run, or adapt to what it finds — and
+"assume the layout I was developed against" is not an option. This is
+undecided and needs deciding before phase 1 ships.
+
+### Setup, as it must become
+
+`make setup` should take someone from a cloned repository to a working Nemo:
+check macOS and the toolchain, find or ask for the vault, scaffold the memory
+convention inside it, offer local or hosted models, optionally connect a work
+source over MCP, build and install the desktop face, install the dashboard
+service, and then tell the user plainly what — if anything — will leave their
+machine.
+
+It should be honest when it cannot finish. Today's installer already refuses
+rather than guessing when a path collides; the same standard applies here.
+
 ## Risks worth naming now
 
-**Prompt injection gets sharper.** Nemo will read Linear issue text, vault
-notes and repository content, and will hold tools that spend money and write
+**Prompt injection gets sharper.** Nemo will read issue text, vault notes and
+repository content, and will hold tools that spend money and write
 files. Everything it reads is data, not instruction. The approval gate is what
 makes this survivable, so it must not be weakened for convenience — the
 temptation will be to auto-approve "safe" things, and today already showed
@@ -116,6 +186,11 @@ dispatcher and Slack delivery are all Hermes. It is not worth replacing now,
 but nothing new should depend on it, and the assistant should be built
 outside it.
 
+**Generalising the work source is not cosmetic.** Removing `linear_team`
+touches configuration, the CLI, the voice vocabulary and anything that assumes
+an issue-key shape. Done badly it becomes a plugin system nobody asked for;
+done well it is one configured MCP server and a small interface.
+
 **Naming churn is not free.** The repository, package, service labels, config
 keys and persona all say Ristretto. Renaming touches everything and collides
 with in-flight work. Do it deliberately and last.
@@ -123,15 +198,15 @@ with in-flight work. Do it deliberately and last.
 ## Plan
 
 **1 — Nemo answers "what do I have on my table?" with memory.**
-Its own agent loop, replacing the proxy. Tools: Linear (read), vault
-(read/write), fleet (read). Conversation persists and is shared across the
+Its own agent loop, replacing the proxy. Tools: the work source (read), the vault
+(read/write), the fleet (read). Conversation persists and is shared across the
 desktop face, the dashboard and Slack. This is the phase that makes Nemo an
 assistant rather than a status endpoint.
 
 **2 — "Let's kick this off."**
 Intent to proposal to commit, on the existing approval store. Nemo can launch
-a flow, stop one, and answer a gate — always as something you confirm. Linear
-is updated as work moves.
+a flow, stop one, and answer a gate — always as something you confirm. The
+work source is updated as work moves.
 
 **3 — The masterboard.**
 Reframe the dashboard from a fleet of runs to: what is on my table, what is
