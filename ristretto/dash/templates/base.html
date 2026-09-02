@@ -111,6 +111,29 @@
   #answer.waiting { color: var(--ink-faint); font-family: var(--mono); font-size: 13px; }
   #answer.bad { color: var(--failed); }
   .hint { font-size: 12.5px; color: var(--ink-faint); margin: 8px 0 0; }
+  /* A blocked flow is the only thing here that is costing time while you
+     read it, so it gets the one saturated accent on the page. */
+  .waiting-banner, .approval {
+    border: 1px solid var(--stalled); border-left-width: 3px;
+    border-radius: 6px; padding: 12px 14px; margin: 16px 0;
+    background: var(--surface);
+  }
+  .waiting-banner .asks, .approval .asks {
+    margin: 0 0 8px; font-weight: 600; color: var(--stalled);
+  }
+  .approval .asks { font-weight: 400; color: var(--ink); }
+  .approval code, .waiting-row code {
+    font-family: var(--mono); font-size: 13px; color: var(--ink);
+    overflow-wrap: anywhere;
+  }
+  .approval .meta, .waiting-row .meta { color: var(--ink-faint); font-size: 12px; }
+  .approval .meta { margin: 6px 0 0; }
+  .waiting-row {
+    display: flex; justify-content: space-between; gap: 12px;
+    padding: 6px 0; text-decoration: none; border-top: 1px solid var(--hairline);
+  }
+  .waiting-row:hover code { color: var(--ris); }
+
   .actions { display: flex; gap: 10px; margin: 18px 0 4px; }
   .actions form { margin: 0; }
   .actions button {
@@ -128,6 +151,10 @@
   }
   .banner.good { color: var(--running); }
   .banner.bad  { color: var(--failed); }
+  .build {
+    font-family: var(--mono); font-size: 11px; color: var(--ink-faint);
+    margin: 40px 0 0; padding-top: 12px; border-top: 1px solid var(--hairline);
+  }
   .note {
     font-size: 13px; color: var(--ink-faint); border-top: 1px solid var(--hairline);
     margin-top: 32px; padding-top: 14px;
@@ -169,6 +196,9 @@
     {% block counts %}{% endblock %}
   </header>
   {% block content %}{% endblock %}
+  <p class="build">
+    {{ build.commit }}{% if build.dirty %} +local{% endif %} · up {{ build.uptime }}
+  </p>
 </div>
 {% block script %}{% endblock %}
 </body>

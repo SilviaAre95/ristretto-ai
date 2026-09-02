@@ -13,6 +13,25 @@
   {% if ok %}<p class="banner good">{{ ok }}</p>{% endif %}
   {% if failed %}<p class="banner bad">{{ failed }}</p>{% endif %}
 
+  {% if waiting %}
+    <div class="approvals">
+      {% for item in waiting %}
+        <div class="approval">
+          <p class="asks">Waiting on you: <code>{{ item.what }}</code></p>
+          <p class="meta">asked {{ item.requested_at | ago }} · denied automatically in {{ item.minutes_left }}m</p>
+          <div class="actions">
+            <form method="post" action="/approval/{{ item.id }}/approve">
+              <button type="submit">Approve</button>
+            </form>
+            <form method="post" action="/approval/{{ item.id }}/deny">
+              <button class="danger" type="submit">Deny</button>
+            </form>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  {% endif %}
+
   <div class="actions">
     {% if run.status in ("running", "ready", "review") %}
       <form method="post" action="/task/{{ run.task_id }}/stop"

@@ -83,6 +83,21 @@ for skill in durable-dev issue-closeout loop-runner; do
     "$hermes_home/skills/software-development/$skill"
 done
 
+# Linked, not copied, so the answering path cannot drift from the store it
+# writes to. A plugin that disagrees with the CLI about what "approve" means
+# is worse than no plugin.
+mkdir -p "$hermes_home/plugins"
+link_skill \
+  "$repo/hermes/plugins/ris-approvals" \
+  "$hermes_home/plugins/ris-approvals"
+# Linking is not enabling: a discovered plugin sits at "not enabled" and its
+# commands never register, so !ris-approve silently does nothing. Enabling is
+# idempotent and safe to repeat.
+if ! HERMES_HOME="$hermes_home" hermes plugins list 2>/dev/null \
+     | grep -q "ris-approvals.*enabled"; then
+  HERMES_HOME="$hermes_home" hermes plugins enable ris-approvals >/dev/null 2>&1 || true
+fi
+
 install -m 0755 \
   "$repo/hermes/scripts/morning-brief-precheck.py" \
   "$hermes_home/scripts/morning-brief-precheck.py"

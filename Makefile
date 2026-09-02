@@ -1,4 +1,4 @@
-.PHONY: setup install install-hermes install-push-guard update test check public-check doctor
+.PHONY: setup install install-hermes install-push-guard install-dash-service update test check public-check doctor
 
 setup:
 	bash scripts/setup-dev.sh
@@ -36,3 +36,6 @@ doctor:
 	hermes doctor
 	hermes gateway status
 	bash scripts/template-drift.sh
+
+install-dash-service:
+	bash scripts/install-dash-service.sh install

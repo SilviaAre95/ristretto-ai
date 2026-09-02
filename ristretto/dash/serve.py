@@ -9,6 +9,7 @@ the coffee shop wifi" is one absent-minded flag.
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 
@@ -35,6 +36,47 @@ def tailnet_address(timeout: int = 5) -> str | None:
         return None
     first = result.stdout.strip().splitlines()
     return first[0].strip() if first else None
+
+
+def tailnet_name(timeout: int = 5) -> str | None:
+    """This machine's MagicDNS name, if Tailscale is up and has assigned one.
+
+    Links are read on a phone, where a bare 100.x address is both opaque and
+    brittle — it changes if the machine is re-added to the tailnet, and every
+    link already sent then points nowhere. The MagicDNS name survives that.
+    """
+    if shutil.which("tailscale") is None:
+        return None
+    try:
+        result = subprocess.run(
+            ["tailscale", "status", "--json"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        name = json.loads(result.stdout).get("Self", {}).get("DNSName") or ""
+    except (ValueError, AttributeError):
+        return None
+    name = name.strip().rstrip(".")
+    # A hostname with no domain is not resolvable off this machine, so it is
+    # no better than the address it would replace.
+    return name if name and "." in name else None
+
+
+def link_host() -> str:
+    """The host to put in a link someone will open on another device.
+
+    Deliberately separate from the bind address: what this process listens on
+    and what a phone can resolve are different questions, and conflating them
+    is how a link ends up pointing at 127.0.0.1.
+    """
+    return tailnet_name() or tailnet_address() or "127.0.0.1"
 
 
 def resolve_host(requested: str | None = None) -> tuple[str, str]:
