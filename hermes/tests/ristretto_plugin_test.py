@@ -8,6 +8,7 @@ fixed command, and no model sits between the operator's words and the store.
 from __future__ import annotations
 
 import importlib.util
+import re
 import subprocess
 import unittest
 from pathlib import Path
@@ -29,10 +30,28 @@ class CommandTest(unittest.TestCase):
         run = mock.patch.object(subprocess, "run")
         self.run = run.start()
         self.addCleanup(run.stop)
-        self.run.return_value = subprocess.CompletedProcess([], 0, "a1b2c3: allow", "")
+        # The handler asks the store what is pending before deciding whether
+        # the first word is an id, so the stub has to answer both questions
+        # the way the real CLI does.
+        self.pending_listing = (
+            "a1b2c3  t_a1b2c3d4  Bash: git push --force  (30m left)\n"
+            "slack-live-1  t_6ac82896  Bash: npm run db:migrate  (59m left)"
+        )
+
+        def fake(argv, **kwargs):
+            if "pending" in argv:
+                return subprocess.CompletedProcess(argv, 0, self.pending_listing, "")
+            return subprocess.CompletedProcess(argv, 0, "a1b2c3: allow", "")
+
+        self.run.side_effect = fake
 
     def argv(self) -> list[str]:
-        return self.run.call_args.args[0]
+        """The deciding call — the pending lookup runs first and is not it."""
+        for call in reversed(self.run.call_args_list):
+            argv = call.args[0]
+            if "pending" not in argv:
+                return argv
+        raise AssertionError("no deciding call was made")
 
     def test_a_bare_approve_names_no_request(self) -> None:
         # The CLI resolves it when exactly one is pending and refuses when
@@ -89,9 +108,45 @@ class RegistrationTest(unittest.TestCase):
         # The gate exists because a person is being asked. An agent that also
         # reads issue text and code comments must not be the one answering.
         source = (ROOT / "hermes" / "plugins" / "ris-approvals" / "__init__.py").read_text()
-        for forbidden in ("hermes send", "claude", "prompt", "llm", "agent("):
-            self.assertNotIn(forbidden, source.lower(), f"{forbidden} in the decision path")
+        # Whole words, not substrings: the first version of this test matched
+        # "llm" inside "fullmatch" and failed on a regex call.
+        for forbidden in (
+            r"\bhermes\s+send\b", r"\bclaude\b", r"\bllm\b",
+            r"\bopenai\b", r"\brun_agent\b", r"\bchat_completion\b",
+        ):
+            self.assertIsNone(
+                re.search(forbidden, source, re.IGNORECASE),
+                f"{forbidden} appears in the decision path",
+            )
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ArgumentParsingTest(CommandTest):
+    """What a chat client actually sends is not what someone typed."""
+
+    def test_client_boilerplate_is_not_taken_for_an_id(self) -> None:
+        # Slack delivered "!ris-approve *Sent using* Claude ...", so "*Sent"
+        # became the request id and the reply read "no such approval".
+        plugin.approve("*Sent using* Claude")
+        argv = self.argv()
+        self.assertNotIn("*Sent", argv)
+        self.assertEqual(argv[1:3], ["approvals", "approve"])
+
+    def test_a_real_id_is_still_passed(self) -> None:
+        plugin.approve("slack-live-1")
+        self.assertIn("slack-live-1", self.argv())
+
+    def test_prose_after_a_deny_becomes_the_reason(self) -> None:
+        plugin.deny("not right now")
+        argv = self.argv()
+        self.assertEqual(argv[argv.index("--reason") + 1], "not right now")
+        self.assertNotIn("not", argv[:4])
+
+    def test_an_id_then_prose_splits_correctly(self) -> None:
+        plugin.deny("slack-live-1 not on a friday")
+        argv = self.argv()
+        self.assertIn("slack-live-1", argv)
+        self.assertEqual(argv[argv.index("--reason") + 1], "not on a friday")

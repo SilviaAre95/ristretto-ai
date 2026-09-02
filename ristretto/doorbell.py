@@ -112,9 +112,17 @@ def compose(event: Mapping[str, Any], base_url: str) -> str:
     if kind == "control.stop":
         return f"{icon} {issue} — stopped from the dashboard\n{base_url}/task/{task}"
     if kind == "awaiting.approval":
+        # Say how to answer, and say DM: a reply in a channel is not
+        # delivered to the bot unless it @mentions it, and a mention puts
+        # the mention first so the command is never recognised. A DM is the
+        # only form that reaches the command dispatcher.
+        request_id = str(payload.get("id", "")).strip()
+        answer = f" {request_id}" if request_id else ""
+        how = f"!ris-approve{answer} · !ris-deny{answer} <reason>"
         return (
             f"{icon} {issue} — waiting on you: {brief(payload.get('what', 'approval'))}"
             f"\n{base_url}/task/{task}"
+            f"\nOr DM me: {how}"
         )
     if kind == "preflight.failed":
         # Not a run, so there is no task page to link to — the repo cannot
