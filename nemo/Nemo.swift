@@ -65,10 +65,12 @@ final class Ris {
         request.setValue(contentType, forHTTPHeaderField: "Content-Type")
         // The dashboard's mutating routes are same-origin only. A desktop
         // client is not a browser, so it says who it is the way a page would.
-        if let host = URL(string: Config.dashURL)?.host {
-            request.setValue(Config.dashURL, forHTTPHeaderField: "Origin")
-            request.setValue(host, forHTTPHeaderField: "Host")
-        }
+        //
+        // Origin only. Setting Host by hand looked helpful and was the bug:
+        // URL.host drops the port, so the header said "...ts.net" while the
+        // Origin implied "...ts.net:8787", the server compared the two and
+        // refused its own client. URLSession sets Host correctly on its own.
+        request.setValue(Config.dashURL, forHTTPHeaderField: "Origin")
         request.timeoutInterval = 180
         return request
     }
