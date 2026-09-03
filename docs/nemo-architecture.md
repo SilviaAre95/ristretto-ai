@@ -5,6 +5,9 @@ Supersedes the framing in `docs/project-status.md`, which describes a coding
 harness. The wayworks half of this plan is in that repository at
 `docs/plans/nemo-seam.md`.
 
+The ordered work is in `docs/nemo-roadmap.md` — start there. This
+document is the reasoning behind it.
+
 Ristretto is Nemo. One product, one name. What changed is not the label but
 the purpose, and the purpose invalidates part of the architecture.
 
