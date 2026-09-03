@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Ris — {{ run.issue_key if run else task_id }}{% endblock %}
+{% block title %}Nemo — {{ run.issue_key if run else task_id }}{% endblock %}
 
 {% block content %}
 <a class="back" href="/">← fleet</a>
@@ -92,7 +92,7 @@
     {% if run.failure %}<tr><th>Failure</th><td style="color:var(--failed)">{{ run.failure }}</td></tr>{% endif %}
   </table>
 
-  <h2 class="project">Ris pipeline events</h2>
+  <h2 class="project">Nemo pipeline events</h2>
   {% if not timeline %}
     <p class="note" style="border:0; margin:0; padding:0">
       Nothing recorded. Runs from before the event spine, or a classic run that
