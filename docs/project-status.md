@@ -1,5 +1,12 @@
 # Project Status
 
+> **Superseded in part.** `docs/nemo-architecture.md` re-frames this project:
+> Ristretto is Nemo, a personal assistant that can write code, rather than a
+> coding harness with a chat surface. The workshop described below is intact
+> and carried forward; the centre of the system moves from runs to
+> conversation, Linear and the vault.
+
+
 Ristretto is preparing its first public `0.1.0` release.
 
 ## Implemented

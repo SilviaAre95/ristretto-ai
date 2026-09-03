@@ -1,5 +1,9 @@
 # Nemo — feasibility check
 
+> Superseded by `docs/nemo-architecture.md` for scope and purpose. This note
+> remains the record of what was verified about voice, presence and authority,
+> and its conclusions still hold.
+
 **Status:** v1 built · **Created:** 2026-09-02 · **Owner's note, reviewed**
 
 Nemo is the working name for the embodied version of Ristretto: an
