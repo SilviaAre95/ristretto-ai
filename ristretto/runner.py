@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from . import broker, events
+from .seam import VERIFY_GATE
 from .config import ConfigError, load_config, resolved_flow, resolved_provider
 
 
@@ -299,26 +300,26 @@ def runner_command(
 
 
 def verify_gate_digest(cwd: Path) -> str:
-    gate = cwd / ".cc-verify"
+    gate = cwd / VERIFY_GATE
     if not gate.is_file():
-        raise FlowError("verify stage requires .cc-verify in the repository root")
+        raise FlowError(f"verify stage requires {VERIFY_GATE} in the repository root")
     content = gate.read_bytes()
     if not content.strip():
-        raise FlowError(".cc-verify is empty")
+        raise FlowError(f"{VERIFY_GATE} is empty")
     return hashlib.sha256(content).hexdigest()
 
 
 def verify_command(cwd: Path, expected_digest: str) -> list[str]:
-    gate = cwd / ".cc-verify"
+    gate = cwd / VERIFY_GATE
     if not gate.is_file():
-        raise FlowError("verify stage requires .cc-verify in the repository root")
+        raise FlowError(f"verify stage requires {VERIFY_GATE} in the repository root")
     content = gate.read_bytes()
     actual_digest = hashlib.sha256(content).hexdigest()
     if actual_digest != expected_digest:
-        raise FlowError(".cc-verify changed after flow start; refusing to execute it")
+        raise FlowError(f"{VERIFY_GATE} changed after flow start; refusing to execute it")
     command = content.decode("utf-8").strip()
     if not command:
-        raise FlowError(".cc-verify is empty")
+        raise FlowError(f"{VERIFY_GATE} is empty")
     return ["bash", "-lc", command]
 
 
