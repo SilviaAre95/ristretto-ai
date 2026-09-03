@@ -20,7 +20,7 @@ import tempfile
 from pathlib import Path
 from typing import NamedTuple
 
-GATE_FILES = (".cc-dev.yaml", ".cc-verify")
+from .seam import GATE_FILES, VERIFY_GATE  # the wayworks convention, in one place
 
 
 class Finding(NamedTuple):
@@ -96,8 +96,8 @@ def deep_findings(repo: Path, base: str = "main", timeout: int = 1800) -> list[F
     ref = resolve_ref(repo, base)
     if ref is None:
         return [Finding("ERROR", f"cannot resolve base branch {base}")]
-    if not tracked_in_base(repo, base, ".cc-verify"):
-        return [Finding("ERROR", f"cannot run the gate: .cc-verify is not committed on {ref}")]
+    if not tracked_in_base(repo, base, VERIFY_GATE):
+        return [Finding("ERROR", f"cannot run the gate: {VERIFY_GATE} is not committed on {ref}")]
     with tempfile.TemporaryDirectory(prefix="ris-preflight-") as scratch:
         clone = Path(scratch) / "repo"
         # A worktree, not a clone: it is exactly the mechanism the loop uses,
@@ -131,7 +131,7 @@ def _gate_findings(clone: Path, ref: str, timeout: int) -> list[Finding]:
             ]
         findings.append(Finding("OK", "dependencies installed from a clean checkout"))
     gate = subprocess.run(
-        ["bash", str(clone / ".cc-verify")],
+        ["bash", str(clone / VERIFY_GATE)],
         cwd=clone,
         capture_output=True,
         text=True,
