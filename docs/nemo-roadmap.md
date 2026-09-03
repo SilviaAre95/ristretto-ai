@@ -84,9 +84,32 @@ Answer it — in Slack or to the face — and have it act.
   **scaffold a Linear issue first**, then dispatch — `mcp_linear_save_issue`
   already exists)
 - Same conversation across the face, the dashboard, and Slack
-- Launch-from-Slack (Slack can answer today but not start)
-- **Decide first:** which model runs the loop — local brain or Claude. A wrong
-  tool call is worse than a mediocre sentence.
+- ~~Launch-from-Slack~~ ✅ done (`!ris-start`) — the deterministic half of the
+  reply. What remains below is the conversational half.
+- **Decided: v1 runs on Claude, built provider-configurable.** The loop's hard
+  skill is reliable tool-calling — emitting a correct `launch(...)` and not
+  hallucinating its arguments — which is where the local brain is weakest and
+  Claude is proven, and where a wrong call spends money or starts a run with no
+  reviewer to catch it (unlike the tiers). Claude first isolates the variable:
+  a bug is then the loop design, not the model fumbling a call.
+
+  **Guardrail — build it as a configured provider, never hardcoded.** The loop
+  reads `assistant_provider` from config; Claude is the value, not a constant.
+  The providers already exist (`claude`, `local-brain`), so this costs nothing
+  now and makes the local switch one line later instead of a rewrite. Do this
+  from the first commit.
+
+  **Sequencing, so "Claude for v1" doesn't become permanent by accident:**
+  ship on Claude → get the loop correct → swap `assistant_provider` to
+  `local-brain` and find out what breaks. Never dogfooding local is how the
+  privacy pitch quietly rots.
+
+  **What running on Claude means, stated plainly:** the assistant touches the
+  most personal context in the system — the vault, the priorities, the
+  conversation itself. On Claude, all of that goes to Anthropic. For the owner
+  testing v1 that is a fine trade; for the downloadable product, local stays
+  the documented default. The claim is "it *can* run entirely local", not "it
+  does for everyone".
 
 ### Phase 2 — remember (highest value, independent)
 
