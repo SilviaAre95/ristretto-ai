@@ -7,7 +7,7 @@
 [![Platform](https://img.shields.io/badge/platform-macOS-lightgrey?logo=apple)](docs/development.md)
 
 **Ristretto ("Ris") is a configurable, always-on personal operations
-assistant** built on the open-source Hermes Agent runtime. Ris talks in Slack,
+assistant** built on the open-source Hermes Agent runtime. Nemo talks in Slack,
 tracks configured work in Linear, runs supervised coding tasks in durable
 workers, and requests approval before risky actions.
 

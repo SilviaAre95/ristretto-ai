@@ -2,7 +2,7 @@
 //
 // A small window that floats above every application and every Space, so it
 // is there whatever you are looking at. Hold the mouse on it to talk; let go
-// and it writes back what it heard and what Ris said.
+// and it writes back what it heard and what Nemo said.
 //
 // Three deliberate choices:
 //
@@ -15,7 +15,7 @@
 // video can be recorded. It also means nobody has to trust a voice-activity
 // detector.
 //
-// It only ever asks Ris. Nemo has no tools and no board access of its own; it
+// It only ever asks Nemo. Nemo has no tools and no board access of its own; it
 // posts to the dashboard's /voice and /chat and renders the answer. Anything
 // that changes the world still happens behind the approval gate.
 
@@ -46,16 +46,16 @@ struct Config {
     static let watchInterval: TimeInterval = 20
 }
 
-// MARK: - Talking to Ris
+// MARK: - Talking to Nemo
 
 /// Swift's Result needs a Failure conforming to Error, and what comes back
-/// from Ris is a sentence, not an exception. This says exactly that.
+/// from Nemo is a sentence, not an exception. This says exactly that.
 enum Answer {
     case said(String)
     case failed(String)
 }
 
-final class Ris {
+final class Backend {
     private let session = URLSession(configuration: .default)
 
     private func request(_ path: String, body: Data, contentType: String) -> URLRequest {
@@ -94,7 +94,7 @@ final class Ris {
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
             else { return done(.failed("could not read the reply")) }
             if let text = json["text"] as? String, !text.isEmpty { return done(.said(text)) }
-            done(.failed("Ris said nothing"))
+            done(.failed("Nemo said nothing"))
         }.resume()
     }
 
@@ -216,7 +216,7 @@ final class Nemo: NSObject, NSApplicationDelegate {
     private var panel: NSPanel!
     private var face: FaceView!
     private var bubble: NSTextField!
-    private let ris = Ris()
+    private let backend = Backend()
     private let ear = Ear()
     private var timer: Timer?
 
@@ -263,7 +263,7 @@ final class Nemo: NSObject, NSApplicationDelegate {
 
         say("Hold to talk.")
         timer = Timer.scheduledTimer(withTimeInterval: Config.watchInterval, repeats: true) { [weak self] _ in
-            self?.ris.waiting { count in DispatchQueue.main.async { self?.face.waiting = count } }
+            self?.backend.waiting { count in DispatchQueue.main.async { self?.face.waiting = count } }
         }
         timer?.fire()
     }
@@ -280,7 +280,7 @@ final class Nemo: NSObject, NSApplicationDelegate {
         face.listening = false
         guard let audio = ear.stop() else { return say("That was too short to hear.") }
         face.thinking = true
-        ris.hear(audio) { [weak self] heard in
+        backend.hear(audio) { [weak self] heard in
             DispatchQueue.main.async {
                 switch heard {
                 case .failed(let why):
@@ -291,7 +291,7 @@ final class Nemo: NSObject, NSApplicationDelegate {
                     // transcription should be obvious immediately rather than
                     // explaining a strange answer afterwards.
                     self?.say("“\(text)”\n\n…")
-                    self?.ris.ask(text) { reply in
+                    self?.backend.ask(text) { reply in
                         DispatchQueue.main.async {
                             self?.face.thinking = false
                             switch reply {

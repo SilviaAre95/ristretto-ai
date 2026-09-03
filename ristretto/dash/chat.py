@@ -1,10 +1,10 @@
-"""Ask Ris about the fleet, from the fleet view.
+"""Ask Nemo about the fleet, from the fleet view.
 
-Ris already exists — persona, memory, tools — and answers on Slack and the
+Nemo already exists — persona, memory, tools — and answers on Slack and the
 CLI. This is the same agent reached from the dashboard, with two deliberate
 narrowings.
 
-**Tools are restricted.** Ris normally has terminal, file, code execution and
+**Tools are restricted.** Nemo normally has terminal, file, code execution and
 delegation. Exposed unmodified on a page with no login, a chat box is remote
 code execution over HTTP for anyone on the tailnet: asked to run a shell
 command, the unrestricted agent runs it and reports the output. Here it is
@@ -12,7 +12,7 @@ invoked with a minimal toolset and answers from context instead. Widening
 this is a one-line change to TOOLSETS, and should be a deliberate one.
 
 **Context is injected rather than fetched.** The dashboard already knows the
-fleet, so it hands Ris a summary instead of granting the tools to go and
+fleet, so it hands Nemo a summary instead of granting the tools to go and
 look. Fewer capabilities, better answers, and the question "why did XARI-33
 stall" works without the user naming a task id.
 """
@@ -78,7 +78,7 @@ def fleet_context(limit: int = 12) -> str:
 
 
 def ask(question: str, timeout: int = TIMEOUT_SECONDS) -> Reply:
-    """Put a question to Ris with the fleet as context and no dangerous tools."""
+    """Put a question to Nemo with the fleet as context and no dangerous tools."""
     question = (question or "").strip()
     if not question:
         return Reply(False, "Ask something first.")
@@ -94,11 +94,11 @@ def ask(question: str, timeout: int = TIMEOUT_SECONDS) -> Reply:
             timeout=timeout,
         )
     except subprocess.TimeoutExpired:
-        return Reply(False, f"Ris did not answer within {timeout}s.")
+        return Reply(False, f"Nemo did not answer within {timeout}s.")
     except (OSError, subprocess.SubprocessError) as exc:
-        return Reply(False, f"Could not reach Ris: {exc}")
+        return Reply(False, f"Could not reach Nemo: {exc}")
     text = (result.stdout or "").strip()
     if result.returncode != 0 and not text:
         detail = (result.stderr or "").strip().splitlines()
-        return Reply(False, " / ".join(detail[-2:]) or f"Ris exited {result.returncode}")
+        return Reply(False, " / ".join(detail[-2:]) or f"Nemo exited {result.returncode}")
     return Reply(True, text or "(no answer)")
