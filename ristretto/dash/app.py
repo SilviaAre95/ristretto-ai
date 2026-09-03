@@ -230,8 +230,16 @@ async def ask_ris(request: Request) -> JSONResponse:
     """
     require_same_origin(request)
     body = await request.json()
-    reply = chat.ask(str(body.get("message", "")))
-    return JSONResponse({"ok": reply.ok, "text": reply.text}, status_code=200 if reply.ok else 400)
+    # Nemo's own loop now, not the Hermes proxy: it calls Nemo's tools and
+    # keeps the conversation. The client hands back the session id from the
+    # previous turn to continue the same conversation.
+    from ..assistant import loop
+    session = str(body.get("session") or "").strip() or None
+    turn = loop.ask(str(body.get("message", "")), session=session)
+    return JSONResponse(
+        {"ok": turn.ok, "text": turn.text, "session": turn.session},
+        status_code=200 if turn.ok else 400,
+    )
 
 
 @app.get("/nemo/state")

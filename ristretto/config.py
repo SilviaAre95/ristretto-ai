@@ -30,6 +30,10 @@ INSTANCE_KEYS = {
     "slack_prs_channel",
     "slack_alerts_channel",
     "knowledge_vault",
+    # Which provider runs Nemo's conversational loop (not the coding tiers).
+    # Claude by default; set to a local provider to keep the assistant on the
+    # machine. See docs/nemo-roadmap.md.
+    "assistant_provider",
 }
 
 
