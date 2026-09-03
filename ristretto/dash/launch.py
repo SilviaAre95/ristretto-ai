@@ -60,6 +60,20 @@ class Outcome(NamedTuple):
     task_id: str = ""
 
 
+def example_key(config: Mapping[str, Any] | None = None) -> str:
+    """An example issue key for messages — the user's own prefix, or neutral.
+
+    Hardcoding one prefix into a tool other people download both confuses a
+    user whose team is ABC and leaks the original owner's team key. The real
+    prefix already lives in config.
+    """
+    if config is not None:
+        team = str((config.get("instance") or {}).get("linear_team") or "").strip()
+        if team:
+            return f"{team}-42"
+    return "ABC-42"
+
+
 def branch_for(issue: str) -> str:
     """The feature branch a run will push.
 
@@ -85,7 +99,7 @@ def validate(
 ) -> tuple[Path | None, str]:
     """Check the request before anything is spent. Returns (repo, error)."""
     if not ISSUE_KEY.fullmatch(issue or ""):
-        return None, f"{issue!r} is not an issue key (expected something like XARI-42)"
+        return None, f"{issue!r} is not an issue key (expected something like {example_key(config)})"
     if flow not in (config.get("flows") or {}):
         known = ", ".join(sorted(config.get("flows") or {}))
         return None, f"unknown flow {flow!r} — configured flows are: {known}"

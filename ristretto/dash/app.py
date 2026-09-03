@@ -120,6 +120,12 @@ def require_same_origin(request: Request) -> None:
 @app.get("/launch", response_class=HTMLResponse)
 def launch_form(request: Request, ok: str | None = None, failed: str | None = None) -> HTMLResponse:
     context = launcher.options()
+    from ..config import load_config
+    try:
+        _cfg, _ = load_config()
+    except Exception:
+        _cfg = None
+    context['example_key'] = launcher.example_key(_cfg)
     context.update(
         {"active": launcher.active_runs(), "ok": ok, "failed": failed, "build": data.build_stamp()}
     )

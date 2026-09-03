@@ -10,7 +10,7 @@ fixed shape and shells the CLI, which owns every guard — preflight, the busy
 check, the branch derivation. A launch is deterministic; only *deciding* what
 to launch wants an agent, and that is a later, larger piece.
 
-`!ris-start XARI-42` — default flow, attended. `!ris-start XARI-42 tier1
+`!ris-start ABC-42` — default flow, attended. `!ris-start ABC-42 tier1
 unattended` — a full run nobody has to watch.
 """
 
@@ -48,7 +48,7 @@ def start(raw_args: str = "") -> str:
 
     tokens = (raw_args or "").split()
     if not tokens:
-        return "Which issue? e.g. !ris-start XARI-42 tier1 unattended"
+        return "Which issue? e.g. !ris-start ABC-42 tier1 unattended"
 
     issue = None
     flow = "tier1"
@@ -68,7 +68,7 @@ def start(raw_args: str = "") -> str:
         # their own trailing text, and a stray word must not block a launch.
 
     if issue is None:
-        return f"No issue key in that. Expected something like XARI-42; got: {raw_args!r}"
+        return f"No issue key in that. Expected an issue key like ABC-42; got: {raw_args!r}"
     if project is None:
         return (
             f"I can't tell which project {issue} is in from Slack. "
