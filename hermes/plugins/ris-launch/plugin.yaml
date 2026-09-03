@@ -1,0 +1,4 @@
+name: ris-launch
+version: 1.0.0
+description: "Start a supervised run from Slack, so work can be kicked off on the go."
+author: "Silvia Arellano"
