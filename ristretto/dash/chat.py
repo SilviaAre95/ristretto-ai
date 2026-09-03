@@ -13,7 +13,7 @@ this is a one-line change to TOOLSETS, and should be a deliberate one.
 
 **Context is injected rather than fetched.** The dashboard already knows the
 fleet, so it hands Nemo a summary instead of granting the tools to go and
-look. Fewer capabilities, better answers, and the question "why did XARI-33
+look. Fewer capabilities, better answers, and the question "why did a run
 stall" works without the user naming a task id.
 """
 

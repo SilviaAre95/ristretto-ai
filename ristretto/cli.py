@@ -95,7 +95,7 @@ def parser() -> argparse.ArgumentParser:
         "launch", help="start a supervised run on a configured project"
     )
     launch_command.add_argument("project", help="configured project name")
-    launch_command.add_argument("issue", help="issue key, e.g. XARI-42")
+    launch_command.add_argument("issue", help="issue key, e.g. ABC-42")
     launch_command.add_argument("--flow", default="tier1", help="coding flow (default: tier1)")
     launch_command.add_argument("--actor", default="cli", help="who is launching")
     launch_command.add_argument(
