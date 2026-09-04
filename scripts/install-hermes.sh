@@ -93,6 +93,9 @@ link_skill \
 link_skill \
   "$repo/hermes/plugins/ris-launch" \
   "$hermes_home/plugins/ris-launch"
+link_skill \
+  "$repo/hermes/plugins/ris-chat" \
+  "$hermes_home/plugins/ris-chat"
 # Linking is not enabling: a discovered plugin sits at "not enabled" and its
 # commands never register, so !ris-approve silently does nothing. Enabling is
 # idempotent and safe to repeat.
@@ -103,6 +106,10 @@ fi
 if ! HERMES_HOME="$hermes_home" hermes plugins list 2>/dev/null \
      | grep -q "ris-launch.*enabled"; then
   HERMES_HOME="$hermes_home" hermes plugins enable ris-launch >/dev/null 2>&1 || true
+fi
+if ! HERMES_HOME="$hermes_home" hermes plugins list 2>/dev/null \
+     | grep -q "ris-chat.*enabled"; then
+  HERMES_HOME="$hermes_home" hermes plugins enable ris-chat >/dev/null 2>&1 || true
 fi
 
 install -m 0755 \

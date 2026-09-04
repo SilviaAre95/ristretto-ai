@@ -65,8 +65,13 @@ def _new_session() -> str:
     return str(uuid.uuid4())
 
 
-def _command(provider: Mapping[str, Any], prompt: str, session: str | None) -> tuple[list[str], dict[str, str], str]:
-    """Returns (command, env, session_id) — the id lets a surface continue."""
+def _command(provider: Mapping[str, Any], prompt: str, session: str | None, is_new: bool = True) -> tuple[list[str], dict[str, str], str]:
+    """Returns (command, env, session_id) — the id lets a surface continue.
+
+    is_new distinguishes a session to create (--session-id) from one to resume
+    (--resume). Resuming a session that was never created fails with "No
+    conversation found with session ID".
+    """
     import os
 
     env = os.environ.copy()
@@ -97,8 +102,8 @@ def _command(provider: Mapping[str, Any], prompt: str, session: str | None) -> t
     command += ["--mcp-config", json.dumps(tool_config())]
     command += ["--allowedTools", *[f"mcp__nemo-tools__{name}" for name in TOOLS]]
     used = session or _new_session()
-    if session:
-        command += ["--resume", session]
+    if session and not is_new:
+        command += ["--resume", used]
     else:
         command += ["--session-id", used, "--append-system-prompt", _system_prompt()]
     command.append(prompt)
@@ -114,22 +119,60 @@ def _system_prompt() -> str:
     )
 
 
-def ask(prompt: str, session: str | None = None, config_path: Path | None = None) -> Turn:
+
+
+def _conversations_path() -> Path:
+    from ..events import state_home
+    return state_home() / "conversations.json"
+
+
+def _session_for(conversation: str | None) -> tuple[str | None, bool]:
+    """The session id for a named conversation, and whether it is new.
+
+    A caller says "this is the #morning-brew conversation" and Nemo keeps the
+    thread without the caller tracking a uuid. No name means a one-off turn.
+    """
+    if not conversation:
+        return None, True
+    import json
+    path = _conversations_path()
+    try:
+        store = json.loads(path.read_text())
+    except (OSError, ValueError):
+        store = {}
+    existing = store.get(conversation)
+    if existing:
+        return str(existing), False
+    fresh = _new_session()
+    store[conversation] = fresh
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(store))
+    except OSError:
+        pass
+    return fresh, True
+
+
+def ask(prompt: str, session: str | None = None, conversation: str | None = None, config_path: Path | None = None) -> Turn:
     """One turn of conversation. Never raises — a surface must get an answer."""
     text = str(prompt or "").strip()
     if not text:
         return Turn(False, "Say something and I'll help.")
+    is_new = True
+    if session is None and conversation is not None:
+        session, is_new = _session_for(conversation)
     try:
         config, _ = load_config(config_path)
         provider = resolved_provider(config, provider_name(config))
     except ConfigError as exc:
         return Turn(False, f"Nemo is not configured: {exc}")
 
-    command, env, used = _command(provider, text, session)
+    command, env, used = _command(provider, text, session, is_new)
     try:
         result = subprocess.run(
             command, capture_output=True, text=True, check=False,
             timeout=TURN_TIMEOUT_SECONDS, env=env,
+            stdin=subprocess.DEVNULL,  # -p otherwise blocks waiting for input
         )
     except (OSError, subprocess.SubprocessError) as exc:
         return Turn(False, f"I couldn't think just now: {exc}", used)

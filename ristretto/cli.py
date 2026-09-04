@@ -91,6 +91,15 @@ def parser() -> argparse.ArgumentParser:
     events_command.add_argument("--limit", type=int, default=50)
     events_command.add_argument("--json", action="store_true", help="print raw JSON")
 
+    chat_command = commands.add_parser(
+        "chat", help="ask Nemo a question (its agent loop, with tools and memory)"
+    )
+    chat_command.add_argument("message", nargs="+", help="what to ask")
+    chat_command.add_argument(
+        "--conversation",
+        help="a stable key (e.g. slack:C123) so the thread continues across turns",
+    )
+
     launch_command = commands.add_parser(
         "launch", help="start a supervised run on a configured project"
     )
@@ -338,6 +347,13 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"{sent} milestone(s) {'would be sent' if args.dry_run else 'sent'}")
                 return 0
             return bell.watch(base, channel, args.interval)
+        if args.command == "chat":
+            from .assistant import loop
+
+            turn = loop.ask(" ".join(args.message), conversation=args.conversation)
+            print(turn.text)
+            return 0 if turn.ok else 1
+
         if args.command == "launch":
             from .dash.launch import launch as start_run
 
