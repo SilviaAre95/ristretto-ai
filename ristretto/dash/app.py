@@ -29,7 +29,7 @@ from fastapi.responses import (
 )
 from fastapi.templating import Jinja2Templates
 
-from .. import approvals, events, voice
+from .. import actions, approvals, events, voice
 from . import chat, control, data, launch as launcher
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -189,7 +189,9 @@ def _answer(
     """
     require_same_origin(request)
     item = approvals.get(request_id)
-    won, message = approvals.decide(request_id, verdict, actor="dashboard", reason=reason)
+    # actions.answer, not approvals.decide: a gated action (merge) executes
+    # here, from whichever surface wins the race.
+    won, message = actions.answer(request_id, verdict, actor="dashboard", reason=reason)
     task_id = (item or {}).get("task_id", "")
     status = "ok" if won else "failed"
     detail = quote((("allowed" if verdict == approvals.ALLOW else "denied") if won else message)[:300])

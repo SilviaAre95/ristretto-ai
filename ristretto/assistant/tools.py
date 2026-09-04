@@ -65,6 +65,69 @@ def read_note(path: str = "") -> dict[str, Any]:
     return vault.read(path)
 
 
+def propose_merge(project: str = "", issue: str = "") -> dict[str, Any]:
+    """Propose merging an issue's PR — a gated action, so it does NOT merge.
+
+    Merging to main is one of the two dangerous, human-approved actions (deploy
+    is the other). Nemo cannot merge on its own say-so: this finds the open PR
+    for the issue and records a pending approval naming that exact PR, which
+    the user confirms on the dashboard or with !ris-approve. The PR number is
+    fixed now, so what gets merged cannot change between proposal and approval.
+    """
+    from ..dash.launch import branch_for
+    from ..config import load_config, repository_path
+    from .. import actions
+    import subprocess
+
+    if not project or not issue:
+        return {"ok": False, "message": "I need the project and the issue key to find the PR."}
+    issue = issue.upper()
+    try:
+        config, _ = load_config()
+        repo = repository_path(config, project)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "message": f"I couldn't resolve {project}: {exc}"}
+
+    branch = branch_for(issue)
+    try:
+        found = subprocess.run(
+            ["gh", "pr", "list", "--head", branch, "--state", "open",
+             "--json", "number,title,url", "--jq", ".[0]"],
+            cwd=repo, capture_output=True, text=True, check=False, timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {"ok": False, "message": f"I couldn't reach GitHub: {exc}"}
+    line = (found.stdout or "").strip()
+    if not line:
+        return {"ok": False, "message": f"No open PR for {issue} (branch {branch}). Has the run finished?"}
+    import json as _json
+    pr = _json.loads(line)
+    slug = _repo_slug(repo)
+    record = actions.record_merge(issue, slug, pr["number"], branch, project=project)
+    return {
+        "ok": True,
+        "message": (
+            f"Queued PR #{pr['number']} ({pr.get('title','')}) for your approval. "
+            f"Approve it on the dashboard or reply !ris-approve — I won't merge until you do."
+        ),
+        "pr": pr["number"],
+        "approval_id": record["id"],
+    }
+
+
+def _repo_slug(repo_path) -> str:
+    """owner/name for `gh --repo`, from the repo's origin remote."""
+    import subprocess
+    try:
+        out = subprocess.run(
+            ["gh", "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"],
+            cwd=repo_path, capture_output=True, text=True, check=False, timeout=30,
+        )
+        return (out.stdout or "").strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
 def launch_run(project: str = "", issue: str = "", flow: str = "tier1", unattended: bool = False) -> dict[str, Any]:
     """Start a supervised coding run — dev work, so it runs without a gate.
 
@@ -105,6 +168,15 @@ TOOLS: dict[str, tuple[str, Any, dict]] = {
         "Read one vault note in full, using a path from search_memory.",
         read_note,
         {"path": {"type": "string", "description": "the note's vault-relative path"}},
+    ),
+    "propose_merge": (
+        "Propose merging an issue's PR. A gated action: it does NOT merge — it "
+        "queues the exact PR for the user's approval. Requires project and issue.",
+        propose_merge,
+        {
+            "project": {"type": "string", "description": "the configured project name"},
+            "issue": {"type": "string", "description": "the issue key whose PR to merge"},
+        },
     ),
     "launch_run": (
         "Start a supervised coding run on an issue. Dev work — it produces a PR "
