@@ -53,11 +53,37 @@ def fleet_status() -> dict[str, Any]:
     }
 
 
-# The tool table: name -> (description, zero-arg callable). v1 is read-only.
-TOOLS: dict[str, tuple[str, Any]] = {
+def search_memory(query: str = "") -> dict[str, Any]:
+    """Find notes in the user's vault whose summary or content matches."""
+    from . import vault
+    return vault.search(query)
+
+
+def read_note(path: str = "") -> dict[str, Any]:
+    """Read one vault note in full, by the path search_memory returned."""
+    from . import vault
+    return vault.read(path)
+
+
+# The tool table. v1 is read-only: read the fleet, and read the second brain.
+# Each entry is (description, callable, schema-properties).
+TOOLS: dict[str, tuple[str, Any, dict]] = {
     "fleet_status": (
         "The current state of every run: what is live, stalled, blocked or done.",
         fleet_status,
+        {},
+    ),
+    "search_memory": (
+        "Search the user's Obsidian vault (their long-term memory) for notes on "
+        "a project, decision or topic. Returns titles and summaries; call "
+        "read_note for the full text of one.",
+        search_memory,
+        {"query": {"type": "string", "description": "what to look for"}},
+    ),
+    "read_note": (
+        "Read one vault note in full, using a path from search_memory.",
+        read_note,
+        {"path": {"type": "string", "description": "the note's vault-relative path"}},
     ),
 }
 
@@ -76,9 +102,9 @@ def main() -> None:  # pragma: no cover - exercised as a live MCP server
             types.Tool(
                 name=name,
                 description=desc,
-                inputSchema={"type": "object", "properties": {}},
+                inputSchema={"type": "object", "properties": props},
             )
-            for name, (desc, _fn) in TOOLS.items()
+            for name, (desc, _fn, props) in TOOLS.items()
         ]
 
     @server.call_tool()
@@ -87,8 +113,8 @@ def main() -> None:  # pragma: no cover - exercised as a live MCP server
         if entry is None:
             payload = {"error": f"unknown tool {name}"}
         else:
-            _desc, fn = entry
-            payload = await anyio.to_thread.run_sync(fn)
+            _desc, fn, _props = entry
+            payload = await anyio.to_thread.run_sync(lambda: fn(**(arguments or {})))
         return [types.TextContent(type="text", text=json.dumps(payload, default=str))]
 
     async def serve() -> None:

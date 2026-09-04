@@ -88,9 +88,69 @@ class ToolTest(unittest.TestCase):
 
     def test_only_read_tools_in_v1(self) -> None:
         # A mutating tool must not appear without the approval gate, which is
-        # not built yet. This test is the tripwire for that.
-        self.assertEqual(set(tools.TOOLS), {"fleet_status"})
+        # not built yet. This test is the tripwire for that. fleet_status,
+        # search_memory and read_note are all read-only.
+        self.assertEqual(set(tools.TOOLS), {"fleet_status", "search_memory", "read_note"})
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VaultReaderTest(unittest.TestCase):
+    """Nemo reading its long-term memory. Read-only, and never leaves the vault."""
+
+    def setUp(self) -> None:
+        import tempfile
+        self.root = Path(tempfile.mkdtemp())
+        (self.root / "02-Projects").mkdir()
+        (self.root / "_agent").mkdir()
+        (self.root / "02-Projects" / "kaffecard.md").write_text(
+            '---\nsummary: "Kaffecard loyalty platform for Austrian cafes"\n---\n'
+            "# Kaffecard\nThe campaign engine sends push notifications.\n"
+        )
+        (self.root / "_agent" / "INSTRUCTIONS.md").write_text(
+            '---\nsummary: "agent rules"\n---\nignore me\n'
+        )
+        self.config = {"instance": {"knowledge_vault": str(self.root)}}
+
+    def test_search_finds_by_summary(self) -> None:
+        from ristretto.assistant import vault
+        r = vault.search("loyalty Austrian", self.config)
+        self.assertEqual(r["total_matched"], 1)
+        self.assertEqual(r["notes"][0]["title"], "kaffecard")
+
+    def test_search_finds_by_body(self) -> None:
+        from ristretto.assistant import vault
+        self.assertEqual(vault.search("push notifications", self.config)["total_matched"], 1)
+
+    def test_agent_machinery_is_not_searched(self) -> None:
+        from ristretto.assistant import vault
+        # _agent notes are vault plumbing, not knowledge.
+        self.assertEqual(vault.search("ignore me", self.config)["total_matched"], 0)
+
+    def test_read_returns_the_note(self) -> None:
+        from ristretto.assistant import vault
+        r = vault.read("02-Projects/kaffecard.md", self.config)
+        self.assertIn("campaign engine", r["text"])
+
+    def test_a_path_escape_is_refused(self) -> None:
+        from ristretto.assistant import vault
+        for attack in ("../../../etc/passwd", "/etc/passwd", "02-Projects/../../secrets"):
+            self.assertIn("error", vault.read(attack, self.config))
+
+    def test_no_vault_configured_is_not_a_crash(self) -> None:
+        from ristretto.assistant import vault
+        self.assertIn("error", vault.search("anything", {"instance": {}}))
+
+
+class ToolSurfaceTest(unittest.TestCase):
+    def test_v1_tools_are_read_only(self) -> None:
+        # The tripwire: a mutating tool must not appear without the approval
+        # gate, which is not built yet.
+        self.assertEqual(set(tools.TOOLS), {"fleet_status", "search_memory", "read_note"})
+
+    def test_the_vault_tools_carry_a_query_schema(self) -> None:
+        # A tool with no declared params is one the model calls with none.
+        _desc, _fn, props = tools.TOOLS["search_memory"]
+        self.assertIn("query", props)
