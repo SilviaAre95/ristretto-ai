@@ -65,6 +65,27 @@ def read_note(path: str = "") -> dict[str, Any]:
     return vault.read(path)
 
 
+def launch_run(project: str = "", issue: str = "", flow: str = "tier1", unattended: bool = False) -> dict[str, Any]:
+    """Start a supervised coding run — dev work, so it runs without a gate.
+
+    Kicking off a run is dev work, not a dangerous action: it produces a pull
+    request the user reviews before anything merges or deploys. So it executes
+    directly, protected by launch.launch's own guards — a valid issue key, a
+    committed verify gate (preflight), and a refusal when the fleet is already
+    busy. The gates that matter come later, on merge and deploy.
+
+    Nemo cannot guess which repository an issue key belongs to (projects share
+    a Linear prefix), so it must pass the project explicitly. If it doesn't
+    know, it should ask the user rather than launch the wrong repo.
+    """
+    from ..dash import launch as launcher
+
+    if not project:
+        return {"ok": False, "message": "which project? every issue key shares the same prefix, so I need the project name"}
+    outcome = launcher.launch(project, issue.upper(), flow, actor="nemo", unattended=unattended)
+    return {"ok": outcome.ok, "message": outcome.message, "task_id": outcome.task_id}
+
+
 # The tool table. v1 is read-only: read the fleet, and read the second brain.
 # Each entry is (description, callable, schema-properties).
 TOOLS: dict[str, tuple[str, Any, dict]] = {
@@ -84,6 +105,18 @@ TOOLS: dict[str, tuple[str, Any, dict]] = {
         "Read one vault note in full, using a path from search_memory.",
         read_note,
         {"path": {"type": "string", "description": "the note's vault-relative path"}},
+    ),
+    "launch_run": (
+        "Start a supervised coding run on an issue. Dev work — it produces a PR "
+        "the user reviews; it does not merge or deploy. Requires the project name "
+        "(issue keys alone are ambiguous). Ask the user if unsure which project.",
+        launch_run,
+        {
+            "project": {"type": "string", "description": "the configured project name, e.g. Kaffecard"},
+            "issue": {"type": "string", "description": "the issue key, e.g. XARI-26"},
+            "flow": {"type": "string", "description": "tier0-3 or classic; default tier1"},
+            "unattended": {"type": "boolean", "description": "true for a run nobody will watch"},
+        },
     ),
 }
 
