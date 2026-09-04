@@ -27,9 +27,9 @@ class ProviderChoiceTest(unittest.TestCase):
 
 
 class CommandShapeTest(unittest.TestCase):
-    def build(self, session=None):
+    def build(self, session=None, is_new=True):
         provider = {"runner": "claude-code", "model": "sonnet"}
-        return loop._command(provider, "what is running?", session)
+        return loop._command(provider, "what is running?", session, is_new)
 
     def test_the_tool_server_and_read_tools_are_granted(self) -> None:
         cmd, _env, _sid = self.build()
@@ -58,10 +58,18 @@ class CommandShapeTest(unittest.TestCase):
         self.assertTrue(sid)
 
     def test_continuing_resumes_the_given_session(self) -> None:
-        cmd, _e, sid = self.build(session="abc-123")
+        # A continuing turn (is_new=False) resumes; a brand-new session id is
+        # created with --session-id, never resumed (resuming a non-existent
+        # session fails with "No conversation found").
+        cmd, _e, sid = self.build(session="abc-123", is_new=False)
         self.assertIn("--resume", cmd)
         self.assertEqual(cmd[cmd.index("--resume") + 1], "abc-123")
         self.assertEqual(sid, "abc-123")
+
+    def test_a_new_conversation_creates_rather_than_resumes(self) -> None:
+        cmd, _e, _sid = self.build(session="fresh-1", is_new=True)
+        self.assertIn("--session-id", cmd)
+        self.assertNotIn("--resume", cmd)
 
 
 class SafetyTest(unittest.TestCase):
@@ -154,3 +162,31 @@ class ToolSurfaceTest(unittest.TestCase):
         # A tool with no declared params is one the model calls with none.
         _desc, _fn, props = tools.TOOLS["search_memory"]
         self.assertIn("query", props)
+
+
+class ConversationMemoryTest(unittest.TestCase):
+    """A named conversation keeps one session across turns."""
+
+    def setUp(self) -> None:
+        import tempfile
+        from ristretto import events
+        self.dir = Path(tempfile.mkdtemp())
+        patcher = mock.patch.object(events, "state_home", return_value=self.dir)
+        patcher.start(); self.addCleanup(patcher.stop)
+
+    def test_first_turn_is_new_and_the_same_key_resumes(self) -> None:
+        s1, new1 = loop._session_for("slack:C1")
+        s2, new2 = loop._session_for("slack:C1")
+        self.assertTrue(new1)
+        self.assertFalse(new2)
+        self.assertEqual(s1, s2)
+
+    def test_different_conversations_do_not_share_a_session(self) -> None:
+        a, _ = loop._session_for("slack:C1")
+        b, _ = loop._session_for("dashboard:main")
+        self.assertNotEqual(a, b)
+
+    def test_a_one_off_turn_has_no_conversation(self) -> None:
+        session, is_new = loop._session_for(None)
+        self.assertIsNone(session)
+        self.assertTrue(is_new)
