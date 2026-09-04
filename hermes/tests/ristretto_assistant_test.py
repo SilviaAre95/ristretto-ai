@@ -94,11 +94,19 @@ class ToolTest(unittest.TestCase):
         self.assertIn("error", out)
         self.assertEqual(out["runs"], [])
 
-    def test_only_read_tools_in_v1(self) -> None:
-        # A mutating tool must not appear without the approval gate, which is
-        # not built yet. This test is the tripwire for that. fleet_status,
-        # search_memory and read_note are all read-only.
-        self.assertEqual(set(tools.TOOLS), {"fleet_status", "search_memory", "read_note"})
+    def test_the_tool_set_is_reads_plus_launch(self) -> None:
+        # The gate is for merge and deploy — the dangerous, per-repo actions.
+        # Launching a run is dev work: it produces a PR the user reviews, so it
+        # is a permitted tool. This is the tripwire for a *gated* action (merge,
+        # deploy) appearing without its gate: if one shows up here, it needs
+        # more than a set-membership update.
+        self.assertEqual(
+            set(tools.TOOLS),
+            {"fleet_status", "search_memory", "read_note", "launch_run"},
+        )
+        for dangerous in ("merge_pr", "deploy", "delete", "push_main"):
+            self.assertNotIn(dangerous, tools.TOOLS,
+                             f"{dangerous} is a gated action — it must not be a bare tool")
 
 
 if __name__ == "__main__":
@@ -153,10 +161,14 @@ class VaultReaderTest(unittest.TestCase):
 
 
 class ToolSurfaceTest(unittest.TestCase):
-    def test_v1_tools_are_read_only(self) -> None:
-        # The tripwire: a mutating tool must not appear without the approval
-        # gate, which is not built yet.
-        self.assertEqual(set(tools.TOOLS), {"fleet_status", "search_memory", "read_note"})
+    def test_the_tool_set_is_reads_plus_launch(self) -> None:
+        # launch_run is a permitted dev action (produces a PR to review); the
+        # gated actions are merge and deploy, which must not appear as bare
+        # tools.
+        self.assertEqual(
+            set(tools.TOOLS),
+            {"fleet_status", "search_memory", "read_note", "launch_run"},
+        )
 
     def test_the_vault_tools_carry_a_query_schema(self) -> None:
         # A tool with no declared params is one the model calls with none.
@@ -190,3 +202,32 @@ class ConversationMemoryTest(unittest.TestCase):
         session, is_new = loop._session_for(None)
         self.assertIsNone(session)
         self.assertTrue(is_new)
+
+
+class LaunchToolTest(unittest.TestCase):
+    """launch_run is a dev action: it executes, guarded by launch.launch."""
+
+    def test_a_missing_project_is_refused_not_launched(self) -> None:
+        # Issue keys are ambiguous across repos; guessing is worse than asking.
+        r = tools.launch_run(issue="XARI-26")
+        self.assertFalse(r["ok"])
+        self.assertIn("project", r["message"].lower())
+
+    def test_it_calls_the_launcher_with_nemo_as_actor(self) -> None:
+        from ristretto.dash import launch as launcher
+        with mock.patch.object(launcher, "launch",
+                               return_value=launcher.Outcome(True, "started", "t_x")) as spawned:
+            r = tools.launch_run(project="Kaffecard", issue="xari-26", flow="tier1")
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["task_id"], "t_x")
+        kwargs = spawned.call_args
+        self.assertEqual(kwargs.args[0], "Kaffecard")
+        self.assertEqual(kwargs.args[1], "XARI-26")  # upcased
+        self.assertEqual(kwargs.kwargs["actor"], "nemo")
+
+    def test_the_loop_grants_launch_run_to_the_model(self) -> None:
+        # A tool the model is not allowed to call is a tool that never runs.
+        cmd, _e, _s = loop._command({"runner": "claude-code", "model": "sonnet"},
+                                    "start a run", None)
+        allowed = cmd[cmd.index("--allowedTools") + 1:]
+        self.assertIn("mcp__nemo-tools__launch_run", allowed)
