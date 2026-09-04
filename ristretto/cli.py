@@ -402,7 +402,10 @@ def main(argv: list[str] | None = None) -> int:
 
             verdict = approvals.ALLOW if args.approvals_command == "approve" else approvals.DENY
             reason = getattr(args, "reason", "")
-            won, message = approvals.decide(
+            from . import actions
+
+            # actions.answer runs a gated action (merge) on a winning allow.
+            won, message = actions.answer(
                 target, verdict, actor=args.actor, reason=reason
             )
             print(f"{target}: {message}" if won else f"{target}: not applied — {message}")

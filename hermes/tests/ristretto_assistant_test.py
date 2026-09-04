@@ -102,11 +102,14 @@ class ToolTest(unittest.TestCase):
         # more than a set-membership update.
         self.assertEqual(
             set(tools.TOOLS),
-            {"fleet_status", "search_memory", "read_note", "launch_run"},
+            {"fleet_status", "search_memory", "read_note", "launch_run", "propose_merge"},
         )
-        for dangerous in ("merge_pr", "deploy", "delete", "push_main"):
-            self.assertNotIn(dangerous, tools.TOOLS,
-                             f"{dangerous} is a gated action — it must not be a bare tool")
+        # A gated action must reach the human as a PROPOSAL, never execute on
+        # the model's call. propose_merge is fine (it queues an approval);
+        # merge_pr / deploy as tools the model runs directly are not.
+        for direct in ("merge_pr", "deploy", "delete", "push_main"):
+            self.assertNotIn(direct, tools.TOOLS,
+                             f"{direct} would execute on the model's say-so — must be gated")
 
 
 if __name__ == "__main__":
@@ -167,7 +170,7 @@ class ToolSurfaceTest(unittest.TestCase):
         # tools.
         self.assertEqual(
             set(tools.TOOLS),
-            {"fleet_status", "search_memory", "read_note", "launch_run"},
+            {"fleet_status", "search_memory", "read_note", "launch_run", "propose_merge"},
         )
 
     def test_the_vault_tools_carry_a_query_schema(self) -> None:
