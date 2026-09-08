@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from . import broker, events
-from .seam import VERIFY_GATE
+from .seam import DEV_CONFIG, VERIFY_GATE
 from .config import ConfigError, load_config, resolved_flow, resolved_provider
 
 
@@ -38,6 +38,16 @@ MODEL_FAILURE = re.compile(r"<model_failure>(.*?)</model_failure>", re.DOTALL | 
 MIN_STAGE_OUTPUT = 40
 # Ristretto's own run artifacts are not the flow's work product.
 ARTIFACT_DIR_NAME = ".ristretto"
+
+# The stage budget when nothing else says otherwise. A repository whose
+# worktree starts cold — no node_modules, a database client still to generate —
+# can spend half of this on setup before the model does anything, which is how
+# an hour turns out not to be an hour. Such a repo raises it in .cc-dev.yaml.
+DEFAULT_STAGE_TIMEOUT = 3600
+# Bounds on what a repository may ask for: a misplaced zero should not hold a
+# worktree for half a day.
+MIN_STAGE_TIMEOUT = 300
+MAX_STAGE_TIMEOUT = 14400
 
 
 class FlowError(RuntimeError):
@@ -380,6 +390,80 @@ def run_process(
         return process.returncode, f"{stdout or ''}{stderr or ''}"
 
 
+def repo_stage_timeout(cwd: Path) -> int | None:
+    """A repository's own stage budget, declared in its .cc-dev.yaml.
+
+    Read from the repo rather than from Ristretto's config because the thing
+    that makes a stage slow — a cold monorepo install, a client to generate —
+    is a property of the repository, and the repository is where a contributor
+    will look for it. Malformed values are ignored rather than fatal: a typo in
+    a repo's config must not stop that repo running a loop.
+    """
+    path = cwd / DEV_CONFIG
+    if not path.is_file():
+        return None
+    try:
+        import yaml
+
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        seconds = int(data.get("stage_timeout"))
+    except Exception:  # noqa: BLE001 - a repo's config must never kill the run
+        return None
+    return max(MIN_STAGE_TIMEOUT, min(seconds, MAX_STAGE_TIMEOUT))
+
+
+def preserve_work(cwd: Path, stage_id: str, timeout: int) -> str:
+    """Commit what a timed-out stage wrote, so the deadline does not eat it.
+
+    A stage killed at its deadline leaves everything uncommitted in a worktree
+    that is later reclaimed. On 2026-09-07 a build stage had actually finished
+    its job — nine files and a 225-line test, including a concurrency fix
+    better than the one it was asked for — and every line was discarded because
+    the clock ran out before it committed. The task said "build failed: exit
+    124", which reads as a model that produced nothing.
+
+    Committing is the safe move: this is the run's own feature branch, the
+    commit says WIP in its subject, and a person reads it before merging.
+    Losing an hour of correct work silently is the worse failure.
+
+    Returns a description for the failure reason, or "" if there was nothing
+    to keep.
+    """
+    # Ristretto's own logs live in the worktree and are not the work product.
+    exclude = f":(exclude){ARTIFACT_DIR_NAME}"
+    try:
+        status = subprocess.run(
+            ["git", "status", "--porcelain", "--", ".", exclude],
+            cwd=cwd, capture_output=True, text=True, check=False, timeout=30,
+        )
+        changed = [line for line in (status.stdout or "").splitlines() if line.strip()]
+        if not changed:
+            return ""
+        subprocess.run(
+            ["git", "add", "-A", "--", ".", exclude],
+            cwd=cwd, capture_output=True, text=True, check=False, timeout=60,
+        )
+        # --no-verify: a repo's pre-commit hook failing would defeat the whole
+        # point, which is that this work survives.
+        committed = subprocess.run(
+            [
+                "git", "commit", "--no-verify", "-m",
+                f"wip({stage_id}): stage timed out after {timeout}s\n\n"
+                "Committed by Ristretto so work already written is not lost with\n"
+                "the worktree. Unreviewed and possibly incomplete — read it before\n"
+                "trusting it.",
+            ],
+            cwd=cwd, capture_output=True, text=True, check=False, timeout=60,
+        )
+        if committed.returncode != 0:
+            return ""
+        return f"{len(changed)} file(s) kept as a WIP commit"
+    except (OSError, subprocess.SubprocessError):
+        # Preserving is best-effort. Failing to save the work must not also
+        # mask why the stage failed.
+        return ""
+
+
 # Why the last attempt at a given stage failed, so the event carries the
 # reason the operator needs rather than a bare exit code.
 LAST_STAGE_REASON: dict[str, str] = {}
@@ -536,7 +620,9 @@ def run_stage(
 ) -> int:
     output = artifacts / stage.get("output", f"{stage['id']}.txt")
     log = artifacts / f"{stage['id']}.log"
-    timeout = int(stage.get("timeout", 3600))
+    # Most specific wins: a stage that declares its own budget, else the
+    # repository's, else the default.
+    timeout = int(stage.get("timeout") or repo_stage_timeout(cwd) or DEFAULT_STAGE_TIMEOUT)
     if stage["role"] == "verify":
         if expected_verify_digest is None:
             raise FlowError("verify stage was not pinned at flow start")
@@ -580,6 +666,19 @@ def run_stage(
             return 1
         LAST_STAGE_REASON.pop(stage["id"], None)
         return 0
+    if code == 124:
+        # Keep the work before anything else touches this worktree, and say
+        # plainly whether there was any. "exit 124" alone cannot distinguish a
+        # stage that finished the job a minute past its deadline from one that
+        # never started.
+        kept = preserve_work(cwd, stage["id"], timeout) if stage.get("mutates") else ""
+        LAST_STAGE_REASON[stage["id"]] = (
+            f"timed out after {timeout}s — {kept}"
+            if kept
+            else f"timed out after {timeout}s with nothing written"
+        )
+        print(f"stage {stage['id']}: {LAST_STAGE_REASON[stage['id']]}", file=sys.stderr)
+        return code
     if stage["provider"] != "builtin":
         provider = stage["provider_config"]
         fallback = provider.get("fallback")
