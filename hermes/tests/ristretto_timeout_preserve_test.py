@@ -320,6 +320,31 @@ class RepoStageTimeoutTest(unittest.TestCase):
         self.write_dev_config("stage_timeout: soon\n")
         self.assertIsNone(runner.repo_stage_timeout(self.repo))
 
+    def test_a_stage_cannot_extend_its_budget_by_rewriting_the_config(self) -> None:
+        """.cc-dev.yaml is pinned at flow start, like .cc-verify's digest.
+
+        Both are control-plane values in files a mutating stage can rewrite.
+        Read per stage from disk, a build stage could raise its own and every
+        later stage's deadline — and preserve_work would commit that edit so
+        it survived into the retry and the PR.
+
+        run_stage takes the pinned value and must not consult the file, so a
+        mid-run rewrite has no effect on the budget actually used.
+        """
+        import inspect
+
+        source = inspect.getsource(runner.run_stage)
+        self.assertIn("pinned_stage_timeout", source)
+        self.assertNotIn(
+            "repo_stage_timeout(cwd)",
+            source,
+            "run_stage must use the pinned value, not re-read .cc-dev.yaml",
+        )
+
+        # And the pin is taken once, at flow start, alongside the verify digest.
+        started = inspect.getsource(runner.execute)
+        self.assertIn("pinned_stage_timeout = repo_stage_timeout(cwd)", started)
+
     def test_absurd_values_are_bounded_rather_than_obeyed(self) -> None:
         self.write_dev_config("stage_timeout: 999999\n")
         self.assertEqual(runner.repo_stage_timeout(self.repo), runner.MAX_STAGE_TIMEOUT)

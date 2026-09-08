@@ -681,12 +681,15 @@ def run_stage(
     dry_run: bool,
     expected_verify_digest: str | None,
     gated: bool = True,
+    pinned_stage_timeout: int | None = None,
 ) -> int:
     output = artifacts / stage.get("output", f"{stage['id']}.txt")
     log = artifacts / f"{stage['id']}.log"
     # Most specific wins: a stage that declares its own budget, else the
-    # repository's, else the default.
-    timeout = int(stage.get("timeout") or repo_stage_timeout(cwd) or DEFAULT_STAGE_TIMEOUT)
+    # repository's as pinned at flow start, else the default. Pinned rather
+    # than re-read here so a mutating stage cannot extend its own or a later
+    # stage's deadline by editing .cc-dev.yaml mid-run.
+    timeout = int(stage.get("timeout") or pinned_stage_timeout or DEFAULT_STAGE_TIMEOUT)
     if stage["role"] == "verify":
         if expected_verify_digest is None:
             raise FlowError("verify stage was not pinned at flow start")
@@ -868,6 +871,14 @@ def execute(args: argparse.Namespace) -> int:
     expected_verify_digest = None
     if any(stage["role"] == "verify" for stage in flow["stages"]):
         expected_verify_digest = verify_gate_digest(cwd)
+    # Pinned at flow start for the same reason .cc-verify's digest is: both
+    # are control-plane values living in files a mutating stage can rewrite.
+    # Read per stage from disk, a build stage could raise its own and every
+    # later stage's budget — and preserve_work would then commit that edit so
+    # it survived into the retry and the PR. Bounded at four hours, so this
+    # was resource abuse rather than escape, but the neighbouring gate is
+    # pinned and this one should not be the exception.
+    pinned_stage_timeout = repo_stage_timeout(cwd)
     (artifacts / "flow.json").write_text(
         json.dumps(
             {
@@ -875,6 +886,7 @@ def execute(args: argparse.Namespace) -> int:
                 "issue": args.issue,
                 "base": base,
                 "verify_sha256": expected_verify_digest,
+                "stage_timeout": pinned_stage_timeout,
             },
             indent=2,
         )
@@ -899,7 +911,7 @@ def execute(args: argparse.Namespace) -> int:
     try:
         return _run_stages(
             args, config, flow, artifacts, cwd, base, record, emit, pulse,
-            expected_verify_digest, gated,
+            expected_verify_digest, gated, pinned_stage_timeout,
         )
     finally:
         # Stop claiming to be alive the moment we are not, including when a
@@ -920,6 +932,7 @@ def _run_stages(
     pulse: "Heartbeat",
     expected_verify_digest: str | None,
     gated: bool = True,
+    pinned_stage_timeout: int | None = None,
 ) -> int:
     opened: str | None = None
     for stage in flow["stages"]:
@@ -940,6 +953,7 @@ def _run_stages(
             args.dry_run,
             expected_verify_digest,
             gated,
+            pinned_stage_timeout,
         )
         elapsed = round(time.monotonic() - started, 1)
         if code != 0:
