@@ -107,6 +107,190 @@ class PreserveWorkTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as plain:
             self.assertEqual(runner.preserve_work(Path(plain), "build", 3600), "")
 
+    # --- defects found in review of PR #53 -------------------------------
+
+    def test_counts_files_in_a_new_directory_not_status_lines(self) -> None:
+        """`git status --porcelain` collapses an untracked directory.
+
+        Without -uall, a stage that adds a module reports "1 file" while
+        committing many — and this number is the whole point of the change.
+        """
+        package = self.repo / "src" / "feature"
+        package.mkdir(parents=True)
+        for index in range(6):
+            (package / f"f{index}.py").write_text(f"# {index}\n", encoding="utf-8")
+
+        kept = runner.preserve_work(self.repo, "build", 3600)
+
+        self.assertIn("6 file(s)", kept)
+
+    def test_counts_a_rename_as_one_file(self) -> None:
+        """A rename is one file that moved, and the count should say so.
+
+        Counting status lines would also give 1 here, but for the wrong reason
+        — it treats "R old -> new" as one line. Counting the commit's own
+        file list is right by construction, and git's rename detection makes
+        it report the moved file once rather than as a delete plus an add.
+        """
+        (self.repo / "DOC.md").write_text("base\n", encoding="utf-8")
+        (self.repo / "README.md").unlink()
+
+        kept = runner.preserve_work(self.repo, "build", 3600)
+
+        self.assertIn("1 file(s)", kept)
+        committed = git(
+            "show", "--pretty=format:", "--name-only", "HEAD", cwd=self.repo
+        ).stdout
+        self.assertIn("DOC.md", committed)
+
+    def test_refuses_on_detached_head_rather_than_committing_off_branch(self) -> None:
+        """A commit on a detached HEAD is as lost as no commit at all.
+
+        Reporting it as preserved would be a false claim of safety — worse
+        than admitting the work is still loose.
+        """
+        head = git("rev-parse", "HEAD", cwd=self.repo).stdout.strip()
+        git("checkout", "-q", "--detach", head, cwd=self.repo)
+        (self.repo / "feature.py").write_text("print('work')\n", encoding="utf-8")
+
+        kept = runner.preserve_work(self.repo, "build", 3600)
+
+        self.assertIn("NOT kept", kept)
+        self.assertIn("detached", kept)
+        self.assertEqual(self.commit_count(), 1)
+        # The work is still there to be recovered by hand.
+        self.assertTrue((self.repo / "feature.py").exists())
+
+    def test_refuses_mid_merge_rather_than_committing_conflict_markers(self) -> None:
+        git("checkout", "-q", "-b", "other", cwd=self.repo)
+        (self.repo / "README.md").write_text("theirs\n", encoding="utf-8")
+        git("commit", "-q", "-am", "theirs", cwd=self.repo)
+        git("checkout", "-q", "main", cwd=self.repo)
+        (self.repo / "README.md").write_text("ours\n", encoding="utf-8")
+        git("commit", "-q", "-am", "ours", cwd=self.repo)
+        merged = git("merge", "other", cwd=self.repo)
+        self.assertNotEqual(merged.returncode, 0, "expected a conflict")
+
+        kept = runner.preserve_work(self.repo, "build", 3600)
+
+        self.assertIn("NOT kept", kept)
+        self.assertIn("MERGE_HEAD", kept)
+
+    def test_a_failed_commit_never_reports_that_nothing_was_written(self) -> None:
+        """The exact misleading message this whole change exists to remove.
+
+        Work demonstrably exists — `changed` was non-empty — so returning ""
+        would make the caller print "with nothing written" while the work sits
+        uncommitted. A stale index.lock is a plausible leftover, since the
+        runner SIGKILLs a stage that may have been mid-git at the deadline.
+        """
+        (self.repo / "feature.py").write_text("print('work')\n", encoding="utf-8")
+        lock = Path(
+            git("rev-parse", "--absolute-git-dir", cwd=self.repo).stdout.strip()
+        ) / "index.lock"
+        lock.write_text("", encoding="utf-8")
+        self.addCleanup(lambda: lock.unlink(missing_ok=True))
+
+        kept = runner.preserve_work(self.repo, "build", 3600)
+
+        self.assertNotEqual(kept, "")
+        self.assertIn("NOT kept", kept)
+        self.assertIn("1 changed path(s)", kept)
+
+    # --- findings from the security review of PR #53 ----------------------
+
+    def test_refuses_to_commit_to_the_base_branch(self) -> None:
+        """The "it's only the run's own branch" defence, actually enforced.
+
+        Hermes normally supplies a worktree on a feature branch, but
+        run-loop.sh can be re-run by hand from the primary checkout — which is
+        the recovery step the flow guard prints. Committing unreviewed model
+        output onto main would poison every worktree cut from it afterwards.
+        """
+        (self.repo / "feature.py").write_text("print('work')\n", encoding="utf-8")
+
+        kept = runner.preserve_work(self.repo, "build", 3600, base="main")
+
+        self.assertIn("NOT kept", kept)
+        self.assertIn("base branch", kept)
+        self.assertEqual(self.commit_count(), 1)
+
+    def test_commits_on_a_feature_branch_with_the_same_base_set(self) -> None:
+        git("checkout", "-q", "-b", "xariprojects/xari-1", cwd=self.repo)
+        (self.repo / "feature.py").write_text("print('work')\n", encoding="utf-8")
+
+        kept = runner.preserve_work(self.repo, "build", 3600, base="main")
+
+        self.assertIn("1 file(s) kept", kept)
+        self.assertEqual(self.commit_count(), 2)
+
+    def test_never_commits_a_gitignored_secret(self) -> None:
+        """The missing test for the change's entire risk surface.
+
+        `git add -A` decides what becomes permanent. .gitignore is what stands
+        between a stage's stray .env and the branch, so assert it rather than
+        assuming it.
+        """
+        (self.repo / ".gitignore").write_text(".env\n*.pem\n", encoding="utf-8")
+        git("add", ".gitignore", cwd=self.repo)
+        git("commit", "-q", "-m", "ignore secrets", cwd=self.repo)
+
+        (self.repo / ".env").write_text("API_KEY=super-secret\n", encoding="utf-8")
+        (self.repo / "server.pem").write_text("-----BEGIN KEY-----\n", encoding="utf-8")
+        (self.repo / "feature.py").write_text("print('work')\n", encoding="utf-8")
+
+        kept = runner.preserve_work(self.repo, "build", 3600)
+
+        self.assertIn("1 file(s)", kept)
+        committed = git(
+            "show", "--pretty=format:", "--name-only", "HEAD", cwd=self.repo
+        ).stdout
+        self.assertIn("feature.py", committed)
+        self.assertNotIn(".env", committed)
+        self.assertNotIn("server.pem", committed)
+
+    def test_runs_commit_hooks_and_only_bypasses_when_they_refuse(self) -> None:
+        """A pre-commit hook is often a repo's only secret scan.
+
+        Bypassing it unconditionally would remove the one check that sees the
+        staged diff; letting it veto would lose the work. So: try, then bypass
+        and say so.
+        """
+        hooks = self.repo / ".git" / "hooks"
+        hooks.mkdir(parents=True, exist_ok=True)
+        marker = self.repo / "hook-ran"
+        hook = hooks / "pre-commit"
+        hook.write_text(f"#!/bin/sh\ntouch {marker}\nexit 0\n", encoding="utf-8")
+        hook.chmod(0o755)
+        (self.repo / "feature.py").write_text("print('work')\n", encoding="utf-8")
+
+        kept = runner.preserve_work(self.repo, "build", 3600)
+
+        self.assertTrue(marker.exists(), "a passing hook should have run")
+        self.assertNotIn("bypassed", kept)
+
+    def test_says_so_when_it_had_to_bypass_the_hooks(self) -> None:
+        hooks = self.repo / ".git" / "hooks"
+        hooks.mkdir(parents=True, exist_ok=True)
+        hook = hooks / "pre-commit"
+        hook.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+        hook.chmod(0o755)
+        (self.repo / "feature.py").write_text("print('work')\n", encoding="utf-8")
+
+        kept = runner.preserve_work(self.repo, "build", 3600)
+
+        self.assertIn("kept", kept)
+        self.assertIn("bypassed", kept)
+
+    def test_the_commit_carries_a_machine_readable_trailer(self) -> None:
+        """A squash-merge rewrites the subject; the trailer is what survives."""
+        (self.repo / "feature.py").write_text("print('work')\n", encoding="utf-8")
+
+        runner.preserve_work(self.repo, "build", 3600)
+
+        body = git("log", "-1", "--pretty=%B", cwd=self.repo).stdout
+        self.assertIn("Ristretto-Preserved: build", body)
+
 
 class RepoStageTimeoutTest(unittest.TestCase):
     def setUp(self) -> None:

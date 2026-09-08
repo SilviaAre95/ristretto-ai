@@ -412,7 +412,7 @@ def repo_stage_timeout(cwd: Path) -> int | None:
     return max(MIN_STAGE_TIMEOUT, min(seconds, MAX_STAGE_TIMEOUT))
 
 
-def preserve_work(cwd: Path, stage_id: str, timeout: int) -> str:
+def preserve_work(cwd: Path, stage_id: str, timeout: int, base: str = "") -> str:
     """Commit what a timed-out stage wrote, so the deadline does not eat it.
 
     A stage killed at its deadline leaves everything uncommitted in a worktree
@@ -431,37 +431,101 @@ def preserve_work(cwd: Path, stage_id: str, timeout: int) -> str:
     """
     # Ristretto's own logs live in the worktree and are not the work product.
     exclude = f":(exclude){ARTIFACT_DIR_NAME}"
-    try:
-        status = subprocess.run(
-            ["git", "status", "--porcelain", "--", ".", exclude],
-            cwd=cwd, capture_output=True, text=True, check=False, timeout=30,
+
+    def git(*args: str, limit: int = 60) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["git", *args], cwd=cwd, capture_output=True, text=True,
+            check=False, timeout=limit,
         )
+
+    try:
+        # -uall: without it git collapses a new directory into a single
+        # "?? dir/" line, so a stage that added a module would report one file
+        # when it wrote twenty. This count is the whole point of the change.
+        status = git("status", "--porcelain", "-uall", "--", ".", exclude, limit=30)
         changed = [line for line in (status.stdout or "").splitlines() if line.strip()]
         if not changed:
             return ""
-        subprocess.run(
-            ["git", "add", "-A", "--", ".", exclude],
-            cwd=cwd, capture_output=True, text=True, check=False, timeout=60,
+
+        # Committing on a detached HEAD puts the work on no branch at all, and
+        # mid-rebase it would capture conflict markers. Both are worse than not
+        # committing — but saying nothing was written would be a lie, so refuse
+        # loudly instead. The docstring's "this is the run's own branch" is an
+        # assumption, and this is where it gets checked.
+        head = git("symbolic-ref", "-q", "--short", "HEAD", limit=30)
+        if head.returncode != 0:
+            return f"{len(changed)} changed path(s) NOT kept: HEAD is detached"
+        # The docstring below claims this is the run's own feature branch. That
+        # is a guarantee Hermes provides by creating a worktree, not one this
+        # code was given — and `run-loop.sh` can be re-run by hand from the
+        # primary checkout, which is exactly the recovery step the flow guard
+        # prints. Committing unreviewed model output onto the base branch would
+        # then poison every worktree cut from it afterwards. Check, don't trust.
+        branch = (head.stdout or "").strip()
+        if base and branch == base:
+            return (
+                f"{len(changed)} changed path(s) NOT kept: refusing to commit "
+                f"to the base branch {base!r}"
+            )
+        git_dir = (git("rev-parse", "--absolute-git-dir", limit=30).stdout or "").strip()
+        if git_dir:
+            # A worktree's .git is a file pointing elsewhere, so ask git for the
+            # real directory rather than looking under cwd/.git.
+            in_flight = [
+                name for name in
+                ("rebase-merge", "rebase-apply", "MERGE_HEAD", "CHERRY_PICK_HEAD")
+                if (Path(git_dir) / name).exists()
+            ]
+            if in_flight:
+                return (
+                    f"{len(changed)} changed path(s) NOT kept: "
+                    f"{in_flight[0]} in progress"
+                )
+
+        added = git("add", "-A", "--", ".", exclude)
+        message = (
+            f"wip({stage_id}): stage timed out after {timeout}s\n\n"
+            "Committed by Ristretto so work already written is not lost with\n"
+            "the worktree. Unreviewed and possibly incomplete — read it before\n"
+            "trusting it.\n\n"
+            # A squash-merge rewrites the subject, so the marker that survives
+            # has to be a trailer. Without it this reads in git log as a commit
+            # the human intended.
+            f"Ristretto-Preserved: {stage_id}"
         )
-        # --no-verify: a repo's pre-commit hook failing would defeat the whole
-        # point, which is that this work survives.
-        committed = subprocess.run(
-            [
-                "git", "commit", "--no-verify", "-m",
-                f"wip({stage_id}): stage timed out after {timeout}s\n\n"
-                "Committed by Ristretto so work already written is not lost with\n"
-                "the worktree. Unreviewed and possibly incomplete — read it before\n"
-                "trusting it.",
-            ],
-            cwd=cwd, capture_output=True, text=True, check=False, timeout=60,
-        )
+        # Hooks first. A pre-commit hook is often where a repo's secret scan
+        # runs, and bypassing it unconditionally would remove the only check
+        # that sees the staged diff. It still must not be able to *veto*
+        # preservation — so if it refuses, bypass it and say so rather than
+        # silently dropping either the work or the scan.
+        committed = git("commit", "-m", message)
+        bypassed = ""
         if committed.returncode != 0:
-            return ""
-        return f"{len(changed)} file(s) kept as a WIP commit"
-    except (OSError, subprocess.SubprocessError):
+            retried = git("commit", "--no-verify", "-m", message)
+            if retried.returncode == 0:
+                bypassed = " (commit hooks refused; bypassed)"
+                committed = retried
+        if committed.returncode != 0:
+            # Never fall back to "nothing was written" here: work demonstrably
+            # exists, and reporting otherwise is exactly the misleading message
+            # this function was written to remove. Carry git's own reason out.
+            detail = (
+                (committed.stderr or committed.stdout or "")
+                or (added.stderr or "")
+            ).strip().splitlines()
+            return (
+                f"{len(changed)} changed path(s) NOT kept: "
+                f"{detail[-1] if detail else 'git commit failed'}"
+            )
+        # Count from the commit itself rather than from status lines: a rename
+        # is one line but two paths, and this is the number a person acts on.
+        listed = git("show", "--pretty=format:", "--name-only", "HEAD", limit=30)
+        files = [line for line in (listed.stdout or "").splitlines() if line.strip()]
+        return f"{len(files) or len(changed)} file(s) kept as a WIP commit{bypassed}"
+    except (OSError, subprocess.SubprocessError) as exc:
         # Preserving is best-effort. Failing to save the work must not also
-        # mask why the stage failed.
-        return ""
+        # mask why the stage failed — but it must not claim success either.
+        return f"work may be uncommitted: {type(exc).__name__}"
 
 
 # Why the last attempt at a given stage failed, so the event carries the
@@ -671,14 +735,18 @@ def run_stage(
         # plainly whether there was any. "exit 124" alone cannot distinguish a
         # stage that finished the job a minute past its deadline from one that
         # never started.
-        kept = preserve_work(cwd, stage["id"], timeout) if stage.get("mutates") else ""
+        #
+        # Deliberately does NOT return: a provider that rate-limits and then
+        # backs off past the deadline still exits 124, and returning here would
+        # skip the fallback below and kill the flow where it used to switch to
+        # the local coder and carry on.
+        kept = preserve_work(cwd, stage["id"], timeout, base) if stage.get("mutates") else ""
         LAST_STAGE_REASON[stage["id"]] = (
             f"timed out after {timeout}s — {kept}"
             if kept
             else f"timed out after {timeout}s with nothing written"
         )
         print(f"stage {stage['id']}: {LAST_STAGE_REASON[stage['id']]}", file=sys.stderr)
-        return code
     if stage["provider"] != "builtin":
         provider = stage["provider_config"]
         fallback = provider.get("fallback")
