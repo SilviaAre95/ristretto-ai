@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from . import broker, events
-from .seam import VERIFY_GATE
+from .seam import DEV_CONFIG, VERIFY_GATE
 from .config import ConfigError, load_config, resolved_flow, resolved_provider
 
 
@@ -38,6 +38,16 @@ MODEL_FAILURE = re.compile(r"<model_failure>(.*?)</model_failure>", re.DOTALL | 
 MIN_STAGE_OUTPUT = 40
 # Ristretto's own run artifacts are not the flow's work product.
 ARTIFACT_DIR_NAME = ".ristretto"
+
+# The stage budget when nothing else says otherwise. A repository whose
+# worktree starts cold — no node_modules, a database client still to generate —
+# can spend half of this on setup before the model does anything, which is how
+# an hour turns out not to be an hour. Such a repo raises it in .cc-dev.yaml.
+DEFAULT_STAGE_TIMEOUT = 3600
+# Bounds on what a repository may ask for: a misplaced zero should not hold a
+# worktree for half a day.
+MIN_STAGE_TIMEOUT = 300
+MAX_STAGE_TIMEOUT = 14400
 
 
 class FlowError(RuntimeError):
@@ -380,6 +390,144 @@ def run_process(
         return process.returncode, f"{stdout or ''}{stderr or ''}"
 
 
+def repo_stage_timeout(cwd: Path) -> int | None:
+    """A repository's own stage budget, declared in its .cc-dev.yaml.
+
+    Read from the repo rather than from Ristretto's config because the thing
+    that makes a stage slow — a cold monorepo install, a client to generate —
+    is a property of the repository, and the repository is where a contributor
+    will look for it. Malformed values are ignored rather than fatal: a typo in
+    a repo's config must not stop that repo running a loop.
+    """
+    path = cwd / DEV_CONFIG
+    if not path.is_file():
+        return None
+    try:
+        import yaml
+
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        seconds = int(data.get("stage_timeout"))
+    except Exception:  # noqa: BLE001 - a repo's config must never kill the run
+        return None
+    return max(MIN_STAGE_TIMEOUT, min(seconds, MAX_STAGE_TIMEOUT))
+
+
+def preserve_work(cwd: Path, stage_id: str, timeout: int, base: str = "") -> str:
+    """Commit what a timed-out stage wrote, so the deadline does not eat it.
+
+    A stage killed at its deadline leaves everything uncommitted in a worktree
+    that is later reclaimed. On 2026-09-07 a build stage had actually finished
+    its job — nine files and a 225-line test, including a concurrency fix
+    better than the one it was asked for — and every line was discarded because
+    the clock ran out before it committed. The task said "build failed: exit
+    124", which reads as a model that produced nothing.
+
+    Committing is the safe move: this is the run's own feature branch, the
+    commit says WIP in its subject, and a person reads it before merging.
+    Losing an hour of correct work silently is the worse failure.
+
+    Returns a description for the failure reason, or "" if there was nothing
+    to keep.
+    """
+    # Ristretto's own logs live in the worktree and are not the work product.
+    exclude = f":(exclude){ARTIFACT_DIR_NAME}"
+
+    def git(*args: str, limit: int = 60) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["git", *args], cwd=cwd, capture_output=True, text=True,
+            check=False, timeout=limit,
+        )
+
+    try:
+        # -uall: without it git collapses a new directory into a single
+        # "?? dir/" line, so a stage that added a module would report one file
+        # when it wrote twenty. This count is the whole point of the change.
+        status = git("status", "--porcelain", "-uall", "--", ".", exclude, limit=30)
+        changed = [line for line in (status.stdout or "").splitlines() if line.strip()]
+        if not changed:
+            return ""
+
+        # Committing on a detached HEAD puts the work on no branch at all, and
+        # mid-rebase it would capture conflict markers. Both are worse than not
+        # committing — but saying nothing was written would be a lie, so refuse
+        # loudly instead. The docstring's "this is the run's own branch" is an
+        # assumption, and this is where it gets checked.
+        head = git("symbolic-ref", "-q", "--short", "HEAD", limit=30)
+        if head.returncode != 0:
+            return f"{len(changed)} changed path(s) NOT kept: HEAD is detached"
+        # The docstring below claims this is the run's own feature branch. That
+        # is a guarantee Hermes provides by creating a worktree, not one this
+        # code was given — and `run-loop.sh` can be re-run by hand from the
+        # primary checkout, which is exactly the recovery step the flow guard
+        # prints. Committing unreviewed model output onto the base branch would
+        # then poison every worktree cut from it afterwards. Check, don't trust.
+        branch = (head.stdout or "").strip()
+        if base and branch == base:
+            return (
+                f"{len(changed)} changed path(s) NOT kept: refusing to commit "
+                f"to the base branch {base!r}"
+            )
+        git_dir = (git("rev-parse", "--absolute-git-dir", limit=30).stdout or "").strip()
+        if git_dir:
+            # A worktree's .git is a file pointing elsewhere, so ask git for the
+            # real directory rather than looking under cwd/.git.
+            in_flight = [
+                name for name in
+                ("rebase-merge", "rebase-apply", "MERGE_HEAD", "CHERRY_PICK_HEAD")
+                if (Path(git_dir) / name).exists()
+            ]
+            if in_flight:
+                return (
+                    f"{len(changed)} changed path(s) NOT kept: "
+                    f"{in_flight[0]} in progress"
+                )
+
+        added = git("add", "-A", "--", ".", exclude)
+        message = (
+            f"wip({stage_id}): stage timed out after {timeout}s\n\n"
+            "Committed by Ristretto so work already written is not lost with\n"
+            "the worktree. Unreviewed and possibly incomplete — read it before\n"
+            "trusting it.\n\n"
+            # A squash-merge rewrites the subject, so the marker that survives
+            # has to be a trailer. Without it this reads in git log as a commit
+            # the human intended.
+            f"Ristretto-Preserved: {stage_id}"
+        )
+        # Hooks first. A pre-commit hook is often where a repo's secret scan
+        # runs, and bypassing it unconditionally would remove the only check
+        # that sees the staged diff. It still must not be able to *veto*
+        # preservation — so if it refuses, bypass it and say so rather than
+        # silently dropping either the work or the scan.
+        committed = git("commit", "-m", message)
+        bypassed = ""
+        if committed.returncode != 0:
+            retried = git("commit", "--no-verify", "-m", message)
+            if retried.returncode == 0:
+                bypassed = " (commit hooks refused; bypassed)"
+                committed = retried
+        if committed.returncode != 0:
+            # Never fall back to "nothing was written" here: work demonstrably
+            # exists, and reporting otherwise is exactly the misleading message
+            # this function was written to remove. Carry git's own reason out.
+            detail = (
+                (committed.stderr or committed.stdout or "")
+                or (added.stderr or "")
+            ).strip().splitlines()
+            return (
+                f"{len(changed)} changed path(s) NOT kept: "
+                f"{detail[-1] if detail else 'git commit failed'}"
+            )
+        # Count from the commit itself rather than from status lines: a rename
+        # is one line but two paths, and this is the number a person acts on.
+        listed = git("show", "--pretty=format:", "--name-only", "HEAD", limit=30)
+        files = [line for line in (listed.stdout or "").splitlines() if line.strip()]
+        return f"{len(files) or len(changed)} file(s) kept as a WIP commit{bypassed}"
+    except (OSError, subprocess.SubprocessError) as exc:
+        # Preserving is best-effort. Failing to save the work must not also
+        # mask why the stage failed — but it must not claim success either.
+        return f"work may be uncommitted: {type(exc).__name__}"
+
+
 # Why the last attempt at a given stage failed, so the event carries the
 # reason the operator needs rather than a bare exit code.
 LAST_STAGE_REASON: dict[str, str] = {}
@@ -533,10 +681,15 @@ def run_stage(
     dry_run: bool,
     expected_verify_digest: str | None,
     gated: bool = True,
+    pinned_stage_timeout: int | None = None,
 ) -> int:
     output = artifacts / stage.get("output", f"{stage['id']}.txt")
     log = artifacts / f"{stage['id']}.log"
-    timeout = int(stage.get("timeout", 3600))
+    # Most specific wins: a stage that declares its own budget, else the
+    # repository's as pinned at flow start, else the default. Pinned rather
+    # than re-read here so a mutating stage cannot extend its own or a later
+    # stage's deadline by editing .cc-dev.yaml mid-run.
+    timeout = int(stage.get("timeout") or pinned_stage_timeout or DEFAULT_STAGE_TIMEOUT)
     if stage["role"] == "verify":
         if expected_verify_digest is None:
             raise FlowError("verify stage was not pinned at flow start")
@@ -580,6 +733,23 @@ def run_stage(
             return 1
         LAST_STAGE_REASON.pop(stage["id"], None)
         return 0
+    if code == 124:
+        # Keep the work before anything else touches this worktree, and say
+        # plainly whether there was any. "exit 124" alone cannot distinguish a
+        # stage that finished the job a minute past its deadline from one that
+        # never started.
+        #
+        # Deliberately does NOT return: a provider that rate-limits and then
+        # backs off past the deadline still exits 124, and returning here would
+        # skip the fallback below and kill the flow where it used to switch to
+        # the local coder and carry on.
+        kept = preserve_work(cwd, stage["id"], timeout, base) if stage.get("mutates") else ""
+        LAST_STAGE_REASON[stage["id"]] = (
+            f"timed out after {timeout}s — {kept}"
+            if kept
+            else f"timed out after {timeout}s with nothing written"
+        )
+        print(f"stage {stage['id']}: {LAST_STAGE_REASON[stage['id']]}", file=sys.stderr)
     if stage["provider"] != "builtin":
         provider = stage["provider_config"]
         fallback = provider.get("fallback")
@@ -701,6 +871,14 @@ def execute(args: argparse.Namespace) -> int:
     expected_verify_digest = None
     if any(stage["role"] == "verify" for stage in flow["stages"]):
         expected_verify_digest = verify_gate_digest(cwd)
+    # Pinned at flow start for the same reason .cc-verify's digest is: both
+    # are control-plane values living in files a mutating stage can rewrite.
+    # Read per stage from disk, a build stage could raise its own and every
+    # later stage's budget — and preserve_work would then commit that edit so
+    # it survived into the retry and the PR. Bounded at four hours, so this
+    # was resource abuse rather than escape, but the neighbouring gate is
+    # pinned and this one should not be the exception.
+    pinned_stage_timeout = repo_stage_timeout(cwd)
     (artifacts / "flow.json").write_text(
         json.dumps(
             {
@@ -708,6 +886,7 @@ def execute(args: argparse.Namespace) -> int:
                 "issue": args.issue,
                 "base": base,
                 "verify_sha256": expected_verify_digest,
+                "stage_timeout": pinned_stage_timeout,
             },
             indent=2,
         )
@@ -732,7 +911,7 @@ def execute(args: argparse.Namespace) -> int:
     try:
         return _run_stages(
             args, config, flow, artifacts, cwd, base, record, emit, pulse,
-            expected_verify_digest, gated,
+            expected_verify_digest, gated, pinned_stage_timeout,
         )
     finally:
         # Stop claiming to be alive the moment we are not, including when a
@@ -753,6 +932,7 @@ def _run_stages(
     pulse: "Heartbeat",
     expected_verify_digest: str | None,
     gated: bool = True,
+    pinned_stage_timeout: int | None = None,
 ) -> int:
     opened: str | None = None
     for stage in flow["stages"]:
@@ -773,6 +953,7 @@ def _run_stages(
             args.dry_run,
             expected_verify_digest,
             gated,
+            pinned_stage_timeout,
         )
         elapsed = round(time.monotonic() - started, 1)
         if code != 0:
