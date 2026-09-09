@@ -343,7 +343,7 @@ class RequestDetailTest(unittest.TestCase):
 class DescribeExplainsTest(unittest.TestCase):
     """An approval must say what it does, not just what it runs (XARI-125).
 
-    A phone showed `Bash: find /Users/…/SilviaXari/ -name "*.md" …` with a
+    A phone showed `Bash: find ~/vault -name "*.md" …` with a
     25-minute clock and no statement of intent, while the agent's own
     "Search vault notes for XARI-31" sat unused in the same payload.
     """

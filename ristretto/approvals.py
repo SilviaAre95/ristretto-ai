@@ -140,7 +140,7 @@ def describe(tool_name: str, tool_input: Mapping[str, Any] | None) -> str:
         return _clip(question, 160)
     # The agent's own one-line description comes first when there is one.
     # Ordering the raw command ahead of it meant a phone showed
-    #   Bash: find /Users/…/SilviaXari/ -name "*.md" -path "*kaffecard*" | head -10
+    #   Bash: find ~/vault -name "*.md" -path "*project*" | head -10
     # with a 25-minute clock and no statement of intent, while
     # "Search vault notes for XARI-31" sat in the same payload, unused.
     # The command still shows: it is what is actually being authorised, and a
