@@ -298,6 +298,80 @@ def expire(request_id: str, path: Path | None = None) -> None:
         pass
 
 
+def blocked_seconds(
+    task_id: str,
+    since: float,
+    *,
+    until: float | None = None,
+    path: Path | None = None,
+) -> float:
+    """Wall-clock seconds this task spent stopped, waiting for a person.
+
+    The stage budget is meant to measure work. A stage at a permission prompt
+    is not working, and charging it anyway makes the careful agent the one
+    that fails: run 67 spent 3437 of its 3600 seconds here and died reporting
+    "nothing written". This is the number that has to be handed back.
+
+    Merged, not summed. Claude Code asks for several tool calls in one turn
+    and each opens its own request, so two questions are often outstanding at
+    once — run 67's Read and Bash overlapped by five and a half minutes, and
+    adding its rows up gives 3766 seconds inside a 3600-second hour. What the
+    stage actually lost is the union: the time during which it was stopped,
+    however many questions were stopping it.
+
+    Only requests opened at or after `since` count. Callers take `since`
+    immediately before spawning the process whose clock this credits, so a
+    request older than that belongs to a process that is already gone and
+    cannot be blocking this one. That is not hypothetical: a stage killed at
+    its deadline leaves its last request undecided with up to half an hour on
+    it — run 67's is still NULL in the live store — and the fallback attempt
+    that starts seconds later would otherwise watch that orphan accrue credit
+    at one second per second while it worked uninterrupted, and never reach
+    its own deadline. Clamping such a row's start to `since` is not enough:
+    one answered just after the new attempt began leaks the same way.
+
+    An undecided row counts only to its own `expires_at`, for the same reason
+    in the other direction — nothing reaps these rows, and counting one to now
+    forever would eventually excuse any deadline at all.
+
+    An unreadable store is worth no credit. This decides how long a stage may
+    keep running, so the failure has to be towards the shorter budget.
+    """
+    window_end = time.time() if until is None else until
+    try:
+        with connect(path) as connection:
+            rows = connection.execute(
+                "SELECT requested_at, decided_at, expires_at FROM approvals WHERE task_id = ?",
+                (task_id,),
+            ).fetchall()
+    except (sqlite3.Error, OSError):
+        return 0.0
+
+    spans: list[tuple[float, float]] = []
+    for row in rows:
+        start = float(row["requested_at"])
+        if start < since:
+            continue
+        decided = row["decided_at"]
+        stop = float(decided) if decided is not None else min(window_end, float(row["expires_at"]))
+        stop = min(stop, window_end)
+        if stop > start:
+            spans.append((start, stop))
+    if not spans:
+        return 0.0
+
+    spans.sort()
+    total = 0.0
+    open_start, open_stop = spans[0]
+    for start, stop in spans[1:]:
+        if start > open_stop:
+            total += open_stop - open_start
+            open_start, open_stop = start, stop
+        else:
+            open_stop = max(open_stop, stop)
+    return total + (open_stop - open_start)
+
+
 def pending(path: Path | None = None, task_id: str | None = None) -> list[dict[str, Any]]:
     """Unanswered, unexpired requests — newest first."""
     now = int(time.time())

@@ -15,9 +15,9 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
-from . import broker, events
+from . import approvals, broker, events
 from .seam import DEV_CONFIG, VERIFY_GATE
 from .config import ConfigError, load_config, resolved_flow, resolved_provider
 
@@ -49,6 +49,15 @@ DEFAULT_STAGE_TIMEOUT = 3600
 # worktree for half a day.
 MIN_STAGE_TIMEOUT = 300
 MAX_STAGE_TIMEOUT = 14400
+
+# The most waiting-on-a-person a stage is forgiven. Blocked time is not work
+# and is not charged to the budget — but it cannot be free either, or an agent
+# that keeps asking questions nobody answers holds a worktree and a Hermes
+# claim indefinitely, each unanswered request buying another half hour. Four
+# expired approvals in a row is not a slow operator, it is an abandoned run.
+MAX_APPROVAL_CREDIT = 4 * approvals.DEFAULT_TIMEOUT_SECONDS
+# How often a stage that has already been given time back re-reads the store.
+CREDIT_POLL_SECONDS = 15.0
 
 
 class FlowError(RuntimeError):
@@ -378,7 +387,15 @@ def run_process(
     runner: str,
     timeout: int,
     output_from_stdout: bool,
-) -> tuple[int, str]:
+    credit: Callable[[], float] | None = None,
+) -> tuple[int, str, float]:
+    """Run a stage to completion or to its deadline.
+
+    `credit` is an optional callable returning the seconds spent so far
+    waiting on a human. That time is added to the deadline rather than charged
+    against it, so `timeout` measures working time. Returns the exit code, the
+    combined streams, and how much waiting was forgiven.
+    """
     global ACTIVE_PROCESS, ACTIVE_RECORD
     with log_path.open("w", encoding="utf-8") as log:
         # stderr is kept out of stdout: the runner writes warnings and notices
@@ -401,18 +418,56 @@ def run_process(
             if err:
                 log.write(f"\n--- stderr ---\n{err}")
 
+        started = time.monotonic()
+        forgiven = 0.0
+        expired = False
         try:
-            stdout, stderr = process.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            process.terminate()
-            try:
-                stdout, stderr = process.communicate(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                stdout, stderr = process.communicate()
-            record_streams(stdout, stderr)
-            log.write(f"\nflow stage timed out after {timeout}s\n")
-            return 124, f"{stdout or ''}{stderr or ''}"
+            while True:
+                remaining = timeout + forgiven - (time.monotonic() - started)
+                if forgiven and remaining < CREDIT_POLL_SECONDS:
+                    # An outstanding request grows the credit continuously, so
+                    # chasing the deadline exactly would re-read the store in a
+                    # tight loop for as long as the person takes to answer.
+                    # Waiting happens on a human timescale; check on that one.
+                    # The cost is overshooting the budget by up to this much,
+                    # and only on a stage that was gated at all.
+                    remaining = CREDIT_POLL_SECONDS
+                if remaining > 0:
+                    try:
+                        stdout, stderr = process.communicate(timeout=remaining)
+                        break
+                    except subprocess.TimeoutExpired:
+                        # Not dead yet. communicate() keeps what it has read
+                        # and resumes where it left off on the next call.
+                        pass
+                # The deadline passed. Before declaring the model out of time,
+                # ask the approval store how much of that hour it spent
+                # standing at a permission prompt, and give that back. Read
+                # here rather than on a poll because this is the only moment
+                # the answer changes anything.
+                # Clamped here and not only in approval_credit: this loop only
+                # terminates because the credit is bounded, so the bound
+                # belongs where the loop can see it.
+                waited = min(credit(), float(MAX_APPROVAL_CREDIT)) if credit else 0.0
+                if waited > forgiven:
+                    forgiven = waited
+                    continue
+                expired = True
+                break
+            if expired:
+                process.terminate()
+                try:
+                    stdout, stderr = process.communicate(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    stdout, stderr = process.communicate()
+                record_streams(stdout, stderr)
+                log.write(
+                    f"\nflow stage timed out after {timeout}s of working time"
+                    + (f", plus {int(forgiven)}s waiting on approvals" if forgiven else "")
+                    + "\n"
+                )
+                return 124, f"{stdout or ''}{stderr or ''}", forgiven
         finally:
             record_path.unlink(missing_ok=True)
             ACTIVE_PROCESS = None
@@ -422,7 +477,7 @@ def run_process(
             output_path.write_text(stdout or "", encoding="utf-8")
         # Availability detection reads both streams; auth and limit errors
         # are reported on stderr.
-        return process.returncode, f"{stdout or ''}{stderr or ''}"
+        return process.returncode, f"{stdout or ''}{stderr or ''}", forgiven
 
 
 # A stage that cannot reach its model should cost seconds, not the whole
@@ -674,6 +729,51 @@ def preserve_work(cwd: Path, stage_id: str, timeout: int, base: str = "") -> str
         return f"work may be uncommitted: {type(exc).__name__}"
 
 
+def approval_credit(task_id: str, since: float) -> Callable[[], float] | None:
+    """A callable giving the seconds this stage has been stopped on a person.
+
+    Capped, so the budget stretches around a slow answer but not around an
+    operator who has gone to bed.
+    """
+    if not task_id:
+        return None
+
+    def waited() -> float:
+        return min(approvals.blocked_seconds(task_id, since), float(MAX_APPROVAL_CREDIT))
+
+    return waited
+
+
+def timeout_reason(timeout: int, forgiven: float, kept: str) -> str:
+    """Say which of the two timeouts this was: out of working time, or waiting.
+
+    "timed out after 3600s with nothing written" was literally true of run 67
+    and told the operator nothing that helped. The model had had 163 seconds
+    to work and spent the rest of the hour at a permission prompt; it was read
+    as a slow model three times running. The two failures need opposite
+    responses — raise the budget, or answer faster — so the reason has to name
+    which one happened.
+    """
+    minutes = int(forgiven // 60)
+    if forgiven >= MAX_APPROVAL_CREDIT:
+        # Not "unanswered": the ceiling is reached just as readily by many
+        # prompts answered promptly as by four nobody replied to, and telling
+        # someone who answered every time to answer faster is its own
+        # misdiagnosis.
+        head = (
+            f"timed out: {minutes}m spent waiting on approvals reached the "
+            f"{MAX_APPROVAL_CREDIT // 60}m the stage clock will hold for"
+        )
+    elif minutes:
+        head = (
+            f"timed out after {timeout}s of working time "
+            f"({minutes}m waiting on approvals was not charged)"
+        )
+    else:
+        head = f"timed out after {timeout}s"
+    return f"{head} — {kept}" if kept else f"{head} with nothing written"
+
+
 # Why the last attempt at a given stage failed, so the event carries the
 # reason the operator needs rather than a bare exit code.
 LAST_STAGE_REASON: dict[str, str] = {}
@@ -828,6 +928,7 @@ def run_stage(
     expected_verify_digest: str | None,
     gated: bool = True,
     pinned_stage_timeout: int | None = None,
+    task_id: str = "",
 ) -> int:
     output = artifacts / stage.get("output", f"{stage['id']}.txt")
     log = artifacts / f"{stage['id']}.log"
@@ -854,7 +955,12 @@ def run_stage(
             printable[-1] = "[prompt]" if stage["role"] != "verify" else printable[-1]
         print(f"{stage['id']}: {shlex.join(printable)}")
         return 0
-    code, text = run_process(
+    # Wall-clock, because the approval rows are stamped with wall-clock time.
+    # The deadline itself is still measured on the monotonic clock inside
+    # run_process, so a clock adjustment mid-stage can shift the credit but
+    # cannot move the budget.
+    launched = time.time()
+    code, text, forgiven = run_process(
         command,
         env,
         cwd,
@@ -864,6 +970,7 @@ def run_stage(
         runner,
         timeout,
         output_from_stdout,
+        approval_credit(task_id, launched),
     )
     if code == 0:
         if stage["role"] == "verify":
@@ -890,11 +997,7 @@ def run_stage(
         # skip the fallback below and kill the flow where it used to switch to
         # the local coder and carry on.
         kept = preserve_work(cwd, stage["id"], timeout, base) if stage.get("mutates") else ""
-        LAST_STAGE_REASON[stage["id"]] = (
-            f"timed out after {timeout}s — {kept}"
-            if kept
-            else f"timed out after {timeout}s with nothing written"
-        )
+        LAST_STAGE_REASON[stage["id"]] = timeout_reason(timeout, forgiven, kept)
         print(f"stage {stage['id']}: {LAST_STAGE_REASON[stage['id']]}", file=sys.stderr)
     if stage["provider"] != "builtin":
         provider = stage["provider_config"]
@@ -922,6 +1025,7 @@ def run_stage(
                 # while flow.json still claimed 10800.
                 gated,
                 pinned_stage_timeout,
+                task_id,
             )
     return code
 
@@ -1107,6 +1211,7 @@ def _run_stages(
         if not args.dry_run:
             pulse.enter(stage["id"])
         started = time.monotonic()
+        launched = time.time()
         code = run_stage(
             config,
             stage,
@@ -1119,8 +1224,18 @@ def _run_stages(
             expected_verify_digest,
             gated,
             pinned_stage_timeout,
+            args.task_id,
         )
         elapsed = round(time.monotonic() - started, 1)
+        # Uncapped here: the budget forgives a bounded amount of waiting, but
+        # the event should report what actually happened. A stage that reads
+        # "48m, 40m of it waiting on you" is the one number that would have
+        # stopped run 67 being misdiagnosed three times.
+        blocked = (
+            0.0
+            if args.dry_run
+            else round(approvals.blocked_seconds(args.task_id, launched), 1)
+        )
         if code != 0:
             reason = LAST_STAGE_REASON.get(stage["id"]) or f"exit {code}"
             print(f"flow {args.flow}: stage {stage['id']} failed (exit {code})", file=sys.stderr)
@@ -1129,7 +1244,12 @@ def _run_stages(
             emit(
                 "stage.failed",
                 stage=stage["id"],
-                payload={"role": stage["role"], "reason": reason, "duration_s": elapsed},
+                payload={
+                    "role": stage["role"],
+                    "reason": reason,
+                    "duration_s": elapsed,
+                    "blocked_s": blocked,
+                },
             )
             emit("run.ended", payload={"outcome": "failed", "stage": stage["id"]})
             if not args.dry_run:
@@ -1142,7 +1262,7 @@ def _run_stages(
         emit(
             "stage.passed",
             stage=stage["id"],
-            payload={"role": stage["role"], "duration_s": elapsed},
+            payload={"role": stage["role"], "duration_s": elapsed, "blocked_s": blocked},
         )
         if stage["role"] == "pr":
             opened = pr_url(artifacts / str(stage.get("output", "")))

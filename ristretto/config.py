@@ -182,6 +182,33 @@ def _artifact(value: Any, label: str) -> str:
     return value
 
 
+def _no_fallback_cycles(providers: Mapping[str, Any]) -> None:
+    """Refuse a fallback chain that loops back on itself.
+
+    `run_stage` retries on a different provider by recursing, so a config
+    where a falls back to b and b back to a recurses once per attempt with
+    nothing to stop it — and every hop is a real model run against a real
+    budget, not a cheap loop. Each attempt also earns its own approval credit,
+    so a cycle is expensive in worktree-hours as well as tokens.
+
+    Caught here rather than guarded in the runner because it is a static
+    property of the config: a chain that can loop is a mistake at the moment
+    it is written, and `make check` validates the shipped config.
+    """
+    for name in providers:
+        seen = [name]
+        current = providers[name]
+        while isinstance(current, Mapping) and current.get("fallback") is not None:
+            step = str(current["fallback"])
+            if step in seen:
+                raise ConfigError(
+                    "providers fallback chain loops: "
+                    + " -> ".join([*seen, step])
+                )
+            seen.append(step)
+            current = providers.get(step)
+
+
 def validate_config(config: Mapping[str, Any]) -> None:
     if config.get("schema_version") != SCHEMA_VERSION:
         raise ConfigError(f"schema_version must be {SCHEMA_VERSION}")
@@ -233,6 +260,8 @@ def validate_config(config: Mapping[str, Any]) -> None:
         fallback = provider.get("fallback")
         if fallback is not None and fallback not in providers:
             raise ConfigError(f"providers.{name}.fallback references unknown provider {fallback}")
+
+    _no_fallback_cycles(providers)
 
     flows = _mapping(config.get("flows"), "flows")
     if not flows:
