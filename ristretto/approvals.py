@@ -138,10 +138,24 @@ def describe(tool_name: str, tool_input: Mapping[str, Any] | None) -> str:
     question = _first_question(data)
     if question:
         return _clip(question, 160)
-    for key in ("command", "file_path", "path", "url", "pattern", "prompt", "description"):
+    # The agent's own one-line description comes first when there is one.
+    # Ordering the raw command ahead of it meant a phone showed
+    #   Bash: find /Users/…/SilviaXari/ -name "*.md" -path "*kaffecard*" | head -10
+    # with a 25-minute clock and no statement of intent, while
+    # "Search vault notes for XARI-31" sat in the same payload, unused.
+    # The command still shows: it is what is actually being authorised, and a
+    # description is the agent's account of itself, not proof.
+    described = " ".join(str(data.get("description") or "").split())
+    for key in ("command", "file_path", "path", "url", "pattern", "prompt"):
         value = data.get(key)
-        if value:
-            return f"{tool_name}: {_clip(' '.join(str(value).split()), 120)}"
+        if not value:
+            continue
+        detail = _clip(" ".join(str(value).split()), 120)
+        if described:
+            return f"{_clip(described, 80)} — {tool_name}: {detail}"
+        return f"{tool_name}: {detail}"
+    if described:
+        return f"{_clip(described, 120)} — {tool_name}"
     return tool_name
 
 
