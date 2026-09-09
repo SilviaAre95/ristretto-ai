@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import json
 import shutil
+import time
 from pathlib import Path
 import subprocess
+import sys
 
 
 class BindRefused(RuntimeError):
@@ -74,6 +76,13 @@ def tailnet_name(timeout: int = 5) -> str | None:
 # someone else opens, so callers that build links check for it.
 LOOPBACK = "127.0.0.1"
 
+# How hard to try for the tailnet before settling for an address nobody else
+# can reach. Short enough not to delay a genuine offline start by much, long
+# enough to ride out Tailscale still coming up at login or flapping during a
+# reload.
+BIND_RESOLVE_ATTEMPTS = 5
+BIND_RESOLVE_BACKOFF = 2.0
+
 
 def link_host() -> str:
     """The host to put in a link someone will open on another device.
@@ -94,10 +103,22 @@ def resolve_host(requested: str | None = None) -> tuple[str, str]:
                 "board and must stay on the tailnet or loopback"
             )
         return requested, "requested"
-    address = tailnet_address()
-    if address:
-        return address, "tailnet"
-    return "127.0.0.1", "loopback (Tailscale unavailable)"
+    # Retried, because a single failed lookup is usually a blip rather than an
+    # answer. The service restarts on every source edit (--reload is the
+    # deployment mechanism, deliberately), and one restart that happened to
+    # catch Tailscale mid-flap silently pinned the dashboard to loopback for
+    # hours: healthz answered on localhost, every doorbell link pointed at the
+    # tailnet name, and nothing anywhere said the two disagreed.
+    #
+    # Loopback is not a degraded binding here, it is an unreachable one, so it
+    # is worth waiting a few seconds before accepting it.
+    for attempt in range(BIND_RESOLVE_ATTEMPTS):
+        address = tailnet_address()
+        if address:
+            return address, "tailnet"
+        if attempt + 1 < BIND_RESOLVE_ATTEMPTS:
+            time.sleep(BIND_RESOLVE_BACKOFF)
+    return LOOPBACK, "loopback (Tailscale unavailable)"
 
 
 def run(host: str | None = None, port: int = 8787, reload: bool = False) -> int:
@@ -117,6 +138,17 @@ def run(host: str | None = None, port: int = 8787, reload: bool = False) -> int:
 
     bind, why = resolve_host(host)
     print(f"ris-dash: http://{bind}:{port}  ({why}){'  [reloading]' if reload else ''}")
+    if bind == LOOPBACK and not host:
+        # Every doorbell notification links to the tailnet name, so this
+        # is not a dashboard that works locally — it is one that answers
+        # nobody. Say so where an operator will actually see it.
+        print(
+            "ris-dash: WARNING bound to loopback — every link in every "
+            "notification points at the tailnet address and will not "
+            "resolve. Restart once Tailscale is up: "
+            "launchctl kickstart -k gui/$(id -u)/com.ristretto.dash",
+            file=sys.stderr,
+        )
     uvicorn.run(
         "ristretto.dash.app:app",
         host=bind,

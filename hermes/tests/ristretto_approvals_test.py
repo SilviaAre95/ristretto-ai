@@ -338,3 +338,47 @@ class RequestDetailTest(unittest.TestCase):
             approvals.request("q1", "t_a1b2c3d4", "AskUserQuestion", self.QUESTION, path=path)
         row = approvals.get("q1", path=path)
         self.assertEqual(row["detail"]["kind"], "question")
+
+
+class DescribeExplainsTest(unittest.TestCase):
+    """An approval must say what it does, not just what it runs (XARI-125).
+
+    A phone showed `Bash: find ~/vault -name "*.md" …` with a
+    25-minute clock and no statement of intent, while the agent's own
+    "Search vault notes for XARI-31" sat unused in the same payload.
+    """
+
+    def test_the_description_leads_and_the_command_stays(self) -> None:
+        line = approvals.describe(
+            "Bash",
+            {"command": "find /vault -name '*.md' | head -10",
+             "description": "Search vault notes for XARI-31"},
+        )
+
+        self.assertTrue(line.startswith("Search vault notes for XARI-31"))
+        # The command is what is actually being authorised; a description is
+        # the agent's account of itself, not proof. Both must show.
+        self.assertIn("find /vault", line)
+
+    def test_a_request_with_no_description_is_unchanged(self) -> None:
+        line = approvals.describe("Bash", {"command": "npm run build"})
+
+        self.assertEqual(line, "Bash: npm run build")
+
+    def test_a_description_alone_still_beats_a_bare_tool_name(self) -> None:
+        line = approvals.describe("SomeTool", {"description": "Do a thing"})
+
+        self.assertIn("Do a thing", line)
+        self.assertIn("SomeTool", line)
+
+    def test_a_question_still_wins_over_everything(self) -> None:
+        line = approvals.describe(
+            "AskUserQuestion",
+            {"questions": [{"question": "Which database?"}],
+             "description": "ask about the database"},
+        )
+
+        self.assertIn("Which database?", line)
+
+    def test_nothing_useful_falls_back_to_the_tool_name(self) -> None:
+        self.assertEqual(approvals.describe("SomeTool", {}), "SomeTool")
