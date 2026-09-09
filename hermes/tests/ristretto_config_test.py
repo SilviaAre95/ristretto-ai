@@ -93,6 +93,34 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, "pr stage must be last"):
             validate_config(config)
 
+    def test_fallback_cycle_is_rejected(self) -> None:
+        # run_stage retries by recursing into the fallback provider, so a loop
+        # recurses once per attempt with nothing to stop it — and every hop is
+        # a real model run holding a real worktree, now with its own approval
+        # credit on top.
+        config = copy.deepcopy(self.config)
+        names = list(config["providers"])[:2]
+        config["providers"][names[0]]["fallback"] = names[1]
+        config["providers"][names[1]]["fallback"] = names[0]
+        with self.assertRaisesRegex(ConfigError, "fallback chain loops"):
+            validate_config(config)
+
+    def test_a_provider_falling_back_to_itself_is_rejected(self) -> None:
+        config = copy.deepcopy(self.config)
+        name = list(config["providers"])[0]
+        config["providers"][name]["fallback"] = name
+        with self.assertRaisesRegex(ConfigError, "fallback chain loops"):
+            validate_config(config)
+
+    def test_a_straight_fallback_chain_is_still_allowed(self) -> None:
+        config = copy.deepcopy(self.config)
+        names = list(config["providers"])[:3]
+        config["providers"][names[0]]["fallback"] = names[1]
+        config["providers"][names[1]]["fallback"] = names[2]
+        config["providers"][names[2]].pop("fallback", None)
+
+        validate_config(config)
+
     def test_unknown_provider_is_rejected(self) -> None:
         config = copy.deepcopy(self.config)
         config["flows"]["tier1"]["stages"][0]["provider"] = "missing"
