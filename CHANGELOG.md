@@ -7,6 +7,17 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- A stage's clock no longer runs while it waits for a person to answer an
+  approval. The budget measures working time: blocked intervals are read back
+  from the approvals store and added to the deadline instead of charged
+  against it. Attended runs were failing *because* they asked permission —
+  one build stage spent 3437 of its 3600 seconds blocked and got 163 seconds
+  of work — which defeats the point of approving from a phone. Overlapping
+  requests count once, and the forgiveness is capped at two hours so an
+  abandoned run still releases its worktree.
+
 ### Changed
 
 - Approval cards now stay actionable for 30 minutes instead of 5. The Hermes

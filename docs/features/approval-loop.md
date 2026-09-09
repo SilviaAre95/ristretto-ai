@@ -64,3 +64,41 @@ Verified against real Claude Code, not inferred:
 An unattended run (`--unattended`, or the checkbox on the launch form) omits
 the gate altogether, because a prompt nobody will answer stalls for the full
 timeout and then fails closed.
+
+## Waiting for you does not spend the stage budget
+
+A stage's budget measures working time. The clock stops while a permission
+request is outstanding and resumes when you answer, so taking twelve minutes
+to look at a prompt costs the run twelve minutes of wall clock and nothing of
+its budget.
+
+This was not always true, and the failure it caused was worth recording. Run
+67 asked seven times during one build stage and spent 3437 of its 3600
+seconds blocked — 163 seconds of actual work — then died reporting "timed out
+with nothing written". The more carefully the agent asked, the more certainly
+it failed, which is the opposite of what a gate is for. It was misdiagnosed
+three times as a slow model before anyone read the approvals table.
+
+Two details that are not obvious:
+
+- **Overlapping waits count once.** Claude Code asks for several tool calls in
+  one turn, so two prompts are often outstanding together. Run 67's own rows
+  add up to 3766 seconds inside a 3600-second hour; what the stage lost is the
+  union of the intervals, not their sum.
+- **The forgiveness is bounded** at four expired approvals' worth (two hours).
+  Past that the stage gives up and says so, rather than holding a worktree and
+  a Hermes claim for an operator who has gone to bed.
+
+The failure reason distinguishes the two cases, because they need opposite
+responses — raise the budget, or answer faster:
+
+```
+build failed: timed out after 3600s of working time (57m waiting on
+              approvals was not charged) — 9 file(s) kept as a WIP commit
+build failed: timed out waiting on approvals: 120m unanswered, past the
+              120m the stage clock will hold for
+```
+
+`stage.passed` and `stage.failed` events carry `blocked_s` alongside
+`duration_s`, so a run that took 48 minutes with 40 of them waiting on you
+says so on the board.

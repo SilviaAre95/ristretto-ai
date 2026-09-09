@@ -298,6 +298,69 @@ def expire(request_id: str, path: Path | None = None) -> None:
         pass
 
 
+def blocked_seconds(
+    task_id: str,
+    since: float,
+    *,
+    until: float | None = None,
+    path: Path | None = None,
+) -> float:
+    """Wall-clock seconds this task spent stopped, waiting for a person.
+
+    The stage budget is meant to measure work. A stage at a permission prompt
+    is not working, and charging it anyway makes the careful agent the one
+    that fails: run 67 spent 3437 of its 3600 seconds here and died reporting
+    "nothing written". This is the number that has to be handed back.
+
+    Merged, not summed. Claude Code asks for several tool calls in one turn
+    and each opens its own request, so two questions are often outstanding at
+    once — run 67's Read and Bash overlapped by five and a half minutes, and
+    adding its rows up gives 3766 seconds inside a 3600-second hour. What the
+    stage actually lost is the union: the time during which it was stopped,
+    however many questions were stopping it.
+
+    An undecided row counts only to its own `expires_at`. `await_decision`
+    stamps `decided_at` when it parks a request as denied, so a row still open
+    long afterwards means the stage was killed before it got there — run 67's
+    last request is still NULL today. Counting that to now would grow without
+    limit.
+
+    An unreadable store is worth no credit. This decides how long a stage may
+    keep running, so the failure has to be towards the shorter budget.
+    """
+    window_end = time.time() if until is None else until
+    try:
+        with connect(path) as connection:
+            rows = connection.execute(
+                "SELECT requested_at, decided_at, expires_at FROM approvals WHERE task_id = ?",
+                (task_id,),
+            ).fetchall()
+    except (sqlite3.Error, OSError):
+        return 0.0
+
+    spans: list[tuple[float, float]] = []
+    for row in rows:
+        decided = row["decided_at"]
+        stop = float(decided) if decided is not None else min(window_end, float(row["expires_at"]))
+        start = max(float(row["requested_at"]), since)
+        stop = min(stop, window_end)
+        if stop > start:
+            spans.append((start, stop))
+    if not spans:
+        return 0.0
+
+    spans.sort()
+    total = 0.0
+    open_start, open_stop = spans[0]
+    for start, stop in spans[1:]:
+        if start > open_stop:
+            total += open_stop - open_start
+            open_start, open_stop = start, stop
+        else:
+            open_stop = max(open_stop, stop)
+    return total + (open_stop - open_start)
+
+
 def pending(path: Path | None = None, task_id: str | None = None) -> list[dict[str, Any]]:
     """Unanswered, unexpired requests — newest first."""
     now = int(time.time())
