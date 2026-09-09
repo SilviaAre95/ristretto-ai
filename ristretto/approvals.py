@@ -319,11 +319,20 @@ def blocked_seconds(
     stage actually lost is the union: the time during which it was stopped,
     however many questions were stopping it.
 
-    An undecided row counts only to its own `expires_at`. `await_decision`
-    stamps `decided_at` when it parks a request as denied, so a row still open
-    long afterwards means the stage was killed before it got there — run 67's
-    last request is still NULL today. Counting that to now would grow without
-    limit.
+    Only requests opened at or after `since` count. Callers take `since`
+    immediately before spawning the process whose clock this credits, so a
+    request older than that belongs to a process that is already gone and
+    cannot be blocking this one. That is not hypothetical: a stage killed at
+    its deadline leaves its last request undecided with up to half an hour on
+    it — run 67's is still NULL in the live store — and the fallback attempt
+    that starts seconds later would otherwise watch that orphan accrue credit
+    at one second per second while it worked uninterrupted, and never reach
+    its own deadline. Clamping such a row's start to `since` is not enough:
+    one answered just after the new attempt began leaks the same way.
+
+    An undecided row counts only to its own `expires_at`, for the same reason
+    in the other direction — nothing reaps these rows, and counting one to now
+    forever would eventually excuse any deadline at all.
 
     An unreadable store is worth no credit. This decides how long a stage may
     keep running, so the failure has to be towards the shorter budget.
@@ -340,9 +349,11 @@ def blocked_seconds(
 
     spans: list[tuple[float, float]] = []
     for row in rows:
+        start = float(row["requested_at"])
+        if start < since:
+            continue
         decided = row["decided_at"]
         stop = float(decided) if decided is not None else min(window_end, float(row["expires_at"]))
-        start = max(float(row["requested_at"]), since)
         stop = min(stop, window_end)
         if stop > start:
             spans.append((start, stop))

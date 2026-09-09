@@ -1,14 +1,15 @@
 """The stage clock must not run while a stage is waiting on a person (XARI-128).
 
-Run 67 spent 60 of its 60-minute budget blocked at permission prompts and died
-reporting "timed out after 3600s with nothing written". The perverse property
-under test throughout: asking permission carefully must not be what makes a
-stage fail.
+Run 67 spent 3437 of its 3600 seconds blocked at permission prompts, got 163
+seconds of work, and died reporting "timed out after 3600s with nothing
+written". The perverse property under test throughout: asking permission
+carefully must not be what makes a stage fail.
 
-The interval arithmetic is tested against run 67's actual rows rather than
-invented ones, because the two things that make it non-obvious — overlapping
-requests, and a request the kill left undecided — are both properties of what
-Claude Code really did, not of a shape someone imagined.
+The interval arithmetic is tested against the shape of run 67's own rows
+rather than an invented one, because the two things that make it non-obvious —
+overlapping requests, and a request the kill left undecided — are both
+properties of what Claude Code really did, not of a shape someone imagined.
+The task id below is synthetic; only the relative timings are real.
 """
 
 from __future__ import annotations
@@ -26,10 +27,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from ristretto import approvals, runner  # noqa: E402
 
 
-# Run 67 (t_0aaef35b, 2026-09-09), as seconds from its first prompt:
-# (requested, decided or None, expires). Read off the live approvals store —
-# the last row really is still undecided there, because the kill landed before
-# await_decision could park it.
+# Run 67 (2026-09-09), as seconds from its first prompt: (requested, decided
+# or None, expires). Timings measured from the approvals store; the last row
+# really was still undecided, because the kill landed before await_decision
+# could park it.
 RUN_67 = [
     (0, 758, 1800),        # Bash,  allowed after 12m38s
     (794, 1071, 2594),     # Bash,  allowed after 4m37s
@@ -52,7 +53,7 @@ class BlockedSecondsTest(unittest.TestCase):
         self.dir = Path(tempfile.mkdtemp())
         self.path = self.dir / "approvals.db"
 
-    def rows(self, spans, task_id: str = "t_0aaef35b", base: int = 0) -> None:
+    def rows(self, spans, task_id: str = "t_run67", base: int = 0) -> None:
         with approvals.connect(self.path) as connection:
             for index, (requested, decided, expires) in enumerate(spans):
                 connection.execute(
@@ -71,7 +72,7 @@ class BlockedSecondsTest(unittest.TestCase):
 
     def blocked(self, since: float = 0, until: float | None = RUN_67_KILLED_AT) -> float:
         return approvals.blocked_seconds(
-            "t_0aaef35b", since, until=until, path=self.path
+            "t_run67", since, until=until, path=self.path
         )
 
     def test_run_67_lost_almost_its_entire_hour(self) -> None:
@@ -107,11 +108,34 @@ class BlockedSecondsTest(unittest.TestCase):
         self.assertAlmostEqual(self.blocked(until=600), 600)
 
     def test_waiting_before_the_stage_started_is_not_credited(self) -> None:
-        # A previous stage's prompt is not this stage's lost time.
+        # A previous attempt's prompt is not this attempt's lost time, and
+        # that holds for the part of it that overlaps: `since` is taken just
+        # before the process is spawned, so a request older than `since`
+        # belongs to a process that is already gone.
         self.rows([(0, 600, 1800)])
 
-        self.assertAlmostEqual(self.blocked(since=300), 300)
+        self.assertAlmostEqual(self.blocked(since=300), 0)
         self.assertAlmostEqual(self.blocked(since=900), 0)
+
+    def test_an_orphaned_request_does_not_freeze_the_next_attempt_s_clock(self) -> None:
+        # A stage killed at its deadline leaves its last request undecided
+        # with up to half an hour still on it, and nothing reaps those rows.
+        # The fallback attempt starts seconds later: if the orphan counted, its
+        # credit would grow one second per second while the new attempt worked
+        # uninterrupted, and the deadline would never arrive.
+        self.rows([(0, None, 1800)])
+        relaunched = 10
+
+        self.assertAlmostEqual(self.blocked(since=relaunched, until=20), 0)
+        self.assertAlmostEqual(self.blocked(since=relaunched, until=600), 0)
+
+    def test_an_old_request_answered_late_is_not_credited_either(self) -> None:
+        # The same leak wearing a different hat: clamping the start to `since`
+        # would have credited this attempt the 50s between its launch and an
+        # answer to a question the previous attempt asked.
+        self.rows([(0, 60, 1800)])
+
+        self.assertAlmostEqual(self.blocked(since=10, until=600), 0)
 
     def test_another_task_is_not_credited(self) -> None:
         self.rows([(0, 600, 1800)], task_id="t_someone_else")
@@ -124,7 +148,7 @@ class BlockedSecondsTest(unittest.TestCase):
     def test_an_unreadable_store_is_worth_no_credit(self) -> None:
         # This decides how long a stage may keep running, so a store that
         # cannot be read has to fail towards the shorter budget.
-        blocked = approvals.blocked_seconds("t_0aaef35b", 0, path=self.dir)
+        blocked = approvals.blocked_seconds("t_run67", 0, path=self.dir)
 
         self.assertEqual(blocked, 0.0)
 
@@ -269,6 +293,16 @@ class TimeoutReasonTest(unittest.TestCase):
         self.assertIn("3600s of working time", reason)
         self.assertIn("40m waiting on approvals was not charged", reason)
         self.assertIn("9 file(s) kept", reason)
+
+    def test_hitting_the_ceiling_does_not_accuse_you_of_not_answering(self) -> None:
+        # The ceiling is reached as readily by many prompts answered promptly
+        # as by four nobody replied to. Telling someone who answered every
+        # time to answer faster is the same class of misdiagnosis this
+        # function exists to end.
+        reason = runner.timeout_reason(3600, float(runner.MAX_APPROVAL_CREDIT), "")
+
+        self.assertNotIn("unanswered", reason)
+        self.assertIn("waiting on approvals", reason)
 
     def test_dying_at_a_prompt_is_a_different_failure_from_running_out(self) -> None:
         out_of_work = runner.timeout_reason(3600, 0.0, "")

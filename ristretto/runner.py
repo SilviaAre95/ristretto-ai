@@ -445,7 +445,10 @@ def run_process(
                 # standing at a permission prompt, and give that back. Read
                 # here rather than on a poll because this is the only moment
                 # the answer changes anything.
-                waited = credit() if credit is not None else 0.0
+                # Clamped here and not only in approval_credit: this loop only
+                # terminates because the credit is bounded, so the bound
+                # belongs where the loop can see it.
+                waited = min(credit(), float(MAX_APPROVAL_CREDIT)) if credit else 0.0
                 if waited > forgiven:
                     forgiven = waited
                     continue
@@ -753,8 +756,12 @@ def timeout_reason(timeout: int, forgiven: float, kept: str) -> str:
     """
     minutes = int(forgiven // 60)
     if forgiven >= MAX_APPROVAL_CREDIT:
+        # Not "unanswered": the ceiling is reached just as readily by many
+        # prompts answered promptly as by four nobody replied to, and telling
+        # someone who answered every time to answer faster is its own
+        # misdiagnosis.
         head = (
-            f"timed out waiting on approvals: {minutes}m unanswered, past the "
+            f"timed out: {minutes}m spent waiting on approvals reached the "
             f"{MAX_APPROVAL_CREDIT // 60}m the stage clock will hold for"
         )
     elif minutes:
