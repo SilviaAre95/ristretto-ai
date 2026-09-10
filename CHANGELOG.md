@@ -9,6 +9,20 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A running flow now prints what it is doing every 30 seconds, naming the
+  stage, how long it has been going, and how much of that was spent waiting on
+  a person. Stages were silent for tens of minutes — the model's output goes
+  to an artifact, not the terminal — and the supervising worker agent read
+  that as a hang and killed three healthy runs in one afternoon.
+- A stage killed by a signal now commits what it wrote, the same way a
+  timed-out one has since 0.2.0. The recovery only ever fired on the runner's
+  own deadline, so an external kill discarded finished work — 148 lines in the
+  case that prompted this, saved only by committing them by hand.
+- `ristretto launch` creates the run's branch at `origin/<base>` before
+  dispatching. Hermes otherwise cuts the worktree from whatever the repository
+  checkout has selected, so a developer with a feature branch checked out
+  silently based the run — and its pull request — on unrelated work.
+
 - A stage's clock no longer runs while it waits for a person to answer an
   approval. The budget measures working time: blocked intervals are read back
   from the approvals store and added to the deadline instead of charged

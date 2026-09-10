@@ -618,6 +618,7 @@ class LaunchCoreTests(unittest.TestCase):
         # Refusing costs a second; not refusing costs an hour and reads like
         # a model failure.
         with mock.patch.object(launch, "blocking_findings", return_value=["no .cc-verify"]), \
+             mock.patch.object(launch, "pin_branch_to_base", return_value=""), \
              mock.patch.object(launch.subprocess, "run") as spawned:
             outcome = launch.launch("Kaffecard", "XARI-42", "tier1")
         self.assertFalse(outcome.ok)
@@ -627,6 +628,7 @@ class LaunchCoreTests(unittest.TestCase):
     def test_a_busy_fleet_refuses_by_default(self) -> None:
         with mock.patch.object(launch, "blocking_findings", return_value=[]), \
              mock.patch.object(launch, "active_runs", return_value=["t_aaaaaa"]), \
+             mock.patch.object(launch, "pin_branch_to_base", return_value=""), \
              mock.patch.object(launch.subprocess, "run") as spawned:
             outcome = launch.launch("Kaffecard", "XARI-42", "tier1")
         self.assertFalse(outcome.ok)
@@ -637,6 +639,7 @@ class LaunchCoreTests(unittest.TestCase):
         with mock.patch.object(launch, "blocking_findings", return_value=[]), \
              mock.patch.object(launch, "active_runs", return_value=["t_aaaaaa"]), \
              mock.patch.object(events, "emit"), \
+             mock.patch.object(launch, "pin_branch_to_base", return_value=""), \
              mock.patch.object(launch.subprocess, "run") as spawned:
             spawned.return_value = subprocess.CompletedProcess([], 0, "created t_b1c2d3e4", "")
             outcome = launch.launch("Kaffecard", "XARI-42", "tier1", allow_busy=True)
@@ -647,6 +650,7 @@ class LaunchCoreTests(unittest.TestCase):
         with mock.patch.object(launch, "blocking_findings", return_value=[]), \
              mock.patch.object(launch, "active_runs", return_value=[]), \
              mock.patch.object(events, "emit"), \
+             mock.patch.object(launch, "pin_branch_to_base", return_value=""), \
              mock.patch.object(launch.subprocess, "run") as spawned:
             spawned.return_value = subprocess.CompletedProcess([], 0, "created t_b1c2d3e4", "")
             launch.launch("Kaffecard", "XARI-42", "tier1")
@@ -661,6 +665,7 @@ class LaunchCoreTests(unittest.TestCase):
     def test_a_board_refusal_is_not_reported_as_a_launch(self) -> None:
         with mock.patch.object(launch, "blocking_findings", return_value=[]), \
              mock.patch.object(launch, "active_runs", return_value=[]), \
+             mock.patch.object(launch, "pin_branch_to_base", return_value=""), \
              mock.patch.object(launch.subprocess, "run") as spawned:
             spawned.return_value = subprocess.CompletedProcess([], 1, "", "duplicate key")
             outcome = launch.launch("Kaffecard", "XARI-42", "tier1")
@@ -846,6 +851,7 @@ class AttendedTests(unittest.TestCase):
                  {"base_branch": "main", "repositories": {"P": "/tmp"},
                   "flows": {"tier1": {}}}, Path("f.yaml"))), \
              mock.patch.object(events, "emit"), \
+             mock.patch.object(launch, "pin_branch_to_base", return_value=""), \
              mock.patch.object(launch.subprocess, "run") as spawned:
             spawned.return_value = subprocess.CompletedProcess([], 0, "created t_b1c2d3e4", "")
             launch.launch("P", "XARI-42", "tier1", unattended=True)

@@ -28,12 +28,29 @@ You are a kanban worker. Your prompt names a task id (`work kanban task <TASK_ID
      --flow <flow from the body, default classic>
    ```
    **Run it in the foreground and let it finish.** A multi-stage flow takes
-   tens of minutes and the script stays silent for long stretches; that is
-   what a running loop looks like. Do NOT background it with `&`, do NOT add
-   a timeout, do NOT poll it, and do NOT decide it has hung. Your process
-   staying alive is what tells Hermes the task is still being worked — a
-   worker that returns early gets the task recorded as crashed even though
-   the loop was fine.
+   tens of minutes. Do NOT background it with `&`, do NOT add a timeout, do
+   NOT poll it, and do NOT decide it has hung. Your process staying alive is
+   what tells Hermes the task is still being worked — a worker that returns
+   early gets the task recorded as crashed even though the loop was fine.
+
+   **You do not have to guess whether it is alive.** Every 30 seconds the loop
+   prints a line saying what it is doing:
+
+   ```
+   flow: build running 4m12s
+   flow: build running 7m30s — 3m18s of it waiting on you
+   ```
+
+   A stage can legitimately produce nothing else for tens of minutes — the
+   model's own output goes to an artifact file, not to your terminal — so the
+   tick is the liveness signal, not the absence of other output. The second
+   form means the loop is stopped at a permission prompt waiting for a person;
+   that is a normal state and it is not your problem to solve. Only if the
+   ticks themselves stop is anything wrong.
+
+   This paragraph exists because on 2026-09-10 a worker killed the same
+   healthy run three times, reasoning each time that silence meant a hang —
+   once while quoting this instruction back to itself.
 
    The script owns orphan reaping and every runner's permission/sandbox mode —
    do NOT invoke `claude` or `codex` yourself, do NOT add or remove flags, and
