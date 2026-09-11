@@ -29,6 +29,12 @@ UNAVAILABLE = re.compile(
 )
 ACTIVE_PROCESS: subprocess.Popen[str] | None = None
 ACTIVE_RECORD: Path | None = None
+# What a signal handler needs to know to keep the work a killed stage wrote.
+# Set only for mutating stages, because those are the only ones with anything
+# to lose.
+ACTIVE_STAGE: str = ""
+ACTIVE_CWD: Path | None = None
+ACTIVE_BASE: str = ""
 
 # A runner can exit 0 while the model reports that it failed. The stage
 # artifact is what the next stage reads, so it — not the exit code alone —
@@ -133,6 +139,22 @@ def cleanup_process(*_: object) -> None:
             ACTIVE_PROCESS.wait(timeout=5)
         except subprocess.TimeoutExpired:
             ACTIVE_PROCESS.kill()
+    # Keep whatever the stage wrote. XARI-118 made a timed-out stage commit its
+    # work, but only on our own deadline (exit 124) — a signal from outside
+    # skipped that path entirely and left everything uncommitted in a worktree
+    # nobody would look in again. On 2026-09-10 a supervising worker killed a
+    # tier1 build three times; the third had finished the job, and the 148
+    # lines survived only because someone went in and committed them by hand.
+    # A kill is the *more* likely way a stage dies, not the less.
+    if ACTIVE_STAGE and ACTIVE_CWD is not None:
+        try:
+            kept = preserve_work(
+                ACTIVE_CWD, ACTIVE_STAGE, 0, ACTIVE_BASE, reason="was terminated"
+            )
+        except Exception as exc:  # noqa: BLE001 - never fail on the way out
+            kept = f"could not preserve work: {type(exc).__name__}"
+        if kept:
+            print(f"stage {ACTIVE_STAGE}: terminated — {kept}", file=sys.stderr)
     if ACTIVE_RECORD is not None:
         ACTIVE_RECORD.unlink(missing_ok=True)
     raise SystemExit(143)
@@ -613,7 +635,9 @@ def repo_stage_timeout(cwd: Path) -> int | None:
     return max(MIN_STAGE_TIMEOUT, min(seconds, MAX_STAGE_TIMEOUT))
 
 
-def preserve_work(cwd: Path, stage_id: str, timeout: int, base: str = "") -> str:
+def preserve_work(
+    cwd: Path, stage_id: str, timeout: int, base: str = "", reason: str = ""
+) -> str:
     """Commit what a timed-out stage wrote, so the deadline does not eat it.
 
     A stage killed at its deadline leaves everything uncommitted in a worktree
@@ -684,8 +708,12 @@ def preserve_work(cwd: Path, stage_id: str, timeout: int, base: str = "") -> str
                 )
 
         added = git("add", "-A", "--", ".", exclude)
+        # Say what actually happened. Recovering a killed stage by calling this
+        # with timeout=0 produced "stage timed out after 0s", which is both
+        # false and the kind of thing someone later has to disbelieve.
+        why = reason or f"timed out after {timeout}s"
         message = (
-            f"wip({stage_id}): stage timed out after {timeout}s\n\n"
+            f"wip({stage_id}): stage {why}\n\n"
             "Committed by Ristretto so work already written is not lost with\n"
             "the worktree. Unreviewed and possibly incomplete — read it before\n"
             "trusting it.\n\n"
@@ -960,6 +988,11 @@ def run_stage(
     # run_process, so a clock adjustment mid-stage can shift the credit but
     # cannot move the budget.
     launched = time.time()
+    # Arm the signal handler's recovery before the process exists, so a kill
+    # arriving at any point from here has somewhere to commit to.
+    global ACTIVE_STAGE, ACTIVE_CWD, ACTIVE_BASE
+    if stage.get("mutates"):
+        ACTIVE_STAGE, ACTIVE_CWD, ACTIVE_BASE = str(stage["id"]), cwd, base
     code, text, forgiven = run_process(
         command,
         env,
@@ -972,6 +1005,9 @@ def run_stage(
         output_from_stdout,
         approval_credit(task_id, launched),
     )
+    # Disarm: the process is gone, and a later signal must not commit this
+    # stage's name over whatever the flow is doing by then.
+    ACTIVE_STAGE, ACTIVE_CWD, ACTIVE_BASE = "", None, ""
     if code == 0:
         if stage["role"] == "verify":
             return 0
@@ -1036,6 +1072,23 @@ def run_stage(
 # of failed sends.
 HEARTBEAT_SECONDS = 5 * 60
 
+# How often the flow says it is alive on stderr. Far shorter than the board
+# heartbeat because the reader is different: the board tolerates an hour of
+# quiet, a watching agent tolerated about two minutes before killing the run.
+PROGRESS_TICK_SECONDS = 30
+
+
+def _duration(seconds: float) -> str:
+    """Human-readable elapsed time, for a line a person or an agent reads."""
+    total = int(seconds)
+    if total < 60:
+        return f"{total}s"
+    minutes, rest = divmod(total, 60)
+    if minutes < 60:
+        return f"{minutes}m{rest:02d}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h{minutes:02d}m"
+
 
 class Heartbeat:
     """Keep the board's claim alive for as long as the flow is running.
@@ -1048,12 +1101,33 @@ class Heartbeat:
     So the signal is time-based rather than progress-based. It says only "the
     flow is still running", which is exactly what it is asked, and the stage
     name rides along so the board shows where it is.
+
+    It also ticks to stderr, far more often than it beats the board, and that
+    half exists for a different reader. A stage prints one line when it starts
+    and nothing until it ends — the model's own output is captured into the
+    artifact, not echoed — so a terminal watching a flow sees minutes of
+    nothing. The supervising worker agent read that silence as a hang and
+    killed three healthy runs on 2026-09-10, twice against an instruction that
+    says in as many words not to.
+
+    The tick says which kind of silence it is, because there are two and they
+    look identical: a model working, and a stage stopped at a permission
+    prompt. Naming the second one while it is happening is also the answer to
+    "why is nothing moving" for the person who has to answer that prompt.
     """
 
-    def __init__(self, task_id: str, interval: int = HEARTBEAT_SECONDS) -> None:
+    def __init__(
+        self,
+        task_id: str,
+        interval: int = HEARTBEAT_SECONDS,
+        tick: int = PROGRESS_TICK_SECONDS,
+    ) -> None:
         self.task_id = task_id
         self.interval = interval
+        self.tick = max(1, int(tick))
         self.stage = "starting"
+        self.stage_started = time.monotonic()
+        self.stage_started_wall = time.time()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -1066,13 +1140,34 @@ class Heartbeat:
         self._thread.start()
 
     def _run(self) -> None:
+        # Two cadences on one thread, kept on the clock rather than on a count
+        # of iterations: the board is told every `interval`, stderr every
+        # `tick`. Counting ticks instead would drop board beats whenever the
+        # interval was not a whole multiple of the tick.
+        last_beat = float("-inf")
         while not self._stop.is_set():
-            heartbeat(self.task_id, self.stage)
-            self._stop.wait(self.interval)
+            now = time.monotonic()
+            if now - last_beat >= self.interval:
+                heartbeat(self.task_id, self.stage)
+                last_beat = now
+            else:
+                self.report()
+            self._stop.wait(min(self.tick, self.interval))
+
+    def report(self) -> None:
+        """One line saying the flow is alive and what it is doing."""
+        elapsed = time.monotonic() - self.stage_started
+        blocked = approvals.blocked_seconds(self.task_id, self.stage_started_wall)
+        note = f"flow: {self.stage} running {_duration(elapsed)}"
+        if blocked >= 1:
+            note += f" — {_duration(blocked)} of it waiting on you"
+        print(note, file=sys.stderr, flush=True)
 
     def enter(self, stage: str) -> None:
         """Name the stage now running, and say so immediately."""
         self.stage = stage
+        self.stage_started = time.monotonic()
+        self.stage_started_wall = time.time()
         heartbeat(self.task_id, stage)
 
     def stop(self) -> None:

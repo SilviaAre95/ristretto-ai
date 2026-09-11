@@ -84,6 +84,46 @@ def branch_for(issue: str) -> str:
     return f"xariprojects/{issue.lower()}"
 
 
+def pin_branch_to_base(repo: str, branch: str, base: str) -> str:
+    """Create the run's branch at origin/<base> before the worktree exists.
+
+    Hermes creates the worktree with `git worktree add`, and when the branch
+    does not exist yet it cuts one from whatever the repo checkout has checked
+    out. That is a landmine for anyone who leaves a feature branch selected: on
+    2026-09-10 a kaffecard run branched off an unrelated permissions commit and
+    its pull request would have carried both changes. `git reflog` recorded it
+    flatly as "branch: Created from HEAD".
+
+    The workaround was already written down — durable-dev's skill says to
+    pre-create the branch from origin/main — but a manual step in one skill is
+    not a guarantee, and the launcher is the one place that knows it is about
+    to dispatch. Fetch first, because pinning to a stale origin/<base> just
+    picks a different wrong commit.
+
+    Returns a problem for the caller to report, or "" when the branch is ready.
+    An existing branch is left alone: relaunching an issue must not silently
+    discard the commits a previous attempt preserved.
+    """
+    def git(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["git", "-C", repo, *args],
+            capture_output=True, text=True, check=False, timeout=300,
+        )
+
+    if git("rev-parse", "--verify", "--quiet", f"refs/heads/{branch}").returncode == 0:
+        return ""
+    if git("fetch", "--quiet", "origin", base).returncode != 0:
+        return f"could not fetch origin/{base}"
+    target = git("rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{base}")
+    if target.returncode != 0:
+        return f"origin/{base} does not exist"
+    created = git("branch", branch, (target.stdout or "").strip())
+    if created.returncode != 0:
+        detail = (created.stderr or "").strip().splitlines()
+        return f"could not create {branch}: {detail[-1] if detail else 'git branch failed'}"
+    return ""
+
+
 def idempotency_key(issue: str, flow: str, now: float | None = None) -> str:
     """Stable for the same request on the same day.
 
@@ -168,6 +208,12 @@ def launch(
             )
 
     branch = branch_for(issue)
+    # Before the board is told anything: a run that starts from the wrong
+    # commit is worse than one that does not start, because its pull request
+    # looks legitimate.
+    misbased = pin_branch_to_base(repo, branch, base)
+    if misbased:
+        return Outcome(False, f"{project} cannot start a clean branch: {misbased}")
     lines = [f"issue: {issue}", f"repo: {repo}", f"branch: {branch}", f"flow: {flow}"]
     if unattended:
         # The runner reads this from the task body rather than from a flag
