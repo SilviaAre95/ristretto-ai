@@ -28,8 +28,10 @@ between the surface that is tested and the surface that is used.
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any, Mapping, NamedTuple
@@ -43,6 +45,12 @@ ISSUE_KEY = re.compile(r"^[A-Z][A-Z0-9]{1,9}-\d{1,6}$")
 
 # The worker profile the dispatcher hands loop tasks to.
 ASSIGNEE = "ris-worker"
+# Where a run's worktree goes, matching what Hermes used to create so existing
+# recovery habits (and `ristretto gc`) still find them.
+WORKTREE_DIR = ".worktrees"
+# How long the board holds our claim before reclaiming it. The runner
+# heartbeats every five minutes, so this only has to outlast a few misses.
+CLAIM_TTL_SECONDS = 3600
 SKILL = "loop-runner"
 
 # Long enough for a slow tier1 build (the one measured run spent 51 minutes
@@ -122,6 +130,81 @@ def pin_branch_to_base(repo: str, branch: str, base: str) -> str:
         detail = (created.stderr or "").strip().splitlines()
         return f"could not create {branch}: {detail[-1] if detail else 'git branch failed'}"
     return ""
+
+
+def start_flow(repo: str, branch: str, task_id: str, issue: str, flow: str) -> str:
+    """Claim the task, cut its worktree, and run the flow as a plain process.
+
+    Why not hand it to a worker: a Hermes task is always assigned to an agent
+    profile — `kanban create` takes `--assignee`, and there is no command task
+    — so dispatching means a language model is the thing that runs the script
+    and waits for it. That job needs no judgement, and on 2026-09-10 the
+    judgement is exactly what went wrong: across four attempts on one issue the
+    worker abandoned one run and killed two more, reading a silent stage as a
+    hang, twice while quoting back the instruction telling it not to.
+
+    Hermes' own supervision is fine — it leases a claim, watches a pid and
+    expects a heartbeat, all of it deterministic. The mismatch was putting
+    deterministic work inside an agent turn. So keep the board and take the
+    claim ourselves: the runner already heartbeats (`Heartbeat`) and already
+    reports its own outcome (`report_outcome`), both written because the
+    worker could not be relied on to. This finishes a migration that has been
+    happening one function at a time.
+
+    Claiming rather than leaving the task ready is load-bearing: an unclaimed
+    task is one the dispatcher will pick up on its next pass, which would start
+    a second runner on the same worktree.
+
+    Returns a problem to report, or "" when the flow is running.
+    """
+    def git(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["git", "-C", repo, *args],
+            capture_output=True, text=True, check=False, timeout=300,
+        )
+
+    claimed = subprocess.run(
+        ["hermes", "kanban", "claim", task_id, "--ttl", str(CLAIM_TTL_SECONDS)],
+        capture_output=True, text=True, check=False, timeout=120,
+    )
+    if claimed.returncode != 0:
+        detail = (claimed.stderr or claimed.stdout or "").strip().splitlines()
+        return f"could not claim the task: {detail[-1] if detail else 'no detail'}"
+
+    worktree = Path(repo) / WORKTREE_DIR / task_id
+    if not worktree.exists():
+        added = git("worktree", "add", "--quiet", str(worktree), branch)
+        if added.returncode != 0:
+            detail = (added.stderr or "").strip().splitlines()
+            return f"could not create the worktree: {detail[-1] if detail else 'git failed'}"
+
+    log_dir = worktree / ".ristretto" / "runs" / task_id
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log = (log_dir / "flow.out").open("a", encoding="utf-8")
+    except OSError as exc:
+        return f"could not open the flow log: {exc}"
+
+    # sys.executable for the same reason the broker uses it: whatever is first
+    # on a PATH usually cannot import ristretto.
+    command = [
+        sys.executable, "-m", "ristretto.runner",
+        "--task-id", task_id, "--issue", issue, "--flow", flow,
+    ]
+    try:
+        # Its own session, so the flow outlives the CLI invocation or the Slack
+        # request that started it. Nothing supervises it but the board's lease
+        # and the heartbeat the runner sends itself.
+        process = subprocess.Popen(
+            command, cwd=worktree, stdout=log, stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL, start_new_session=True,
+            env={**os.environ, "PYTHONUNBUFFERED": "1"},
+        )
+    except OSError as exc:
+        return f"could not start the flow: {exc}"
+    finally:
+        log.close()
+    return "" if process.pid else "the flow did not start"
 
 
 def idempotency_key(issue: str, flow: str, now: float | None = None) -> str:
@@ -243,13 +326,9 @@ def launch(
         return Outcome(False, f"board refused the task: {' / '.join(detail[-2:]) or 'no detail'}")
 
     task_id = _task_id(created.stdout)
-    dispatched = subprocess.run(
-        ["hermes", "kanban", "dispatch", "--max", "1"],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=300,
-    )
+    if not task_id:
+        return Outcome(False, "the board created a task but did not name it")
+    problem = start_flow(repo, branch, task_id, issue, flow)
     events.emit(
         task_id or f"launch-{issue}",
         "control.launch",
@@ -261,17 +340,14 @@ def launch(
             "branch": branch,
             "actor": actor,
             "unattended": unattended,
-            "dispatched": dispatched.returncode == 0,
+            "dispatched": not problem,
         },
     )
-    if dispatched.returncode != 0:
-        # The task exists and the dispatcher will pick it up on its next
-        # pass, so this is a delay rather than a failure.
-        return Outcome(
-            True,
-            f"{issue} queued on {flow} — the dispatcher will start it shortly",
-            task_id,
-        )
+    if problem:
+        # The task exists and is claimed by us, but nothing is running it. Say
+        # so plainly rather than leaving a card that looks queued: nothing will
+        # pick this up, because claiming it is what keeps the dispatcher away.
+        return Outcome(False, f"{issue} did not start: {problem}", task_id)
     return Outcome(True, f"{issue} started on {flow}", task_id)
 
 

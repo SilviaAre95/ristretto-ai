@@ -9,6 +9,38 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Approval requests larger than 4000 characters are readable again. The stored
+  tool input was clipped as serialised JSON, which cut it mid-string so it no
+  longer parsed; the card then rendered a tool name and nothing else. Every
+  approval a local coder raised on 2026-09-11 was unreadable this way — five in
+  a row — because the model writes files with long heredocs, which made the
+  gate unusable in the flow it matters most for. Values are clipped instead, so
+  the document always parses, and a record that still cannot be read now says
+  so rather than looking empty.
+- A stage that stops because it exhausted its approval-waiting credit no longer
+  commits under "stage timed out after 3600s", which reads in git log as having
+  run out of working time.
+- `.gitignore` ignores a `.venv` symlink, not only a `.venv` directory. Warming
+  a worktree by symlinking the virtualenv left it untracked and eligible to be
+  committed by `preserve_work`.
+
+### Changed
+
+- `ristretto launch` runs the flow itself instead of dispatching a worker
+  agent. It claims the board task, cuts the worktree, and starts the runner as
+  a detached process; the board keeps the card and the lease, and the runner
+  already heartbeats and reports its own outcome. Every Hermes task is assigned
+  to an agent profile, so dispatching meant a language model was the thing
+  running a script and waiting for it — and on 2026-09-10 that model abandoned
+  one healthy run and killed two more across four attempts, reading a silent
+  stage as a hang. Hermes' supervision was never at fault; it leases, watches a
+  pid, and expects a heartbeat. The mistake was putting deterministic work
+  inside an agent turn.
+
+  **Upgrade note:** a launch that cannot start now reports failure instead of
+  "queued". Nothing will pick the task up later, because claiming it is what
+  keeps the dispatcher away.
+
 - A running flow now prints what it is doing every 30 seconds, naming the
   stage, how long it has been going, and how much of that was spent waiting on
   a person. Stages were silent for tens of minutes — the model's output goes

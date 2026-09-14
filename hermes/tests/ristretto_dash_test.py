@@ -672,20 +672,41 @@ class LaunchCoreTests(unittest.TestCase):
         self.assertFalse(outcome.ok)
         self.assertIn("duplicate key", outcome.message)
 
-    def test_a_failed_dispatch_is_a_delay_not_a_failure(self) -> None:
-        # The task exists; the dispatcher picks it up on its next pass.
-        def fake(argv, **kwargs):
-            if "dispatch" in argv:
-                return subprocess.CompletedProcess(argv, 1, "", "lock held")
-            return subprocess.CompletedProcess(argv, 0, "created t_b1c2d3e4", "")
-
+    def test_a_flow_that_does_not_start_is_a_failure_not_a_delay(self) -> None:
+        # This used to report "queued", because an undispatched task would be
+        # picked up on the dispatcher's next pass. It no longer will: launch
+        # claims the task itself, and claiming it is precisely what keeps the
+        # dispatcher away. So nothing is coming — say so rather than leaving a
+        # card that looks like it is waiting its turn.
         with mock.patch.object(launch, "blocking_findings", return_value=[]), \
              mock.patch.object(launch, "active_runs", return_value=[]), \
+             mock.patch.object(launch, "pin_branch_to_base", return_value=""), \
              mock.patch.object(events, "emit"), \
-             mock.patch.object(launch.subprocess, "run", side_effect=fake):
+             mock.patch.object(launch, "start_flow", return_value="could not claim the task"), \
+             mock.patch.object(launch.subprocess, "run") as spawned:
+            spawned.return_value = subprocess.CompletedProcess([], 0, "created t_b1c2d3e4", "")
             outcome = launch.launch("Kaffecard", "XARI-42", "tier1")
+        self.assertFalse(outcome.ok)
+        self.assertIn("did not start", outcome.message)
+        self.assertIn("could not claim", outcome.message)
+        self.assertEqual(outcome.task_id, "t_b1c2d3e4", "the task still exists and is named")
+
+    def test_the_flow_runs_without_a_worker(self) -> None:
+        # The point of the change: no agent profile is dispatched. The board
+        # keeps the card, we take the claim, and the runner is a plain process.
+        with mock.patch.object(launch, "blocking_findings", return_value=[]), \
+             mock.patch.object(launch, "active_runs", return_value=[]), \
+             mock.patch.object(launch, "pin_branch_to_base", return_value=""), \
+             mock.patch.object(events, "emit"), \
+             mock.patch.object(launch, "start_flow", return_value="") as started, \
+             mock.patch.object(launch.subprocess, "run") as spawned:
+            spawned.return_value = subprocess.CompletedProcess([], 0, "created t_b1c2d3e4", "")
+            outcome = launch.launch("Kaffecard", "XARI-42", "tier1")
+
         self.assertTrue(outcome.ok)
-        self.assertIn("queued", outcome.message)
+        started.assert_called_once()
+        for call in spawned.call_args_list:
+            self.assertNotIn("dispatch", call.args[0], "no worker may be dispatched")
 
 
 class LaunchRouteTests(unittest.TestCase):

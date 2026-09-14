@@ -1032,7 +1032,21 @@ def run_stage(
         # backs off past the deadline still exits 124, and returning here would
         # skip the fallback below and kill the flow where it used to switch to
         # the local coder and carry on.
-        kept = preserve_work(cwd, stage["id"], timeout, base) if stage.get("mutates") else ""
+        # The commit subject should say the same thing the failure reason
+        # says. A stage that hit the waiting ceiling was committing under
+        # "stage timed out after 3600s", which reads in git log as having run
+        # out of working time — the exact confusion timeout_reason exists to
+        # end, reintroduced one layer down.
+        why = (
+            f"stopped after {int(forgiven) // 60}m waiting on approvals"
+            if forgiven >= MAX_APPROVAL_CREDIT
+            else ""
+        )
+        kept = (
+            preserve_work(cwd, stage["id"], timeout, base, reason=why)
+            if stage.get("mutates")
+            else ""
+        )
         LAST_STAGE_REASON[stage["id"]] = timeout_reason(timeout, forgiven, kept)
         print(f"stage {stage['id']}: {LAST_STAGE_REASON[stage['id']]}", file=sys.stderr)
     if stage["provider"] != "builtin":

@@ -6,7 +6,10 @@
 secrets/
 *.pem
 *.key
-.venv/
+.venv
+# Run worktrees. Hermes and `ristretto launch` both cut them here, and a
+# stray `git add -A` in the primary checkout would commit one as a gitlink.
+.worktrees/
 __pycache__/
 .pytest_cache/
 .ruff_cache/
