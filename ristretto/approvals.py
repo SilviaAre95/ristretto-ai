@@ -193,6 +193,16 @@ def describe(tool_name: str, tool_input: Mapping[str, Any] | None) -> str:
     data = dict(tool_input or {})
     if data.get("_unreadable"):
         return f"{tool_name}: request unreadable — do not approve without checking the log"
+    if data.get("_clipped"):
+        # The wide-call fallback keeps no values, so without this it fell all
+        # the way through to a bare tool name — the same blank cheque this
+        # module exists to prevent, reintroduced by its own safety net.
+        kept = ", ".join(str(key) for key in (data.get("_keys") or [])[:6])
+        return (
+            f"{tool_name}: too large to store ({data.get('_bytes', '?')} bytes)"
+            + (f", fields: {kept}" if kept else "")
+            + " — check the log before approving"
+        )
     question = _first_question(data)
     if question:
         return _clip(question, 160)

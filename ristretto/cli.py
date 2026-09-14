@@ -103,6 +103,15 @@ def parser() -> argparse.ArgumentParser:
     launch_command = commands.add_parser(
         "launch", help="start a supervised run on a configured project"
     )
+    relaunch_command = commands.add_parser(
+        "relaunch",
+        help="restart a run whose process died, in the worktree it already has",
+    )
+    relaunch_command.add_argument(
+        "target", nargs="?", default="",
+        help="task id or issue key; omit when only one run is stalled",
+    )
+
     launch_command.add_argument("project", help="configured project name")
     launch_command.add_argument("issue", help="issue key, e.g. ABC-42")
     launch_command.add_argument("--flow", default="tier1", help="coding flow (default: tier1)")
@@ -353,6 +362,13 @@ def main(argv: list[str] | None = None) -> int:
             turn = loop.ask(" ".join(args.message), conversation=args.conversation)
             print(turn.text)
             return 0 if turn.ok else 1
+
+        if args.command == "relaunch":
+            from .dash.launch import relaunch
+
+            outcome = relaunch(args.target, config_path=args.config)
+            print(outcome.message if outcome.ok else f"not relaunched: {outcome.message}")
+            return 0 if outcome.ok else 1
 
         if args.command == "launch":
             from .dash.launch import launch as start_run

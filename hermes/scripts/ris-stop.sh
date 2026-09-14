@@ -18,9 +18,22 @@ export PATH="$HOME/.local/bin:$PATH"
 hermes kanban reclaim "$TASK_ID" --reason "manual stop (ris-stop.sh)" || true
 hermes kanban block "$TASK_ID" 2>/dev/null || true
 
-# 2. Kill the Hermes worker for this task (spawn signature: hermes -p ris-worker … "work kanban task <id>")
-pkill -TERM -f "work kanban task $TASK_PATTERN$" 2>/dev/null && sleep 3
-pkill -KILL -f "work kanban task $TASK_PATTERN$" 2>/dev/null
+# 2. Kill whatever is running this task.
+#
+#    Two signatures, because runs exist in both shapes. `ristretto launch` now
+#    starts the flow itself as `python -m ristretto.runner --task-id <id>`; it
+#    used to hand the task to an agent, whose spawn signature was
+#    "work kanban task <id>". Matching only the worker meant stop silently did
+#    nothing to a directly-launched run — and then reported success, because
+#    the verification below asked only "is it blocked?" (it blocked it itself)
+#    and "are there worker pids?" (there never were). The flow carried on to
+#    `finish` and pushed.
+#
+#    TERM first so the runner's own handler commits what the stage wrote.
+for SIGNATURE in "work kanban task $TASK_PATTERN\$" "ristretto\.runner --task-id $TASK_PATTERN( |\$)"; do
+  pkill -TERM -f "$SIGNATURE" 2>/dev/null && sleep 3
+  pkill -KILL -f "$SIGNATURE" 2>/dev/null
+done
 
 # 3. Verified-kill the Claude Code grandchild (Guard 4 — mismatches are never killed).
 bash "$HOME/.hermes/skills/software-development/loop-runner/scripts/reap.sh" "$TASK_ID"
@@ -33,7 +46,11 @@ hermes kanban block "$TASK_ID" 2>/dev/null || true
 TASK_STATE=$(hermes kanban show --json "$TASK_ID" 2>/dev/null \
   | python3 -c "import json,sys;d=json.load(sys.stdin);print(d.get('task',d).get('status',''))")
 
-WORKER_PIDS=$(pgrep -f "work kanban task $TASK_PATTERN$" 2>/dev/null | tr '\n' ',' | sed 's/,$//')
+# Both signatures again: "no worker pids" was vacuously true for a run that
+# never had a worker, which is what made the false-green possible.
+WORKER_PIDS=$( { pgrep -f "work kanban task $TASK_PATTERN\$" 2>/dev/null; \
+                 pgrep -f "ristretto\.runner --task-id $TASK_PATTERN( |\$)" 2>/dev/null; } \
+               | tr '\n' ',' | sed 's/,$//')
 
 case "$TASK_STATE" in
   blocked|archived|done) STATE_OK=1 ;;

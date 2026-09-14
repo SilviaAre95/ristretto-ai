@@ -48,9 +48,14 @@ ASSIGNEE = "ris-worker"
 # Where a run's worktree goes, matching what Hermes used to create so existing
 # recovery habits (and `ristretto gc`) still find them.
 WORKTREE_DIR = ".worktrees"
-# How long the board holds our claim before reclaiming it. The runner
-# heartbeats every five minutes, so this only has to outlast a few misses.
-CLAIM_TTL_SECONDS = 3600
+# How long the board holds our claim. Deliberately longer than any stage, and
+# it is NOT the thing keeping a worker away — `hermes kanban heartbeat` calls
+# heartbeat_worker only, which touches last_heartbeat_at and never
+# claim_expires. Hermes documents the trap itself (tools/kanban_tools.py: "Without
+# the heartbeat_claim half…"), and only the agent tool renews a claim. Since no
+# agent runs here, the claim WILL lapse on a long run. What actually keeps a
+# worker away is leaving the task unassigned — see the create call.
+CLAIM_TTL_SECONDS = 14400
 SKILL = "loop-runner"
 
 # Long enough for a slow tier1 build (the one measured run spent 51 minutes
@@ -171,19 +176,35 @@ def start_flow(repo: str, branch: str, task_id: str, issue: str, flow: str) -> s
         detail = (claimed.stderr or claimed.stdout or "").strip().splitlines()
         return f"could not claim the task: {detail[-1] if detail else 'no detail'}"
 
+    def give_up(problem: str) -> str:
+        """Release the claim before reporting, so the board is not left lying.
+
+        Every exit after the claim used to leave the task `running` with
+        nothing running it. `active_runs` counts `running`, so one failed
+        launch refused every later launch until the TTL lapsed — and a
+        dead-but-claimed task is also exactly what makes a run unrelaunchable.
+        """
+        subprocess.run(
+            ["hermes", "kanban", "reclaim", task_id, "--reason", problem[:200]],
+            capture_output=True, text=True, check=False, timeout=120,
+        )
+        return problem
+
     worktree = Path(repo) / WORKTREE_DIR / task_id
     if not worktree.exists():
         added = git("worktree", "add", "--quiet", str(worktree), branch)
         if added.returncode != 0:
             detail = (added.stderr or "").strip().splitlines()
-            return f"could not create the worktree: {detail[-1] if detail else 'git failed'}"
+            return give_up(
+                f"could not create the worktree: {detail[-1] if detail else 'git failed'}"
+            )
 
     log_dir = worktree / ".ristretto" / "runs" / task_id
     try:
         log_dir.mkdir(parents=True, exist_ok=True)
         log = (log_dir / "flow.out").open("a", encoding="utf-8")
     except OSError as exc:
-        return f"could not open the flow log: {exc}"
+        return give_up(f"could not open the flow log: {exc}")
 
     # sys.executable for the same reason the broker uses it: whatever is first
     # on a PATH usually cannot import ristretto.
@@ -201,10 +222,145 @@ def start_flow(repo: str, branch: str, task_id: str, issue: str, flow: str) -> s
             env={**os.environ, "PYTHONUNBUFFERED": "1"},
         )
     except OSError as exc:
-        return f"could not start the flow: {exc}"
+        return give_up(f"could not start the flow: {exc}")
     finally:
         log.close()
-    return "" if process.pid else "the flow did not start"
+    return "" if process.pid else give_up("the flow did not start")
+
+
+TASK_ID = re.compile(r"^t_[0-9a-f]{6,}$")
+
+
+def flow_is_running(task_id: str) -> bool:
+    """Whether a flow process for this task is actually alive.
+
+    Asks the operating system, not the board. The board is exactly what is
+    unreliable in the situation this exists for: a run whose process died
+    leaves the task `running` and claimed, which reads as healthy from every
+    surface. On 2026-09-10 that state was shown as `blocked`, offered an
+    `unblock` button, and restarted a run that had just passed its plan stage.
+    """
+    if not TASK_ID.fullmatch(task_id):
+        return False
+    found = subprocess.run(
+        ["pgrep", "-f", f"ristretto.runner --task-id {task_id}"],
+        capture_output=True, text=True, check=False, timeout=30,
+    )
+    return found.returncode == 0
+
+
+def stalled_runs() -> list[dict[str, str]]:
+    """Runs the board still calls live but which have no process behind them."""
+    from . import data
+
+    try:
+        fleet = data.fleet()
+    except Exception:  # noqa: BLE001 - a listing must not raise at the caller
+        return []
+    stalled = []
+    for run in fleet:
+        if run.status not in data.ACTIVE_STATES and run.status != "blocked":
+            continue
+        if flow_is_running(run.task_id):
+            continue
+        stalled.append(
+            {
+                "task_id": run.task_id,
+                "issue": getattr(run, "issue_key", "") or "",
+                "status": run.status,
+            }
+        )
+    return stalled
+
+
+def relaunch(target: str = "", config_path: Path | None = None) -> Outcome:
+    """Start a dead run again, in the worktree and branch it already has.
+
+    A run that dies now stays dead: removing the worker removed Hermes'
+    retry-on-crash with it. That is the right trade — the retries observed on
+    2026-09-10 each burned a fresh Opus plan stage and were killed the same way
+    — but only if restarting is actually possible, and it was not: the
+    idempotency key is scoped to a day, so `launch` refuses the same issue and
+    flow until midnight, and a dead-but-claimed task counts as active, so it
+    refuses on that too.
+
+    Resumes the flow, not the stage: it starts again at `plan`. Anything the
+    dead run committed through `preserve_work` is still on the branch, so
+    nothing is lost, but the earlier stages are paid for again.
+
+    `target` may be a task id, an issue key, or nothing at all — the last is
+    the common case, because the situation is nearly always "the thing I just
+    started died".
+    """
+    stalled = stalled_runs()
+    if not stalled:
+        # "Nothing to relaunch" and "it is still running" are different
+        # answers, and conflating them is how someone restarts a healthy run.
+        running = [task for task in active_runs() if flow_is_running(task)]
+        if running:
+            return Outcome(
+                False,
+                f"nothing is stalled — {', '.join(running)} still running; "
+                "stop it first if you want it restarted",
+            )
+        return Outcome(False, "no run to relaunch")
+
+    if target:
+        wanted = target.strip()
+        matches = [
+            run for run in stalled
+            if run["task_id"] == wanted or run["issue"].upper() == wanted.upper()
+        ]
+        if not matches:
+            names = ", ".join(f"{r['issue'] or '?'} ({r['task_id']})" for r in stalled)
+            return Outcome(False, f"no stalled run matching {wanted} — found: {names}")
+        chosen = matches[0]
+    elif len(stalled) == 1:
+        chosen = stalled[0]
+    else:
+        # Same rule the approvals CLI follows: acting without an id is only
+        # safe when there is exactly one thing it could mean.
+        names = ", ".join(f"{r['issue'] or '?'} ({r['task_id']})" for r in stalled)
+        return Outcome(False, f"{len(stalled)} stalled runs — name one: {names}")
+
+    task_id = chosen["task_id"]
+    body = _task_body(task_id)
+    repo, issue, flow, branch = body.get("repo"), body.get("issue"), body.get("flow"), body.get("branch")
+    if not (repo and issue and flow and branch):
+        return Outcome(False, f"{task_id}: the task body does not say what to run", task_id)
+
+    # Return it to ready so the claim inside start_flow can take it cleanly.
+    subprocess.run(
+        ["hermes", "kanban", "reclaim", task_id, "--reason", "relaunch"],
+        capture_output=True, text=True, check=False, timeout=120,
+    )
+    subprocess.run(
+        ["hermes", "kanban", "unblock", task_id],
+        capture_output=True, text=True, check=False, timeout=120,
+    )
+    problem = start_flow(repo, branch, task_id, issue, flow)
+    events.emit(
+        task_id, "control.launch", issue_key=issue, stage="control",
+        payload={"flow": flow, "branch": branch, "relaunch": True,
+                 "dispatched": not problem},
+    )
+    if problem:
+        return Outcome(False, f"{issue} did not restart: {problem}", task_id)
+    return Outcome(True, f"{issue} restarted on {flow} (from plan)", task_id)
+
+
+def _task_body(task_id: str) -> dict[str, str]:
+    """The `key: value` lines `launch` wrote into the task body."""
+    shown = subprocess.run(
+        ["hermes", "kanban", "show", task_id],
+        capture_output=True, text=True, check=False, timeout=120,
+    )
+    found: dict[str, str] = {}
+    for line in (shown.stdout or "").splitlines():
+        match = re.match(r"^\s*(issue|repo|branch|flow):\s*(\S+)\s*$", line)
+        if match:
+            found.setdefault(match.group(1), match.group(2))
+    return found
 
 
 def idempotency_key(issue: str, flow: str, now: float | None = None) -> str:
@@ -313,7 +469,17 @@ def launch(
             "--idempotency-key", idempotency_key(issue, flow),
             "--max-retries", str(MAX_RETRIES),
             "--max-runtime", str(MAX_RUNTIME_SECONDS),
-            "--assignee", ASSIGNEE,
+            # Deliberately unassigned. `_cmd_dispatch` only considers a task
+            # where `status == "ready" and task.assignee`, so an unassigned
+            # task cannot be handed to an agent — which is the whole point,
+            # and the only barrier that holds for a run longer than the claim.
+            # A claim alone would not: it lapses, the task returns to ready,
+            # and a dispatcher tick would put a second runner in the live
+            # worktree.
+            #
+            # One way this could silently come back: setting
+            # `kanban.default_assignee`, which _cmd_dispatch honours as a
+            # fallback for unassigned ready tasks. It is unset today.
             "--skill", SKILL,
         ],
         capture_output=True,
@@ -327,7 +493,14 @@ def launch(
 
     task_id = _task_id(created.stdout)
     if not task_id:
-        return Outcome(False, "the board created a task but did not name it")
+        # The task exists but we cannot address it, so we can neither claim it
+        # nor start it. It is unassigned, so nothing will pick it up either —
+        # say so rather than leaving the caller to wonder.
+        return Outcome(
+            False,
+            "the board created a task but did not name it — nothing will run it; "
+            "find it with `hermes kanban list` and archive it",
+        )
     problem = start_flow(repo, branch, task_id, issue, flow)
     events.emit(
         task_id or f"launch-{issue}",

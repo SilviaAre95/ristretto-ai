@@ -24,6 +24,28 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a worktree by symlinking the virtualenv left it untracked and eligible to be
   committed by `preserve_work`.
 
+- `ristretto stop` actually stops a directly-launched run. It killed by the
+  Hermes worker's spawn signature, which no longer exists, and then verified
+  by asking "is the task blocked?" (it blocked it itself) and "are there
+  worker pids?" (there never were) — so it reported success while the flow
+  carried on to the stage that pushes.
+- A failed launch releases its claim instead of leaving the board saying
+  "running" with nothing running. One failed launch used to refuse every later
+  launch until the claim lapsed.
+- An approval too large to store now describes itself instead of rendering as
+  a bare tool name — the blank cheque, reintroduced by the fix's own fallback.
+
+### Added
+
+- `ristretto relaunch [task-id | issue-key]` restarts a run whose process died,
+  in the worktree and branch it already has. Removing the worker also removed
+  Hermes' retry-on-crash, and relaunch was otherwise impossible: the
+  idempotency key is scoped to a day, and a dead-but-claimed task counts as
+  active. With no argument it restarts the only stalled run, names them if
+  there are several, and distinguishes "nothing to restart" from "it is still
+  running". It resumes the flow at `plan`; anything `preserve_work` committed
+  is already on the branch.
+
 ### Changed
 
 - `ristretto launch` runs the flow itself instead of dispatching a worker
@@ -36,6 +58,14 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   stage as a hang. Hermes' supervision was never at fault; it leases, watches a
   pid, and expects a heartbeat. The mistake was putting deterministic work
   inside an agent turn.
+
+  The board task is created **unassigned**, which is what keeps a worker away:
+  `_cmd_dispatch` only considers a task where `status == "ready" and
+  task.assignee`. A claim alone would not hold — `hermes kanban heartbeat`
+  renews the worker, never the claim (Hermes documents the trap itself), so on
+  a run longer than the TTL the claim lapses, the task returns to ready, and a
+  dispatcher tick would put a second runner in the live worktree. Setting
+  `kanban.default_assignee` would silently undo this.
 
   **Upgrade note:** a launch that cannot start now reports failure instead of
   "queued". Nothing will pick the task up later, because claiming it is what

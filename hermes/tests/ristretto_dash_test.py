@@ -659,8 +659,13 @@ class LaunchCoreTests(unittest.TestCase):
         for line in ("issue: XARI-42", "branch: xariprojects/xari-42", "flow: tier1"):
             self.assertIn(line, body)
         self.assertIn("--idempotency-key", argv)
-        self.assertEqual(argv[argv.index("--assignee") + 1], "ris-worker")
         self.assertEqual(argv[argv.index("--skill") + 1], "loop-runner")
+        # Deliberately unassigned: `_cmd_dispatch` only considers a task where
+        # `status == "ready" and task.assignee`, so leaving it unassigned is
+        # the barrier that stops an agent worker being spawned into the live
+        # worktree once our claim lapses. A claim alone does not hold — the
+        # CLI heartbeat renews the worker, never the claim.
+        self.assertNotIn("--assignee", argv, "an assignee lets the dispatcher back in")
 
     def test_a_board_refusal_is_not_reported_as_a_launch(self) -> None:
         with mock.patch.object(launch, "blocking_findings", return_value=[]), \

@@ -183,3 +183,130 @@ class StartFlowTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ClaimReleaseTest(unittest.TestCase):
+    """A failure after the claim must not leave the board saying "running"."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = Path(self.tmp.name)
+        self.addCleanup(self.tmp.cleanup)
+
+    def test_a_failed_worktree_releases_the_claim(self) -> None:
+        # Without this, one failed launch refuses every later launch for the
+        # whole TTL (active_runs counts "running"), and the dead-but-claimed
+        # task is exactly what makes a run unrelaunchable.
+        board: list[list[str]] = []
+
+        def fake_run(argv, **kwargs):
+            if argv[:2] == ["hermes", "kanban"]:
+                board.append(list(argv))
+                return subprocess.CompletedProcess(argv, 0, "", "")
+            # git worktree add against a directory that is not a repo
+            return subprocess.CompletedProcess(argv, 128, "", "not a git repository")
+
+        with mock.patch.object(launch.subprocess, "run", side_effect=fake_run), \
+             mock.patch.object(launch.subprocess, "Popen") as popen:
+            problem = launch.start_flow(str(self.repo), "feat/x", "t_abc", "XARI-1", "tier1")
+
+        self.assertIn("could not create the worktree", problem)
+        popen.assert_not_called()
+        self.assertTrue(
+            any(argv[:3] == ["hermes", "kanban", "reclaim"] for argv in board),
+            "the claim must be released before reporting the failure",
+        )
+
+
+class RelaunchTest(unittest.TestCase):
+    """A run that dies stays dead — so restarting it has to actually work."""
+
+    def stalled(self, **kwargs):
+        return mock.patch.object(launch, "stalled_runs", return_value=[kwargs])
+
+    def test_it_refuses_to_restart_something_still_running(self) -> None:
+        # The failure this exists to prevent: on 2026-09-10 a healthy run was
+        # restarted from a surface that could not tell alive from dead.
+        with mock.patch.object(launch, "stalled_runs", return_value=[]), \
+             mock.patch.object(launch, "active_runs", return_value=["t_live01"]), \
+             mock.patch.object(launch, "flow_is_running", return_value=True):
+            outcome = launch.relaunch()
+
+        self.assertFalse(outcome.ok)
+        self.assertIn("still running", outcome.message)
+
+    def test_nothing_at_all_is_a_different_answer(self) -> None:
+        with mock.patch.object(launch, "stalled_runs", return_value=[]), \
+             mock.patch.object(launch, "active_runs", return_value=[]):
+            outcome = launch.relaunch()
+
+        self.assertFalse(outcome.ok)
+        self.assertIn("no run to relaunch", outcome.message)
+
+    def test_several_stalled_runs_are_named_rather_than_guessed(self) -> None:
+        # Same rule the approvals CLI follows: acting without an id is only
+        # safe when there is exactly one thing it could mean.
+        with mock.patch.object(launch, "stalled_runs", return_value=[
+            {"task_id": "t_aaa111", "issue": "XARI-1", "status": "running"},
+            {"task_id": "t_bbb222", "issue": "XARI-2", "status": "blocked"},
+        ]):
+            outcome = launch.relaunch()
+
+        self.assertFalse(outcome.ok)
+        self.assertIn("XARI-1", outcome.message)
+        self.assertIn("XARI-2", outcome.message)
+
+    def test_it_can_be_named_by_issue_key(self) -> None:
+        # What you remember is the issue, not that it became t_2741d851.
+        with self.stalled(task_id="t_aaa111", issue="XARI-123", status="running"), \
+             mock.patch.object(launch, "_task_body", return_value={
+                 "repo": "/tmp/r", "issue": "XARI-123",
+                 "flow": "tier1", "branch": "xariprojects/xari-123"}), \
+             mock.patch.object(launch, "start_flow", return_value="") as started, \
+             mock.patch.object(launch.subprocess, "run") as board, \
+             mock.patch.object(launch.events, "emit"):
+            board.return_value = subprocess.CompletedProcess([], 0, "", "")
+            outcome = launch.relaunch("xari-123")
+
+        self.assertTrue(outcome.ok)
+        started.assert_called_once()
+        self.assertEqual(started.call_args.args[0], "/tmp/r")
+
+    def test_it_reuses_the_existing_branch_and_worktree(self) -> None:
+        # Resuming the flow, not the stage: anything preserve_work committed
+        # is on that branch, and cutting a fresh one would orphan it.
+        with self.stalled(task_id="t_aaa111", issue="XARI-9", status="running"), \
+             mock.patch.object(launch, "_task_body", return_value={
+                 "repo": "/tmp/r", "issue": "XARI-9",
+                 "flow": "tier1", "branch": "xariprojects/xari-9"}), \
+             mock.patch.object(launch, "start_flow", return_value="") as started, \
+             mock.patch.object(launch.subprocess, "run") as board, \
+             mock.patch.object(launch.events, "emit"):
+            board.return_value = subprocess.CompletedProcess([], 0, "", "")
+            launch.relaunch()
+
+        self.assertEqual(started.call_args.args[1], "xariprojects/xari-9")
+
+    def test_an_unreadable_task_body_is_not_guessed_at(self) -> None:
+        with self.stalled(task_id="t_aaa111", issue="XARI-9", status="running"), \
+             mock.patch.object(launch, "_task_body", return_value={"issue": "XARI-9"}), \
+             mock.patch.object(launch, "start_flow") as started:
+            outcome = launch.relaunch()
+
+        self.assertFalse(outcome.ok)
+        self.assertIn("does not say what to run", outcome.message)
+        started.assert_not_called()
+
+
+class ClippedDescriptionTest(unittest.TestCase):
+    def test_a_clipped_call_does_not_render_as_a_bare_tool_name(self) -> None:
+        # The wide-call fallback keeps no values, so without a guard it fell
+        # through to "Bash" and nothing else — the blank cheque again, this
+        # time reintroduced by the fix's own safety net.
+        wide = {f"key_{i}": "v" * 300 for i in range(400)}
+        stored = json.loads(approvals.stored_input(wide))
+
+        described = approvals.describe("Bash", stored)
+
+        self.assertNotEqual(described, "Bash")
+        self.assertIn("too large", described)
