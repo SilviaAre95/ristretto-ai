@@ -82,6 +82,62 @@ def decision_of(value: Any) -> str:
     return ALLOW if value == ALLOW else DENY
 
 
+# How much of a tool call we keep. Big enough for a real command, small
+# enough that one runaway request cannot bloat the store.
+MAX_STORED_INPUT = 4000
+# How much of any single value survives when the whole call is too big. The
+# question a person answers is "what is this trying to do", and the opening
+# lines of a command answer it; the body of a heredoc does not.
+MAX_STORED_VALUE = 600
+
+
+def stored_input(tool_input: Mapping[str, Any] | None) -> str:
+    """Serialise a tool call for the store, keeping it readable and parseable.
+
+    Clipping the serialised JSON — which is what this used to do — cuts the
+    document mid-string, so it no longer parses. `_row` then swallows the
+    error and renders an empty input, and the approval card shows a tool name
+    and nothing else. That is the worst possible failure for a permission
+    prompt: it asks a person to authorise something while showing them a blank
+    cheque, and it fires precisely on the *large* calls most worth reading.
+
+    Not hypothetical. Every approval a local coder raised on 2026-09-11 was
+    unreadable this way — five in a row — because the model writes its files
+    with long heredocs. The gate was effectively unusable in the flow it
+    matters most for.
+
+    So clip the values instead and let json.dumps produce a valid document
+    either way, and say in the value itself that it was shortened, so nobody
+    mistakes a clipped command for the whole command.
+    """
+    data = dict(tool_input or {})
+    rendered = json.dumps(data, default=str)
+    if len(rendered) <= MAX_STORED_INPUT:
+        return rendered
+
+    trimmed: dict[str, Any] = {}
+    for key, value in data.items():
+        text = value if isinstance(value, str) else json.dumps(value, default=str)
+        if len(text) > MAX_STORED_VALUE:
+            dropped = len(text) - MAX_STORED_VALUE
+            trimmed[key] = text[:MAX_STORED_VALUE] + f"… [{dropped} more characters]"
+        else:
+            trimmed[key] = value
+    rendered = json.dumps(trimmed, default=str)
+    if len(rendered) <= MAX_STORED_INPUT:
+        return rendered
+
+    # Still too big — a call with very many keys. Keep something true and
+    # parseable rather than something detailed and broken.
+    return json.dumps(
+        {
+            "_clipped": True,
+            "_keys": sorted(data)[:40],
+            "_bytes": len(json.dumps(data, default=str)),
+        }
+    )
+
+
 def request(
     request_id: str,
     task_id: str,
@@ -107,7 +163,7 @@ def request(
                 issue_key,
                 stage,
                 tool_name,
-                json.dumps(dict(tool_input or {}), default=str)[:4000],
+                stored_input(tool_input),
                 now,
                 expires,
             ),
@@ -135,6 +191,18 @@ def describe(tool_name: str, tool_input: Mapping[str, Any] | None) -> str:
     font: the tool's name is not what you are being asked.
     """
     data = dict(tool_input or {})
+    if data.get("_unreadable"):
+        return f"{tool_name}: request unreadable — do not approve without checking the log"
+    if data.get("_clipped"):
+        # The wide-call fallback keeps no values, so without this it fell all
+        # the way through to a bare tool name — the same blank cheque this
+        # module exists to prevent, reintroduced by its own safety net.
+        kept = ", ".join(str(key) for key in (data.get("_keys") or [])[:6])
+        return (
+            f"{tool_name}: too large to store ({data.get('_bytes', '?')} bytes)"
+            + (f", fields: {kept}" if kept else "")
+            + " — check the log before approving"
+        )
     question = _first_question(data)
     if question:
         return _clip(question, 160)
@@ -405,7 +473,11 @@ def _row(row: sqlite3.Row) -> dict[str, Any]:
     try:
         item["tool_input"] = json.loads(item.get("tool_input") or "{}")
     except (TypeError, ValueError):
-        item["tool_input"] = {}
+        # An unparseable record is not an empty one, and rendering it as empty
+        # is how a blank cheque reaches a person. Say it is unreadable so the
+        # surfaces can show that instead of a bare tool name — and so rows
+        # written before `stored_input` existed still fail loudly.
+        item["tool_input"] = {"_unreadable": "stored input is not valid JSON"}
     item["what"] = describe(item.get("tool_name", ""), item["tool_input"])
     item["detail"] = detail(item.get("tool_name", ""), item["tool_input"])
     return item
