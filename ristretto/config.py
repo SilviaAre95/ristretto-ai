@@ -67,6 +67,120 @@ def user_config_path(environ: Mapping[str, str] | None = None) -> Path:
     return xdg / "ristretto" / "config.yaml"
 
 
+def user_env_path(environ: Mapping[str, str] | None = None) -> Path:
+    """Ristretto's own secrets file, beside the config it already reads."""
+    return user_config_path(environ).parent / "env"
+
+
+def hermes_env_path(environ: Mapping[str, str] | None = None) -> Path:
+    """Hermes' secrets file, which this machine already treats as canonical.
+
+    A filename belonging to another project, so it is named here rather than
+    inline — the same reason `seam.py` exists. Read, never written.
+    """
+    env = os.environ if environ is None else environ
+    home = Path(env.get("HERMES_HOME", Path.home() / ".hermes")).expanduser()
+    return home / ".env"
+
+
+def parse_env_file(path: Path) -> dict[str, str]:
+    """KEY=VALUE lines. No expansion, no substitution, no execution."""
+    found: dict[str, str] = {}
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return found
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        name, _, value = stripped.partition("=")
+        name = name.strip()
+        if name.startswith("export "):
+            name = name[len("export "):].strip()
+        if not name.isidentifier():
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        found[name] = value
+    return found
+
+
+# Secrets this project needs that no config file names. Everything else comes
+# from the `*_env` indirection the instance and providers already declare.
+EXTRA_SECRET_NAMES = ("LINEAR_API_KEY",)
+
+
+def secret_names(config: Mapping[str, Any] | None = None) -> set[str]:
+    """Exactly the environment variables this installation asks for.
+
+    An allowlist, and the reason is worth stating. The files these values come
+    from hold other projects' secrets too — hermes' holds Slack and browser
+    tokens — and `start_flow` hands its whole environment to the flow, which
+    hands it to a model. Loading a file wholesale would put credentials this
+    project never uses into the environment of a process running generated
+    code. Take the named few.
+    """
+    names = set(EXTRA_SECRET_NAMES)
+    if config is None:
+        try:
+            config, _ = load_config()
+        except Exception:  # noqa: BLE001 - loading secrets must not need a valid config
+            return names
+    instance = config.get("instance") or {}
+    for key, value in instance.items():
+        if key.endswith("_env") and isinstance(value, str) and value:
+            names.add(value)
+    for provider in (config.get("providers") or {}).values():
+        if not isinstance(provider, Mapping):
+            continue
+        for key in ("auth_token_env", "model_env", "base_url_env"):
+            value = provider.get(key)
+            if isinstance(value, str) and value:
+                names.add(value)
+    return names
+
+
+def load_env(
+    environ: dict[str, str] | None = None,
+    config: Mapping[str, Any] | None = None,
+) -> list[str]:
+    """Put the secrets these files hold into the environment. Returns the names.
+
+    Ristretto keeps real credentials out of its YAML on purpose — `config.py`
+    refuses a provider `auth_token` that is not the non-secret ollama
+    placeholder and tells you to use `auth_token_env`. That rule is right and
+    stays. What was missing is anything that *populates* those variables.
+
+    It worked by accident for one launch path and not the other: Nemo and the
+    gateway are hermes processes, so they already hold hermes' environment and
+    pass it to the flow they start; a `ristretto launch` from a shell holds
+    whatever that shell has, which is nothing. The two are indistinguishable
+    afterwards — a Linear key that is present but unreadable produces exactly
+    the same "tracker not reachable" as no key at all.
+
+    Anything already exported wins, so an explicit value on the command line
+    is never overridden by a file. Values are never logged; only names are
+    returned, which is what a caller needs to say "loaded 3 secrets" without
+    printing one.
+    """
+    target = os.environ if environ is None else environ
+    wanted = secret_names(config)
+    loaded: list[str] = []
+    # Ristretto's own file FIRST. The guard below skips a name that is already
+    # set, so the first writer wins — anything exported beats both files, and
+    # this project's own file beats hermes' copy of the same name.
+    for path in (user_env_path(target), hermes_env_path(target)):
+        for name, value in parse_env_file(path).items():
+            if name not in wanted or target.get(name):
+                continue
+            target[name] = value
+            if name not in loaded:
+                loaded.append(name)
+    return loaded
+
+
 # Providers and flows describe how Ristretto works and ship with it. The
 # instance and its repository map describe one person's machine. Copying the
 # first group into the user's file is what let a live install sit on flows

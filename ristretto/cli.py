@@ -174,6 +174,9 @@ def parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from .config import load_env
+
+    load_env()
     args = parser().parse_args(argv)
     try:
         config, path = load_config(args.config)

@@ -17,9 +17,9 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from . import approvals, broker, events
+from . import __version__, approvals, broker, context as flow_context, events
 from .seam import DEV_CONFIG, VERIFY_GATE
-from .config import ConfigError, load_config, resolved_flow, resolved_provider
+from .config import ConfigError, load_config, load_env, resolved_flow, resolved_provider
 
 
 SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -96,6 +96,93 @@ def artifact_dir(task_id: str, cwd: Path) -> Path:
     return cwd / ".ristretto" / "runs" / safe_identifier(task_id, "task id")
 
 
+def ignore_artifacts(cwd: Path) -> bool:
+    """Make git refuse to stage the run's own artifacts, in this checkout.
+
+    `preserve_work` excludes them explicitly, but the `pr` stage is a model
+    running `git add`, and four of six configured repositories do not ignore
+    `.ristretto` — so run logs have been landing in pull requests (XARI-130).
+
+    That was untidy while the directory held logs. It stopped being untidy
+    when it started holding `context.md`, which carries excerpts of the
+    operator's notes: the same accident would now commit personal material to
+    a public repository. So the flow no longer depends on each repository
+    having remembered.
+
+    Written to the *common* git dir: a worktree's own `info/exclude` is not
+    consulted. Local to the machine, so no repository is modified.
+    """
+    try:
+        common = subprocess.run(
+            ["git", "-C", str(cwd), "rev-parse", "--git-common-dir"],
+            capture_output=True, text=True, check=False, timeout=30,
+        )
+        if common.returncode != 0:
+            return False
+        info = Path((common.stdout or "").strip())
+        if not info.is_absolute():
+            info = (cwd / info).resolve()
+        info = info / "info"
+        info.mkdir(parents=True, exist_ok=True)
+        exclude = info / "exclude"
+        current = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
+        if any(line.strip() == f"{ARTIFACT_DIR_NAME}/" for line in current.splitlines()):
+            return True
+        with exclude.open("a", encoding="utf-8") as handle:
+            handle.write(
+                f"\n# Ristretto run artifacts — never part of the work product.\n"
+                f"{ARTIFACT_DIR_NAME}/\n"
+            )
+        return True
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def runner_identity() -> dict[str, str]:
+    """Which code is executing this flow.
+
+    `flow.json` already pins `verify_sha256` and `stage_timeout`, because both
+    are control-plane values living in files a stage could rewrite. The code
+    running the flow is the largest such value and was not recorded at all —
+    so a run could be described only as "whatever was in the checkout at the
+    time".
+
+    That is not a theoretical gap here: the skills are symlinks into the
+    working tree and the package is an editable install, so the runtime *is*
+    the checkout, including uncommitted edits and whichever branch is out.
+    Twice on 2026-09-10 a run had to be preceded by `git checkout main` for
+    its result to mean anything.
+
+    This records rather than fixes. A run now says what it ran and whether the
+    tree was clean, which is the measurement that says whether promoting a
+    built artifact is worth the velocity it would cost.
+    """
+    identity: dict[str, str] = {"version": __version__}
+    source = Path(__file__).resolve().parent.parent
+
+    def git(*args: str) -> str:
+        try:
+            done = subprocess.run(
+                ["git", "-C", str(source), *args],
+                capture_output=True, text=True, check=False, timeout=30,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return ""
+        return (done.stdout or "").strip() if done.returncode == 0 else ""
+
+    commit = git("rev-parse", "HEAD")
+    if not commit:
+        # Installed without its source tree: the version is all there is.
+        return identity
+    identity["commit"] = commit[:12]
+    identity["branch"] = git("rev-parse", "--abbrev-ref", "HEAD") or "?"
+    # `git status --porcelain` is empty exactly when nothing is modified or
+    # untracked, which is the question being asked: was this commit really
+    # what ran?
+    identity["tree"] = "dirty" if git("status", "--porcelain") else "clean"
+    return identity
+
+
 def pid_record(task_id: str) -> Path:
     board = safe_identifier(os.environ.get("HERMES_KANBAN_BOARD", "default"), "board id")
     task = safe_identifier(task_id, "task id")
@@ -168,6 +255,14 @@ def role_prompt(
     base: str,
 ) -> str:
     inputs = [artifacts / item for item in stage.get("inputs", [])]
+    # Context first, and for every stage rather than only the planner. A stage
+    # running under --bare has no way to look anything up, and the one that
+    # went hunting through the operator's notes was the build stage, not the
+    # plan. Listed only when it exists, so a flow whose sources were all
+    # unreachable does not advertise a file that is not there.
+    context = artifacts / flow_context.CONTEXT_FILE
+    if context.exists():
+        inputs = [context, *inputs]
     artifact_text = "\n".join(f"- {path}" for path in inputs) or "- none"
     instructions = {
         "plan": (
@@ -1231,6 +1326,18 @@ def execute(args: argparse.Namespace) -> int:
     cwd = Path.cwd().resolve()
     artifacts = artifact_dir(args.task_id, cwd)
     artifacts.mkdir(parents=True, exist_ok=True)
+    # Order matters: make git refuse to stage the artifact directory *before*
+    # writing anything into it. context.md carries excerpts of the operator's
+    # notes, and the pr stage is a model running `git add`.
+    if not ignore_artifacts(cwd):
+        raise FlowError(
+            f"could not make git ignore {ARTIFACT_DIR_NAME}/ in this checkout; "
+            "refusing to write run context that a later stage could commit"
+        )
+    # Then bring the issue and the operator's notes to the flow, so nothing has
+    # to go looking for them mid-run through a permission gate. Best effort — a
+    # source that is unreachable leaves its section out.
+    print(f"flow: {flow_context.assemble(args.issue, artifacts, config)}", file=sys.stderr)
     record = pid_record(args.task_id)
     base = str(config.get("base_branch", "main"))
     expected_verify_digest = None
@@ -1252,6 +1359,7 @@ def execute(args: argparse.Namespace) -> int:
                 "base": base,
                 "verify_sha256": expected_verify_digest,
                 "stage_timeout": pinned_stage_timeout,
+                "runner": runner_identity(),
             },
             indent=2,
         )
@@ -1391,6 +1499,9 @@ def _run_stages(
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Before anything reads a credential. A detached flow inherits whatever
+    # started it, which for a shell launch is nothing.
+    load_env()
     signal.signal(signal.SIGTERM, cleanup_process)
     signal.signal(signal.SIGINT, cleanup_process)
     try:

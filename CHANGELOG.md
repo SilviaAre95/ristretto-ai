@@ -7,6 +7,67 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- A run records which code ran it. `flow.json` gains a `runner` block with the
+  version, commit, branch and whether the tree was clean — beside the
+  `verify_sha256` and `stage_timeout` it already pins for the same reason.
+  The skills are symlinks into the working checkout and the package is an
+  editable install, so the runtime *is* the tree, including uncommitted edits
+  and whichever branch is out; a run could previously be described only as
+  "whatever was there at the time", which twice required a `git checkout main`
+  before a dispatch for its result to mean anything. This records rather than
+  fixes, deliberately: the first reading says whether promoting a built
+  artifact is worth the velocity it would cost.
+
+### Fixed
+
+- `ristretto.__version__` reads `VERSION` instead of restating it. The literal
+  said `0.1.0` while `VERSION` said `0.2.0` and `v0.2.0` was tagged, so the one
+  place a program could ask was the one place that was wrong.
+
+### Added
+
+- Ristretto loads the secrets it declares. Real credentials are env-only by
+  design — `config.py` refuses a provider `auth_token` that is not the
+  non-secret placeholder — but nothing populated those variables. It worked
+  for one launch path and not the other: Nemo and the gateway are hermes
+  processes and already hold hermes' environment, while a `ristretto launch`
+  from a shell holds nothing, and the two are indistinguishable afterwards
+  because a key that is present but unreadable degrades exactly like a key
+  that is absent. `~/.config/ristretto/env` is read first, then
+  `~/.hermes/.env`; anything already exported wins over both.
+
+  Only the names this installation declares are loaded — the `*_env` values
+  from the instance and providers, plus `LINEAR_API_KEY`. The files hold other
+  projects' credentials, and `start_flow` hands its whole environment to a
+  process running generated code, so loading one wholesale would put Slack and
+  browser tokens in front of a model that has no use for them.
+
+- The flow is told what it was asked to do. Before any stage runs, Ristretto
+  assembles `context.md` into the run's artifact directory from the issue body
+  and any vault notes matching the issue key, and lists it as an input to every
+  stage. The stage prompt carried `Issue key: XARI-123` and nothing else, so a
+  flow began by not knowing the task: where the issue was about code the plan
+  stage reconstructed it, and where it was about product the build stage went
+  hunting — seven permission prompts and 57 of one run's 60 minutes, ending at
+  an attempt to read a credentials file. Those searches were this project's own
+  premise being carried out by hand, through a gate, because nothing did it
+  first.
+
+  Every source degrades to absent, and a missing one is stated in the artifact
+  rather than left as a silent gap — a stage that can see "the tracker was not
+  reachable" says so in its plan instead of going looking. The vault half works
+  today; the issue half activates when `LINEAR_API_KEY` is set, there being no
+  Linear credential or client anywhere in the project until now.
+
+- A flow makes git ignore its own artifact directory before writing anything
+  into it, in that checkout only. `preserve_work` already excluded it, but the
+  `pr` stage is a model running `git add` and four of six configured
+  repositories do not ignore `.ristretto` (XARI-130) — untidy while the
+  directory held logs, and not untidy at all once it holds excerpts of the
+  operator's notes. The flow refuses to start if it cannot.
+
 ### Fixed
 
 - Approval requests larger than 4000 characters are readable again. The stored
