@@ -7,6 +7,32 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- The flow is told what it was asked to do. Before any stage runs, Ristretto
+  assembles `context.md` into the run's artifact directory from the issue body
+  and any vault notes matching the issue key, and lists it as an input to every
+  stage. The stage prompt carried `Issue key: XARI-123` and nothing else, so a
+  flow began by not knowing the task: where the issue was about code the plan
+  stage reconstructed it, and where it was about product the build stage went
+  hunting — seven permission prompts and 57 of one run's 60 minutes, ending at
+  an attempt to read a credentials file. Those searches were this project's own
+  premise being carried out by hand, through a gate, because nothing did it
+  first.
+
+  Every source degrades to absent, and a missing one is stated in the artifact
+  rather than left as a silent gap — a stage that can see "the tracker was not
+  reachable" says so in its plan instead of going looking. The vault half works
+  today; the issue half activates when `LINEAR_API_KEY` is set, there being no
+  Linear credential or client anywhere in the project until now.
+
+- A flow makes git ignore its own artifact directory before writing anything
+  into it, in that checkout only. `preserve_work` already excluded it, but the
+  `pr` stage is a model running `git add` and four of six configured
+  repositories do not ignore `.ristretto` (XARI-130) — untidy while the
+  directory held logs, and not untidy at all once it holds excerpts of the
+  operator's notes. The flow refuses to start if it cannot.
+
 ### Fixed
 
 - Approval requests larger than 4000 characters are readable again. The stored
