@@ -9,6 +9,25 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- A run records which code ran it. `flow.json` gains a `runner` block with the
+  version, commit, branch and whether the tree was clean — beside the
+  `verify_sha256` and `stage_timeout` it already pins for the same reason.
+  The skills are symlinks into the working checkout and the package is an
+  editable install, so the runtime *is* the tree, including uncommitted edits
+  and whichever branch is out; a run could previously be described only as
+  "whatever was there at the time", which twice required a `git checkout main`
+  before a dispatch for its result to mean anything. This records rather than
+  fixes, deliberately: the first reading says whether promoting a built
+  artifact is worth the velocity it would cost.
+
+### Fixed
+
+- `ristretto.__version__` reads `VERSION` instead of restating it. The literal
+  said `0.1.0` while `VERSION` said `0.2.0` and `v0.2.0` was tagged, so the one
+  place a program could ask was the one place that was wrong.
+
+### Added
+
 - Ristretto loads the secrets it declares. Real credentials are env-only by
   design — `config.py` refuses a provider `auth_token` that is not the
   non-secret placeholder — but nothing populated those variables. It worked

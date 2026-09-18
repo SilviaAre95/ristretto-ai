@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from . import approvals, broker, context as flow_context, events
+from . import __version__, approvals, broker, context as flow_context, events
 from .seam import DEV_CONFIG, VERIFY_GATE
 from .config import ConfigError, load_config, load_env, resolved_flow, resolved_provider
 
@@ -136,6 +136,51 @@ def ignore_artifacts(cwd: Path) -> bool:
         return True
     except (OSError, subprocess.SubprocessError):
         return False
+
+
+def runner_identity() -> dict[str, str]:
+    """Which code is executing this flow.
+
+    `flow.json` already pins `verify_sha256` and `stage_timeout`, because both
+    are control-plane values living in files a stage could rewrite. The code
+    running the flow is the largest such value and was not recorded at all —
+    so a run could be described only as "whatever was in the checkout at the
+    time".
+
+    That is not a theoretical gap here: the skills are symlinks into the
+    working tree and the package is an editable install, so the runtime *is*
+    the checkout, including uncommitted edits and whichever branch is out.
+    Twice on 2026-09-10 a run had to be preceded by `git checkout main` for
+    its result to mean anything.
+
+    This records rather than fixes. A run now says what it ran and whether the
+    tree was clean, which is the measurement that says whether promoting a
+    built artifact is worth the velocity it would cost.
+    """
+    identity: dict[str, str] = {"version": __version__}
+    source = Path(__file__).resolve().parent.parent
+
+    def git(*args: str) -> str:
+        try:
+            done = subprocess.run(
+                ["git", "-C", str(source), *args],
+                capture_output=True, text=True, check=False, timeout=30,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return ""
+        return (done.stdout or "").strip() if done.returncode == 0 else ""
+
+    commit = git("rev-parse", "HEAD")
+    if not commit:
+        # Installed without its source tree: the version is all there is.
+        return identity
+    identity["commit"] = commit[:12]
+    identity["branch"] = git("rev-parse", "--abbrev-ref", "HEAD") or "?"
+    # `git status --porcelain` is empty exactly when nothing is modified or
+    # untracked, which is the question being asked: was this commit really
+    # what ran?
+    identity["tree"] = "dirty" if git("status", "--porcelain") else "clean"
+    return identity
 
 
 def pid_record(task_id: str) -> Path:
@@ -1314,6 +1359,7 @@ def execute(args: argparse.Namespace) -> int:
                 "base": base,
                 "verify_sha256": expected_verify_digest,
                 "stage_timeout": pinned_stage_timeout,
+                "runner": runner_identity(),
             },
             indent=2,
         )

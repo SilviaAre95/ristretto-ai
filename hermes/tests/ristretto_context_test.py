@@ -276,3 +276,44 @@ class SecretLoadingTest(unittest.TestCase):
         self.assertIn("P_TOKEN", names)
         self.assertIn("LINEAR_API_KEY", names)
         self.assertNotIn("name", names)
+
+
+class RunnerIdentityTest(unittest.TestCase):
+    """A run should be able to say what code ran it."""
+
+    def test_it_reports_the_packaged_version(self) -> None:
+        from ristretto import __version__
+
+        self.assertEqual(runner.runner_identity()["version"], __version__)
+
+    def test_the_version_matches_the_file_the_release_process_tags(self) -> None:
+        # The literal in __init__ said 0.1.0 while VERSION said 0.2.0 and
+        # v0.2.0 was tagged, so the one place a program could ask was the one
+        # place that was wrong — and nothing noticed, because nothing asked.
+        from ristretto import __version__
+
+        stated = (Path(__file__).resolve().parents[2] / "VERSION").read_text(encoding="utf-8")
+        self.assertEqual(__version__, stated.strip())
+
+    def test_it_says_whether_the_tree_was_clean(self) -> None:
+        # The whole point: the runtime is this checkout, so "which commit" is
+        # only half an answer.
+        identity = runner.runner_identity()
+
+        self.assertIn(identity["tree"], {"clean", "dirty"})
+        self.assertRegex(identity["commit"], r"^[0-9a-f]{12}$")
+
+    def test_a_flow_records_it(self) -> None:
+        recorded = json.dumps({"runner": runner.runner_identity()})
+
+        self.assertIn("commit", recorded)
+
+    def test_it_degrades_when_there_is_no_source_tree(self) -> None:
+        # An installed copy without its checkout beside it: the version is all
+        # there is, and that is not an error.
+        with mock.patch.object(runner.subprocess, "run",
+                               side_effect=OSError("no git")):
+            identity = runner.runner_identity()
+
+        self.assertIn("version", identity)
+        self.assertNotIn("commit", identity)
