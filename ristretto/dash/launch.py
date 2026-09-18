@@ -391,6 +391,20 @@ def validate(
     return repo, ""
 
 
+def unchecked_findings(repo: Path, base: str) -> list[str]:
+    """What preflight declined to answer, as plain sentences.
+
+    Reported, never blocking. The incident this exists for was a *launch*: a
+    repo whose verify gate had been red for weeks looked ready, so a run would
+    have spent every stage before dying at `verify` on a breakage that predated
+    it. Running the gate here would cost minutes on every launch, so the launch
+    says what it does not know and lets the operator decide.
+    """
+    from ..preflight import preflight
+
+    return [f.message for f in preflight(repo, base, deep=False) if f.level == "UNKNOWN"]
+
+
 def blocking_findings(repo: Path, base: str) -> list[str]:
     """Preflight problems that should stop a launch, as plain sentences."""
     from ..preflight import fast_findings
@@ -521,7 +535,11 @@ def launch(
         # so plainly rather than leaving a card that looks queued: nothing will
         # pick this up, because claiming it is what keeps the dispatcher away.
         return Outcome(False, f"{issue} did not start: {problem}", task_id)
-    return Outcome(True, f"{issue} started on {flow}", task_id)
+    started = f"{issue} started on {flow}"
+    unchecked = unchecked_findings(repo, base)
+    if unchecked:
+        started += f" — {unchecked[0]}"
+    return Outcome(True, started, task_id)
 
 
 def _task_id(output: str) -> str:
