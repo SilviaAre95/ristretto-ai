@@ -19,6 +19,12 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   with an `UNKNOWN` line naming `--deep`. `UNKNOWN` is not a failure and does
   not block a launch: it is an unanswered question, not a broken repo.
 
+  A launch reports the same unanswered question in its confirmation, since the
+  incident it guards against was a launch rather than a command-line check, and
+  `preflight.passed` events carry an `unchecked` field when the gate was not
+  run — an unqualified pass is a durable record claiming more than was
+  established.
+
 ### Added
 
 - A run records which code ran it. `flow.json` gains a `runner` block with the

@@ -60,6 +60,32 @@ check that settles it: create a worktree at that ref, install dependencies, and
 run the verify gate. `origin/<base>` is preferred over the local branch, which
 can sit weeks behind.
 
+Without `--deep` the command ends by saying so:
+
+```
+OK      .cc-dev.yaml is committed on main
+OK      .cc-verify is committed on main
+UNKNOWN not checked: does .cc-verify pass from a clean checkout —
+        run with --deep before trusting this repo with a run
+```
+
+`UNKNOWN` is a third level rather than a warning, because an unanswered
+question and a broken repository should not print the same way. It does not
+fail the command — the exit code stays 0 — and it does not block a launch. It
+exists because the fast checks answer "are the loop's own files in git?" and
+were being read as answering "can this repo run a loop?". On 2026-09-18
+crema-connect reported only `OK` lines while its verify gate had been red for
+weeks; a run there would have planned, built, reviewed and repaired before
+dying at `verify` on a breakage that predated it, and that failure reads as
+the model having broken the build.
+
+A launch reports the same unanswered question in its confirmation, since the
+incident it guards against was a launch rather than a command-line check. It
+still does not block: running the gate would cost minutes on every launch, so
+the launch says what it does not know and leaves the judgement to the
+operator. `preflight.passed` events carry an `unchecked` field when the gate
+was not run, so the durable record does not claim more than was established.
+
 ## Out of scope
 
 - NOT writing into Hermes' kanban schema: Ristretto does not version the Hermes

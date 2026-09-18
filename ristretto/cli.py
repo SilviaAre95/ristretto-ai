@@ -6,6 +6,7 @@ import argparse
 import json
 import time
 import os
+from typing import Any
 import sys
 from pathlib import Path
 
@@ -208,11 +209,21 @@ def main(argv: list[str] | None = None) -> int:
             for finding in findings:
                 print(finding)
             failed = [f for f in findings if f.level == "ERROR"]
+            unchecked = [f.message for f in findings if f.level == "UNKNOWN"]
+            # An unqualified `preflight.passed` is a durable record saying this
+            # repo was checked. When the gate was never run it says more than
+            # was established, and the log is read later by someone asking
+            # exactly that question.
+            payload: dict[str, Any] = {"repo": str(repo)}
+            if failed:
+                payload["errors"] = [f.message for f in failed]
+            if unchecked:
+                payload["unchecked"] = unchecked
             event_log.emit(
                 f"preflight-{repo.name}",
                 "preflight.failed" if failed else "preflight.passed",
                 project=repo.name,
-                payload={"repo": str(repo), "errors": [f.message for f in failed]} if failed else None,
+                payload=payload if (failed or unchecked) else None,
             )
             return 1 if failed else 0
         if args.command == "migrate":

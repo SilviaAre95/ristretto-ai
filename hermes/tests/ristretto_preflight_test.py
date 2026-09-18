@@ -304,10 +304,6 @@ class SecurityFloorTest(unittest.TestCase):
                     self.assertIn("Never merge or push to main", prompt)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class UnansweredQuestionTest(unittest.TestCase):
     """The fast path must not read as "this repo can run a loop"."""
 
@@ -318,7 +314,7 @@ class UnansweredQuestionTest(unittest.TestCase):
         for args in (("init", "-q", "-b", "main"), ("config", "user.email", "t@e.com"),
                      ("config", "user.name", "T")):
             subprocess.run(["git", "-C", str(self.repo), *args], check=True)
-        for name in (".cc-dev.yaml", ".cc-verify"):
+        for name in preflight.GATE_FILES:
             (self.repo / name).write_text("x\n", encoding="utf-8")
         subprocess.run(["git", "-C", str(self.repo), "add", "-A"], check=True)
         subprocess.run(["git", "-C", str(self.repo), "commit", "-q", "-m", "wire"], check=True)
@@ -356,4 +352,15 @@ class UnansweredQuestionTest(unittest.TestCase):
         # lives in preflight(), so a launch does not become slow or refusing.
         from ristretto.dash.launch import blocking_findings
 
+        # Asserting blocking_findings == [] alone cannot fail: it filters
+        # ERROR, and UNKNOWN is not one. The invariant worth guarding is that
+        # the new finding stays out of fast_findings entirely, since that is
+        # what launch reads.
+        levels = [f.level for f in preflight.fast_findings(self.repo, "main")]
+        self.assertNotIn("UNKNOWN", levels, "launch reads fast_findings; keep it out")
+        self.assertIn("UNKNOWN", [f.level for f in preflight.preflight(self.repo, "main")])
         self.assertEqual(blocking_findings(self.repo, "main"), [])
+
+
+if __name__ == "__main__":
+    unittest.main()
