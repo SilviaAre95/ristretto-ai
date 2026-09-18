@@ -14,13 +14,14 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from ristretto import runner  # noqa: E402
+from ristretto import preflight, runner  # noqa: E402
 
 LOCAL = {
     "name": "local-coder",
@@ -305,3 +306,54 @@ class SecurityFloorTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UnansweredQuestionTest(unittest.TestCase):
+    """The fast path must not read as "this repo can run a loop"."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = Path(self.tmp.name)
+        self.addCleanup(self.tmp.cleanup)
+        for args in (("init", "-q", "-b", "main"), ("config", "user.email", "t@e.com"),
+                     ("config", "user.name", "T")):
+            subprocess.run(["git", "-C", str(self.repo), *args], check=True)
+        for name in (".cc-dev.yaml", ".cc-verify"):
+            (self.repo / name).write_text("x\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(self.repo), "add", "-A"], check=True)
+        subprocess.run(["git", "-C", str(self.repo), "commit", "-q", "-m", "wire"], check=True)
+
+    def test_a_passing_fast_check_admits_what_it_skipped(self) -> None:
+        # crema-connect reported only OK lines on 2026-09-18 while its verify
+        # gate had been red for weeks — a missing install, so every stage would
+        # have run and the flow died at `verify` on a pre-existing breakage.
+        findings = preflight.preflight(self.repo, "main", deep=False)
+
+        levels = [f.level for f in findings]
+        self.assertIn("UNKNOWN", levels)
+        unknown = next(f for f in findings if f.level == "UNKNOWN")
+        self.assertIn("--deep", unknown.message)
+
+    def test_unknown_is_not_a_failure(self) -> None:
+        # It is an unanswered question, not a broken repo: a launch must not
+        # start refusing on it.
+        findings = preflight.preflight(self.repo, "main", deep=False)
+
+        self.assertEqual([f for f in findings if f.level == "ERROR"], [])
+
+    def test_a_broken_repo_is_not_also_told_to_run_deep(self) -> None:
+        # Pointless advice on top of a real error.
+        subprocess.run(["git", "-C", str(self.repo), "rm", "-q", "--cached", ".cc-verify"], check=True)
+        subprocess.run(["git", "-C", str(self.repo), "commit", "-q", "-m", "drop"], check=True)
+
+        findings = preflight.preflight(self.repo, "main", deep=False)
+
+        self.assertTrue(any(f.level == "ERROR" for f in findings))
+        self.assertNotIn("UNKNOWN", [f.level for f in findings])
+
+    def test_launch_is_not_newly_blocked_by_it(self) -> None:
+        # blocking_findings reads fast_findings and filters ERROR; the UNKNOWN
+        # lives in preflight(), so a launch does not become slow or refusing.
+        from ristretto.dash.launch import blocking_findings
+
+        self.assertEqual(blocking_findings(self.repo, "main"), [])

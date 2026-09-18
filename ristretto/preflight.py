@@ -24,7 +24,14 @@ from .seam import GATE_FILES, VERIFY_GATE  # the wayworks convention, in one pla
 
 
 class Finding(NamedTuple):
-    level: str  # OK | ERROR
+    # UNKNOWN is not a failure and not a pass. It exists because the fast
+    # checks used to print only OK lines, which read as "this repo can run a
+    # loop" while leaving the question the docstring calls the only one that
+    # matters entirely unasked. crema-connect reported OK on 2026-09-18 with a
+    # verify gate that had been red for weeks — a missing install, so every
+    # stage would have run and the flow would have died at `verify` on
+    # something broken before it started.
+    level: str  # OK | ERROR | UNKNOWN
     message: str
 
     def __str__(self) -> str:
@@ -159,4 +166,17 @@ def preflight(repo: Path, base: str = "main", deep: bool = False) -> list[Findin
         if shutil.which("git") is None:
             return findings + [Finding("ERROR", "git not found")]
         findings.extend(deep_findings(repo, base))
+        return findings
+    if not any(f.level == "ERROR" for f in findings):
+        # Say what was not checked. Without this the command answers "are the
+        # loop's own files in git?" and is read as answering "can this repo
+        # run a loop?", which is the weaker question and the one that lets an
+        # hour be spent discovering the gate was already red.
+        findings.append(
+            Finding(
+                "UNKNOWN",
+                f"not checked: does {VERIFY_GATE} pass from a clean checkout — "
+                "run with --deep before trusting this repo with a run",
+            )
+        )
     return findings
