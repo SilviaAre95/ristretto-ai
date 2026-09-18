@@ -19,7 +19,7 @@ from typing import Any, Callable, Mapping
 
 from . import approvals, broker, context as flow_context, events
 from .seam import DEV_CONFIG, VERIFY_GATE
-from .config import ConfigError, load_config, resolved_flow, resolved_provider
+from .config import ConfigError, load_config, load_env, resolved_flow, resolved_provider
 
 
 SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -1453,6 +1453,9 @@ def _run_stages(
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Before anything reads a credential. A detached flow inherits whatever
+    # started it, which for a shell launch is nothing.
+    load_env()
     signal.signal(signal.SIGTERM, cleanup_process)
     signal.signal(signal.SIGINT, cleanup_process)
     try:

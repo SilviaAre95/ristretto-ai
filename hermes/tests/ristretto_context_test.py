@@ -200,3 +200,79 @@ class IgnoreArtifactsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SecretLoadingTest(unittest.TestCase):
+    """Secrets are env-only by design; something has to put them there."""
+
+    def setUp(self) -> None:
+        from ristretto import config as cfg
+        self.cfg = cfg
+        self.home = Path(tempfile.mkdtemp())
+        (self.home / ".hermes").mkdir()
+        (self.home / ".config" / "ristretto").mkdir(parents=True)
+        self.hermes = self.home / ".hermes" / ".env"
+        self.own = self.home / ".config" / "ristretto" / "env"
+
+    def env(self, **extra) -> dict:
+        return {"HERMES_HOME": str(self.home / ".hermes"),
+                "XDG_CONFIG_HOME": str(self.home / ".config"), **extra}
+
+    def test_only_declared_names_are_loaded(self) -> None:
+        # The files hold other projects' secrets, and start_flow hands its
+        # whole environment to a process running generated code.
+        self.hermes.write_text(
+            "LINEAR_API_KEY=lin_api_x\nSLACK_BOT_TOKEN=xoxb-secret\n", encoding="utf-8")
+        target = self.env()
+
+        with mock.patch.object(self.cfg, "secret_names", return_value={"LINEAR_API_KEY"}):
+            loaded = self.cfg.load_env(target)
+
+        self.assertEqual(loaded, ["LINEAR_API_KEY"])
+        self.assertNotIn("SLACK_BOT_TOKEN", target)
+
+    def test_an_exported_value_is_never_overridden(self) -> None:
+        self.hermes.write_text("LINEAR_API_KEY=from_file\n", encoding="utf-8")
+        target = self.env(LINEAR_API_KEY="from_shell")
+
+        with mock.patch.object(self.cfg, "secret_names", return_value={"LINEAR_API_KEY"}):
+            self.cfg.load_env(target)
+
+        self.assertEqual(target["LINEAR_API_KEY"], "from_shell")
+
+    def test_ristretto_own_file_wins_over_hermes(self) -> None:
+        self.hermes.write_text("LINEAR_API_KEY=hermes\n", encoding="utf-8")
+        self.own.write_text("LINEAR_API_KEY=ristretto\n", encoding="utf-8")
+        target = self.env()
+
+        with mock.patch.object(self.cfg, "secret_names", return_value={"LINEAR_API_KEY"}):
+            self.cfg.load_env(target)
+
+        self.assertEqual(target["LINEAR_API_KEY"], "ristretto")
+
+    def test_missing_files_are_not_an_error(self) -> None:
+        with mock.patch.object(self.cfg, "secret_names", return_value={"LINEAR_API_KEY"}):
+            self.assertEqual(self.cfg.load_env(self.env()), [])
+
+    def test_the_parser_does_not_execute_anything(self) -> None:
+        self.hermes.write_text(
+            'LINEAR_API_KEY="quoted"\n# comment\n\nexport OTHER=x\nBAD NAME=y\n$(rm -rf /)=z\n',
+            encoding="utf-8")
+
+        found = self.cfg.parse_env_file(self.hermes)
+
+        self.assertEqual(found["LINEAR_API_KEY"], "quoted")
+        self.assertEqual(found["OTHER"], "x")
+        self.assertNotIn("BAD NAME", found)
+        self.assertEqual(len(found), 2)
+
+    def test_declared_names_come_from_the_config(self) -> None:
+        names = self.cfg.secret_names({
+            "instance": {"linear_team_env": "RIS_TEAM", "name": "Ris"},
+            "providers": {"p": {"auth_token_env": "P_TOKEN", "runner": "claude-code"}},
+        })
+
+        self.assertIn("RIS_TEAM", names)
+        self.assertIn("P_TOKEN", names)
+        self.assertIn("LINEAR_API_KEY", names)
+        self.assertNotIn("name", names)

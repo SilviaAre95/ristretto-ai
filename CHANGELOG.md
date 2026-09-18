@@ -9,6 +9,22 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Ristretto loads the secrets it declares. Real credentials are env-only by
+  design — `config.py` refuses a provider `auth_token` that is not the
+  non-secret placeholder — but nothing populated those variables. It worked
+  for one launch path and not the other: Nemo and the gateway are hermes
+  processes and already hold hermes' environment, while a `ristretto launch`
+  from a shell holds nothing, and the two are indistinguishable afterwards
+  because a key that is present but unreadable degrades exactly like a key
+  that is absent. `~/.config/ristretto/env` is read first, then
+  `~/.hermes/.env`; anything already exported wins over both.
+
+  Only the names this installation declares are loaded — the `*_env` values
+  from the instance and providers, plus `LINEAR_API_KEY`. The files hold other
+  projects' credentials, and `start_flow` hands its whole environment to a
+  process running generated code, so loading one wholesale would put Slack and
+  browser tokens in front of a model that has no use for them.
+
 - The flow is told what it was asked to do. Before any stage runs, Ristretto
   assembles `context.md` into the run's artifact directory from the issue body
   and any vault notes matching the issue key, and lists it as an input to every
