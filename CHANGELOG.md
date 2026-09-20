@@ -7,6 +7,38 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Local stages keep their hooks. A provider with a `base_url` gets
+  `--strict-mcp-config` instead of `--bare`. The XARI-119 hang was one network
+  call — MCP discovery against `api.anthropic.com` with no timeout — and
+  `--strict-mcp-config` is the fix for exactly that; `--bare` also worked but
+  additionally disabled hooks, plugins, keychain reads and CLAUDE.md. Hooks are
+  the only hard enforcement a stage has, so under `--bare` tier1's `build` and
+  `finish` ran with none, and `finish` is the stage that pushes: the least
+  supervised stage had the most reach, and every model stage in tier3 was in
+  the same position. Measured 2026-09-20 against qwen3.6:27b — answered in 94s
+  under load, rather than never. The approval broker still loads, verified
+  against a live run.
+
+- Mutating stages are told to create and change files with the Write and Edit
+  tools rather than shell redirection, heredocs or scripts. A build stage
+  raised **sixteen** approvals appending one route to one file, escalating
+  `cat` → `sed`/`head` → a Node script as each got gated, and destroyed 289
+  lines with `head -n -1` — a GNU option macOS rejects. Write and Edit are
+  already permitted for in-worktree files and never prompt, and they match on
+  content rather than line position, so a wrong assumption fails instead of
+  silently deleting.
+
+### Fixed
+
+- A stage killed by a signal keeps what it wrote. XARI-118 covered the
+  runner's own deadline and a later change covered the runner being signalled,
+  but neither fired when the *stage child* was killed and the runner lived to
+  process an ordinary non-zero exit — which is precisely what the Stop button
+  produces. Seven files sat uncommitted in a worktree `ristretto gc` would have
+  reclaimed. Found by pressing Stop.
+
 ### Fixed
 
 - `ristretto preflight` says what it did not check. The fast path verifies the

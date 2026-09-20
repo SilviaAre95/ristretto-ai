@@ -228,3 +228,47 @@ class PinBranchToBaseTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FileEditingInstructionTest(unittest.TestCase):
+    """Sixteen approvals to append one route, and 289 lines destroyed."""
+
+    def prompt(self, role: str) -> str:
+        import tempfile
+        stage = {"id": role, "role": role, "mutates": role in {"build", "repair", "pr"}, "inputs": []}
+        return runner.role_prompt(role, "XARI-9", stage, Path(tempfile.mkdtemp()), "main")
+
+    def test_every_mutating_stage_is_told_which_tools_to_edit_with(self) -> None:
+        for role in ("build", "repair", "pr"):
+            with self.subTest(role=role):
+                text = self.prompt(role)
+                self.assertIn("Write and Edit tools", text)
+                self.assertIn("not with shell", text)
+
+    def test_it_says_what_to_use_rather_than_only_what_to_avoid(self) -> None:
+        # Told only "do not use cat", a model escalates — the observed run went
+        # cat -> sed/head -> a Node script, one gated command at a time.
+        text = self.prompt("build")
+
+        self.assertLess(text.index("Write and Edit"), text.index("`cat >`"),
+                        "the tool to use should come before the ones to avoid")
+        self.assertIn("node", text, "node was the escalation; name it")
+
+    def test_it_gives_the_reason_the_shell_route_corrupts_files(self) -> None:
+        text = self.prompt("build")
+
+        self.assertIn("line position rather than by content", text)
+
+
+class SignalPreservesWorkTest(unittest.TestCase):
+    """The Stop button was the one path that dropped work."""
+
+    def test_the_signal_exits_are_the_shell_convention(self) -> None:
+        self.assertEqual(runner.SIGNAL_EXITS[143], "SIGTERM")
+        self.assertEqual(runner.SIGNAL_EXITS[137], "SIGKILL")
+        self.assertEqual(runner.SIGNAL_EXITS[130], "SIGINT")
+
+    def test_a_killed_stage_reports_stopped_not_failed(self) -> None:
+        # "exit 143" alone reads as the model breaking; it means someone
+        # pressed Stop.
+        self.assertNotIn(124, runner.SIGNAL_EXITS, "124 is our own deadline, not a signal")

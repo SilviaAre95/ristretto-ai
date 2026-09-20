@@ -217,12 +217,18 @@ class LocalProviderCommandTest(unittest.TestCase):
         )
         return command, env
 
-    def test_a_local_provider_gets_bare_and_its_repo_dir(self) -> None:
+    def test_a_local_provider_suppresses_mcp_discovery_not_everything(self) -> None:
+        # The XARI-119 hang was one network call: MCP discovery against
+        # api.anthropic.com with no timeout. --strict-mcp-config is the fix
+        # for exactly that. --bare also worked and was what shipped first,
+        # but it additionally disabled hooks, plugins, keychain reads and
+        # CLAUDE.md — and hooks are the only hard enforcement a stage has,
+        # so under --bare the stages that write and push were the least
+        # supervised in the flow.
         command, env = self.build(LOCAL)
 
-        self.assertIn("--bare", command)
-        # --bare drops CLAUDE.md auto-discovery, so the repo's own conventions
-        # have to be handed back explicitly or the builder loses them.
+        self.assertIn("--strict-mcp-config", command)
+        self.assertNotIn("--bare", command, "hooks must stay on for local stages")
         self.assertIn("--add-dir", command)
         self.assertIn("/tmp/work", command)
         self.assertEqual(env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"], "1")
