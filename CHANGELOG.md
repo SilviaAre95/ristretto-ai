@@ -7,6 +7,24 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- `ristretto preflight` says what it did not check. The fast path verifies the
+  loop's own files are committed and printed only `OK` lines, which reads as
+  "this repo can run a loop" — the stronger claim the module's own docstring
+  calls the only question that matters. crema-connect reported `OK` on
+  2026-09-18 with a verify gate that had been red for weeks (a stale install,
+  not a code error), so a run there would have executed every stage and died
+  at `verify` on a breakage that predated it. A passing fast check now ends
+  with an `UNKNOWN` line naming `--deep`. `UNKNOWN` is not a failure and does
+  not block a launch: it is an unanswered question, not a broken repo.
+
+  A launch reports the same unanswered question in its confirmation, since the
+  incident it guards against was a launch rather than a command-line check, and
+  `preflight.passed` events carry an `unchecked` field when the gate was not
+  run — an unqualified pass is a durable record claiming more than was
+  established.
+
 ### Added
 
 - A run records which code ran it. `flow.json` gains a `runner` block with the
