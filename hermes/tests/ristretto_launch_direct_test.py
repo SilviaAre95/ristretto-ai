@@ -174,7 +174,11 @@ class StartFlowTest(unittest.TestCase):
 
         self.assertEqual(len(spawned), 1, "exactly one flow process")
         argv, kwargs = spawned[0]
-        self.assertEqual(argv[:3], [sys.executable, "-m", "ristretto.runner"])
+        # Not sys.executable: the flow runs from the pinned runtime when one
+        # is installed, which is the whole point of separating them. What this
+        # guards is the invocation shape, not which copy answers.
+        self.assertEqual(argv[1:3], ["-m", "ristretto.runner"])
+        self.assertTrue(argv[0].endswith("python"), argv[0])
         self.assertIn("--task-id", argv)
         self.assertEqual(kwargs["cwd"], self.repo / launch.WORKTREE_DIR / "t_abc")
         self.assertTrue(kwargs["start_new_session"],
