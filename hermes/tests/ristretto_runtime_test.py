@@ -25,7 +25,9 @@ from ristretto.dash import launch  # noqa: E402
 
 class RuntimeResolutionTest(unittest.TestCase):
     def setUp(self) -> None:
-        self.home = Path(tempfile.mkdtemp())
+        holder = tempfile.TemporaryDirectory()
+        self.addCleanup(holder.cleanup)
+        self.home = Path(holder.name)
         self.env = {"RISTRETTO_STATE_HOME": str(self.home)}
 
     def pin(self) -> Path:
@@ -41,18 +43,22 @@ class RuntimeResolutionTest(unittest.TestCase):
         # Refusing would be stricter and wrong: an install that has not pinned
         # yet would lose the ability to dispatch at all. Visibly unpinned
         # beats silently unpinned.
-        interpreter, warning = runtime.flow_interpreter(self.env)
+        prefix, _, warning = runtime.flow_interpreter(self.env)
 
-        self.assertEqual(interpreter, sys.executable)
+        self.assertEqual(prefix, [sys.executable])
         self.assertIn("development checkout", warning)
         self.assertIn("make install-runtime", warning)
 
     def test_a_pinned_runtime_is_used_without_a_warning(self) -> None:
         python = self.pin()
 
-        interpreter, warning = runtime.flow_interpreter(self.env)
+        # The stub cannot import anything, so runtime_python rejects it — that
+        # is the point of finding 2. Patch it to stand for a working install.
+        with mock.patch.object(runtime, "runtime_python", return_value=python):
+            prefix, env, warning = runtime.flow_interpreter(self.env)
 
-        self.assertEqual(interpreter, str(python))
+        self.assertEqual(prefix, [str(python), "-P"])
+        self.assertNotIn("PYTHONPATH", env)
         self.assertEqual(warning, "")
 
     def test_the_identity_says_it_is_unpinned(self) -> None:
@@ -72,10 +78,11 @@ class RuntimeResolutionTest(unittest.TestCase):
         (root / "x.py").write_text("x\n", encoding="utf-8")
         subprocess.run(["git", "-C", str(root), "add", "-A"], check=True)
         subprocess.run(["git", "-C", str(root), "commit", "-q", "-m", "base"], check=True)
-        self.pin()
+        python = self.pin()
         (root / "x.py").write_text("edited\n", encoding="utf-8")
 
-        identity = runtime.runtime_identity(self.env)
+        with mock.patch.object(runtime, "runtime_python", return_value=python):
+            identity = runtime.runtime_identity(self.env)
 
         self.assertEqual(identity["pinned"], "yes")
         self.assertEqual(identity["tree"], "dirty")
@@ -96,7 +103,7 @@ class LaunchUsesTheRuntimeTest(unittest.TestCase):
         subprocess.run(["git", "-C", str(self.repo), "branch", "feat/x"], check=True)
         self.addCleanup(self.tmp.cleanup)
 
-    def spawn_with(self, interpreter: str, warning: str = ""):
+    def spawn_with(self, interpreter: str, warning: str = "", env: dict | None = None):
         spawned: list[list[str]] = []
         real_run, real_popen = subprocess.run, subprocess.Popen
 
@@ -111,7 +118,9 @@ class LaunchUsesTheRuntimeTest(unittest.TestCase):
             spawned.append(list(argv))
             return mock.Mock(pid=1234)
 
-        with mock.patch.object(launch, "flow_interpreter", return_value=(interpreter, warning)), \
+        prefix = [interpreter] if warning else [interpreter, "-P"]
+        with mock.patch.object(launch, "flow_interpreter",
+                               return_value=(prefix, env or {"PATH": "/usr/bin"}, warning)), \
              mock.patch.object(launch.subprocess, "run", side_effect=fake_run), \
              mock.patch.object(launch.subprocess, "Popen", side_effect=fake_popen):
             launch.start_flow(str(self.repo), "feat/x", "t_abc", "XARI-1", "tier1")
@@ -121,8 +130,8 @@ class LaunchUsesTheRuntimeTest(unittest.TestCase):
         spawned = self.spawn_with("/pinned/.venv/bin/python")
 
         self.assertEqual(len(spawned), 1)
-        self.assertEqual(spawned[0][0], "/pinned/.venv/bin/python")
-        self.assertEqual(spawned[0][1:3], ["-m", "ristretto.runner"])
+        self.assertEqual(spawned[0][:3], ["/pinned/.venv/bin/python", "-P", "-m"])
+        self.assertEqual(spawned[0][3], "ristretto.runner")
 
     def test_an_unpinned_launch_still_starts(self) -> None:
         # Losing the ability to dispatch would be a worse failure than a
@@ -131,6 +140,60 @@ class LaunchUsesTheRuntimeTest(unittest.TestCase):
 
         self.assertEqual(len(spawned), 1)
         self.assertEqual(spawned[0][0], sys.executable)
+        self.assertNotIn("-P", spawned[0], "the dev checkout needs its own sys.path")
+
+
+class UnpinningEnvironmentTest(unittest.TestCase):
+    """A pinned interpreter that inherits PYTHONPATH is not pinned."""
+
+    def test_the_env_that_would_undo_the_pin_is_stripped(self) -> None:
+        # Not hypothetical: scripts/check.sh and run-loop.sh both export
+        # PYTHONPATH, and `-P` does not cover it — measured 2026-09-20.
+        env = runtime.pinned_env({
+            "PYTHONPATH": "/somewhere/ristretto-ai",
+            "VIRTUAL_ENV": "/somewhere/.venv",
+            "PYTHONHOME": "/somewhere",
+            "PATH": "/usr/bin",
+        })
+
+        for name in runtime.UNPINNING_ENV:
+            self.assertNotIn(name, env)
+        self.assertEqual(env["PATH"], "/usr/bin")
+
+    def test_the_pinned_interpreter_is_given_dash_P(self) -> None:
+        # A flow's cwd is the worktree, and a worktree of *this* repository
+        # contains a ristretto/ package — so without -P the pin was defeated
+        # for precisely the repository where it matters most.
+        home = Path(tempfile.mkdtemp())
+        venv = home / "runtime" / ".venv" / "bin"
+        venv.mkdir(parents=True)
+        (venv / "python").write_text("#!/bin/sh\n", encoding="utf-8")
+        (venv / "python").chmod(0o755)
+
+        with mock.patch.object(runtime, "runtime_python", return_value=venv / "python"):
+            prefix, _, warning = runtime.flow_interpreter({"RISTRETTO_STATE_HOME": str(home)})
+
+        self.assertIn("-P", prefix)
+        self.assertEqual(warning, "")
+
+
+class UnknownProvenanceTest(unittest.TestCase):
+    def test_a_runtime_that_is_not_a_git_checkout_says_unknown(self) -> None:
+        # git() returns "" for failure, timeout and empty alike, so without a
+        # guard a copied or .git-less runtime reported {"tree": "clean"} with
+        # no commit — the most misleading record this could produce.
+        home = Path(tempfile.mkdtemp())
+        venv = home / "runtime" / ".venv" / "bin"
+        venv.mkdir(parents=True)
+        (venv / "python").write_text("#!/bin/sh\n", encoding="utf-8")
+        (venv / "python").chmod(0o755)
+
+        with mock.patch.object(runtime, "runtime_python", return_value=venv / "python"):
+            identity = runtime.runtime_identity({"RISTRETTO_STATE_HOME": str(home)})
+
+        self.assertEqual(identity["pinned"], "yes")
+        self.assertEqual(identity["tree"], "unknown")
+        self.assertNotIn("commit", identity)
 
 
 if __name__ == "__main__":

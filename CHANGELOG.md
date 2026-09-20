@@ -20,7 +20,18 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   would run code you had not chosen, just from a different moment.
 
   With no runtime installed a launch still starts, runs from the development
-  checkout, and says so — visibly unpinned rather than silently so.
+  checkout, and says so in the launch outcome — visibly unpinned rather than
+  silently so.
+
+  The pin holds against both ways it can be undone: flows run with `-P` so the
+  worktree is not placed on `sys.path` (a worktree of *this* repository
+  contains a `ristretto/` package, so the pin was defeated for the repository
+  where it matters most), and `PYTHONPATH`/`PYTHONHOME`/`VIRTUAL_ENV` are
+  stripped, since `-P` does not cover them and `scripts/check.sh` and
+  `run-loop.sh` both export `PYTHONPATH`. The installer verifies the runtime
+  imports `ristretto` *from the runtime* rather than merely importing it at
+  all, refuses while a flow is running, and requires Python 3.11 like the rest
+  of the project.
 
 ### Changed
 

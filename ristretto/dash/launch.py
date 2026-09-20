@@ -213,9 +213,9 @@ def start_flow(repo: str, branch: str, task_id: str, issue: str, flow: str) -> s
     # a tree someone is editing. Falls back to this interpreter with a warning
     # rather than refusing, so an install that has not pinned a runtime yet
     # can still dispatch — visibly unpinned rather than silently so.
-    interpreter, unpinned = flow_interpreter()
+    prefix, flow_env, unpinned = flow_interpreter()
     command = [
-        interpreter, "-m", "ristretto.runner",
+        *prefix, "-m", "ristretto.runner",
         "--task-id", task_id, "--issue", issue, "--flow", flow,
     ]
     if unpinned:
@@ -227,7 +227,10 @@ def start_flow(repo: str, branch: str, task_id: str, issue: str, flow: str) -> s
         process = subprocess.Popen(
             command, cwd=worktree, stdout=log, stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL, start_new_session=True,
-            env={**os.environ, "PYTHONUNBUFFERED": "1"},
+            # flow_env, not os.environ: a pinned interpreter that inherits
+            # PYTHONPATH imports the development tree anyway, and PYTHONPATH is
+            # exported by check.sh and run-loop.sh as a matter of course.
+            env={**flow_env, "PYTHONUNBUFFERED": "1"},
         )
     except OSError as exc:
         return give_up(f"could not start the flow: {exc}")
@@ -547,9 +550,16 @@ def launch(
         # pick this up, because claiming it is what keeps the dispatcher away.
         return Outcome(False, f"{issue} did not start: {problem}", task_id)
     started = f"{issue} started on {flow}"
-    unchecked = unchecked_findings(repo, base)
-    if unchecked:
-        started += f" — {unchecked[0]}"
+    notes = []
+    # The docs promise a launch "says so" when unpinned. On stderr that is a
+    # service log nobody reads — the dashboard and the Slack plugin both show
+    # Outcome.message and nothing else.
+    _, _, unpinned_note = flow_interpreter()
+    if unpinned_note:
+        notes.append(unpinned_note)
+    notes.extend(unchecked_findings(repo, base)[:1])
+    if notes:
+        started += " — " + "; ".join(notes)
     return Outcome(True, started, task_id)
 
 

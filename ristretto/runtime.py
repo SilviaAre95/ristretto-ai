@@ -39,10 +39,51 @@ def runtime_root(environ: Mapping[str, str] | None = None) -> Path:
     return events.state_home(environ) / RUNTIME_DIR
 
 
+# Environment that would un-pin a pinned interpreter by putting another copy
+# of the package ahead of its own site-packages. PYTHONPATH is not a corner
+# case here: scripts/check.sh and run-loop.sh both export it.
+UNPINNING_ENV = ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV")
+
+
 def runtime_python(environ: Mapping[str, str] | None = None) -> Path | None:
-    """The interpreter a flow should run under, or None when unpinned."""
+    """The interpreter a flow should run under, or None when unpinned.
+
+    Checks that it can import the runner, not merely that a file exists.
+    `python3 -m venv` succeeding and `pip install` then failing leaves an
+    interpreter behind that cannot import anything — and the flow spawned
+    under it dies instantly on ModuleNotFoundError while the launch reports
+    success, the task stays claimed, and the day-scoped idempotency key
+    refuses every retry until midnight.
+    """
     candidate = runtime_root(environ) / RUNTIME_VENV / "bin" / "python"
-    return candidate if candidate.is_file() else None
+    if not candidate.is_file():
+        return None
+    try:
+        proved = subprocess.run(
+            [str(candidate), "-P", "-c", "import ristretto.runner"],
+            capture_output=True, text=True, check=False, timeout=60,
+            cwd="/", env=pinned_env(dict(environ) if environ else None),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return candidate if proved.returncode == 0 else None
+
+
+def pinned_env(environ: Mapping[str, str] | None = None) -> dict[str, str]:
+    """The environment a pinned interpreter runs in, minus what would un-pin it.
+
+    `-P` stops Python putting the working directory on sys.path, which matters
+    because a flow's cwd is the worktree — and a worktree of *this* repository
+    contains a `ristretto/` package, so the pin was defeated for precisely the
+    repository where it matters most. PYTHONPATH survives `-P` and has to be
+    removed separately.
+    """
+    import os as _os
+
+    env = dict(_os.environ if environ is None else environ)
+    for name in UNPINNING_ENV:
+        env.pop(name, None)
+    return env
 
 
 def runtime_identity(environ: Mapping[str, str] | None = None) -> dict[str, str]:
@@ -70,26 +111,44 @@ def runtime_identity(environ: Mapping[str, str] | None = None) -> dict[str, str]
 
     identity: dict[str, str] = {"pinned": "yes", "path": str(root)}
     commit = git("rev-parse", "HEAD")
-    if commit:
-        identity["commit"] = commit[:12]
+    if not commit:
+        # git() returns "" for a failure, a timeout and an empty result alike,
+        # so without this a runtime that is not a git checkout at all — copied,
+        # rsynced, .git deleted — would be recorded as clean with no commit.
+        # That is the most misleading record this function could produce, for a
+        # feature whose entire purpose is that a run can state what ran it.
+        identity["tree"] = "unknown"
+        return identity
+    identity["commit"] = commit[:12]
     # A pinned checkout that someone edited is no longer pinned to anything.
-    # Saying so is the point: the whole feature is that a run can state what
-    # ran it.
     identity["tree"] = "dirty" if git("status", "--porcelain") else "clean"
     return identity
 
 
-def flow_interpreter(environ: Mapping[str, str] | None = None) -> tuple[str, str]:
-    """(interpreter, warning). The warning is empty when the runtime is pinned.
+def flow_interpreter(
+    environ: Mapping[str, str] | None = None,
+) -> tuple[list[str], dict[str, str], str]:
+    """(argv prefix, environment, warning) for running a flow.
+
+    Returns the flags and environment as well as the path, because a pinned
+    interpreter that inherits PYTHONPATH or runs with the worktree on sys.path
+    is not pinned at all — it just looks it. Keeping the three together means
+    a caller cannot take the interpreter and forget the rest.
 
     sys.executable is the fallback for the same reason the broker uses it:
-    whatever is first on a PATH usually cannot import ristretto.
+    whatever is first on a PATH usually cannot import ristretto. The fallback
+    keeps the launcher's environment untouched — it *is* the development
+    checkout, so stripping PYTHONPATH there could break the very import it
+    needs.
     """
+    import os as _os
+
     pinned = runtime_python(environ)
     if pinned is not None:
-        return str(pinned), ""
+        return [str(pinned), "-P"], pinned_env(environ), ""
     return (
-        sys.executable,
+        [sys.executable],
+        dict(_os.environ if environ is None else environ),
         "running from the development checkout, not a pinned runtime — "
         "this flow executes whatever is in that tree right now; "
         "run `make install-runtime` to pin it",
