@@ -65,6 +65,11 @@ MAX_APPROVAL_CREDIT = 4 * approvals.DEFAULT_TIMEOUT_SECONDS
 # How often a stage that has already been given time back re-reads the store.
 CREDIT_POLL_SECONDS = 15.0
 
+# Shell's 128+N convention for a process killed by a signal. A stage that dies
+# this way has usually written something, and until now only our own deadline
+# preserved it.
+SIGNAL_EXITS = {143: "SIGTERM", 137: "SIGKILL", 130: "SIGINT"}
+
 
 class FlowError(RuntimeError):
     """A user-facing flow execution error."""
@@ -302,7 +307,20 @@ def role_prompt(
         # it. A security floor that depends on which model is running is not
         # a floor. Provider-independent by construction.
         "Never hardcode secrets: API keys, tokens and passwords belong in environment "
-        "variables or the keychain. Validate input at system boundaries.\n\n"
+        "variables or the keychain. Validate input at system boundaries.\n"
+        # Says what to use, not what to avoid. Told only "do not use cat", a
+        # model escalates: on 2026-09-20 a build stage went cat -> sed/head ->
+        # a Node script, raising sixteen approvals to append one route to one
+        # file, and destroyed 289 lines on the way with `head -n -1` — a GNU
+        # option this machine's BSD head rejects. Every one of those calls was
+        # a shell command, so every one was gated; Write and Edit are already
+        # permitted for files in this worktree and stop for nothing.
+        "Create and change files with the Write and Edit tools, not with shell "
+        "redirection, heredocs, or scripts. Those tools are already permitted here, "
+        "so they do not stop to ask; `cat >`, `sed -i` and `node` are gated shell "
+        "commands, they edit by line position rather than by content, and they are "
+        "not portable — `head -n -1` is a GNU option that fails on macOS. Use Bash "
+        "for running things, not for writing them.\n\n"
         f"Input artifacts:\n{artifact_text}\n\n"
         f"Stage instructions:\n{instructions[role]}"
         + (f"\n\nAdditional configured guidance:\n{stage['prompt']}" if stage.get("prompt") and role != "custom" else "")
@@ -396,23 +414,31 @@ def runner_command(
     if runner == "claude-code":
         command = ["claude", "-p"]
         if provider.get("base_url"):
-            # A locally served model needs --bare or the stage never starts:
-            # Claude Code fetches MCP configuration from api.anthropic.com at
-            # startup with no timeout, which never returns when the base URL
-            # points at Ollama. That is what burned tier1's whole hour — 935
-            # bytes of warnings and no request ever made. Measured here: 46s
-            # with --bare, 4s once the nonessential traffic is off too, versus
-            # never.
+            # A locally served model needs the MCP *discovery* call suppressed
+            # or the stage never starts: Claude Code fetches MCP configuration
+            # from api.anthropic.com with no timeout, which never returns when
+            # the base URL points at Ollama. That is what burned tier1's whole
+            # hour — 935 bytes of warnings and no request ever made.
             #
-            # Scoped to providers with their own base_url, and that scoping is
-            # load-bearing rather than tidiness: under --bare "Anthropic auth
-            # is strictly ANTHROPIC_API_KEY ... OAuth and keychain are never
-            # read", so applying it to a Claude provider would break the OAuth
-            # session this project deliberately runs on.
+            # --strict-mcp-config is what actually fixes it: use only the
+            # config passed on the command line, discover nothing. This used
+            # to pass --bare as well, which also works but is a far bigger
+            # hammer — it disables hooks, plugins, keychain reads and
+            # CLAUDE.md discovery to solve one network call. Measured on
+            # 2026-09-20 against qwen3.6:27b: --strict-mcp-config without
+            # --bare answered in 94s (under load from a concurrent build)
+            # rather than never.
             #
-            # --bare also drops CLAUDE.md auto-discovery, so the repository's
-            # own conventions are handed back explicitly with --add-dir.
-            command += ["--bare", "--add-dir", str(cwd)]
+            # Dropping --bare matters because hooks are the only hard
+            # enforcement boundary a stage has — permission rules are matched,
+            # not enforced. Under --bare, tier1's `build` and `finish` ran
+            # with hooks off, and `finish` is the stage that pushes: the least
+            # supervised stage in the flow was the one with the most reach.
+            # Every model stage in tier3 was in the same position.
+            #
+            # --add-dir stays: it costs nothing, and it keeps the repository
+            # readable when a provider's own settings would not reach it.
+            command += ["--strict-mcp-config", "--add-dir", str(cwd)]
             env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
         mode = "acceptEdits" if stage["mutates"] else "plan"
         command += ["--permission-mode", mode, "--no-session-persistence"]
@@ -628,7 +654,9 @@ def preflight_provider(provider: Mapping[str, Any]) -> str:
     if provider.get("base_url"):
         # Probe the way the stage will actually run, or the probe tests a
         # configuration nothing uses — and would fail on every local provider.
-        command.append("--bare")
+        # This used to add --bare, which the stage no longer passes; the probe
+        # would then have been the only thing running bare, which is the
+        # inverse of its purpose.
         env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
     # A liveness probe needs no tools and no repository. Left unrestricted it
     # was a full agent turn holding whatever the user's allow-list grants —
@@ -1143,6 +1171,21 @@ def run_stage(
             else ""
         )
         LAST_STAGE_REASON[stage["id"]] = timeout_reason(timeout, forgiven, kept)
+        print(f"stage {stage['id']}: {LAST_STAGE_REASON[stage['id']]}", file=sys.stderr)
+    elif code in SIGNAL_EXITS and stage.get("mutates"):
+        # A stage killed by a signal. XARI-118 covered our own deadline and
+        # the runner's SIGTERM handler covers the runner being signalled, but
+        # neither fires when the *stage child* is killed and the runner lives
+        # to process an ordinary non-zero exit. That third case is what the
+        # Stop button produces — `ris-stop.sh` reaps the stage — so the one
+        # path an operator actually reaches by choice was the one that
+        # dropped the work. Found by pressing it: seven files sat uncommitted
+        # in a worktree that `ristretto gc` would have reclaimed.
+        kept = preserve_work(cwd, stage["id"], timeout, base, reason="was stopped")
+        LAST_STAGE_REASON[stage["id"]] = (
+            f"stopped ({SIGNAL_EXITS[code]}) — {kept}" if kept
+            else f"stopped ({SIGNAL_EXITS[code]}) with nothing written"
+        )
         print(f"stage {stage['id']}: {LAST_STAGE_REASON[stage['id']]}", file=sys.stderr)
     if stage["provider"] != "builtin":
         provider = stage["provider_config"]
