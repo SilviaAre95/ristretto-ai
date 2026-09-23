@@ -3,7 +3,7 @@ id: event-spine
 title: Event Spine
 status: in-progress  # proposed | in-progress | implemented | deprecated
 created_at: 2026-08-25
-last_modified: 2026-08-25
+last_modified: 2026-09-23
 owner: project
 depends_on: [custom-model-flows, autonomous-coding]
 acceptance_criteria:
@@ -13,7 +13,7 @@ acceptance_criteria:
   - A repository can be proven loop-capable before a task is dispatched
 non_goals:
   - NOT writing into Hermes' kanban schema
-  - NOT a dashboard or any UI in V1
+  - NOT owning a UI
   - NOT failing a build when the event store is unavailable
 ---
 
@@ -36,8 +36,7 @@ for the deterministic gate, `pr.opened` when a pull request URL is reported,
 and `run.ended` with an outcome. `stage.failed` carries the reason the runner
 already computed — "model reported failure", "pr stage committed nothing on
 top of origin/main" — rather than a bare exit code. `run-loop.sh` emits the
-same run-level events for the classic path, including the Claude-unavailable
-fallback.
+same run-level events for the classic path.
 
 Emitting is best effort operationally and strict programmatically: an
 unreachable or corrupt store is reported on stderr and swallowed, while an
@@ -90,7 +89,9 @@ was not run, so the durable record does not claim more than was established.
 
 - NOT writing into Hermes' kanban schema: Ristretto does not version the Hermes
   engine, and writing into another project's private tables breaks on upgrade.
-- NOT a UI in V1: the log is read with `ristretto events` and `sqlite3`.
+- NOT owning a UI: the log is read with `ristretto events` and `sqlite3`. The
+  dashboard is a consumer of this log, specified separately in `fleet-view`;
+  the spine gains nothing when a surface is added or removed.
 - NOT failing a build on telemetry error: an unwritable store degrades to a gap
   in the timeline.
 
