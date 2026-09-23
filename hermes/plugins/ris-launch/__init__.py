@@ -10,8 +10,8 @@ fixed shape and shells the CLI, which owns every guard — preflight, the busy
 check, the branch derivation. A launch is deterministic; only *deciding* what
 to launch wants an agent, and that is a later, larger piece.
 
-`!ris-start ABC-42` — default flow, attended. `!ris-start ABC-42 tier1
-unattended` — a full run nobody has to watch.
+`!ris-start ABC-42` — default flow, attended. `!ris-start ABC-42 short
+unattended` — a short run nobody has to watch.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ TIMEOUT_SECONDS = 120
 ISSUE_KEY = re.compile(r"^[A-Za-z][A-Za-z0-9]{1,9}-\d{1,6}$")
 # Only the flows Nemo actually defines. Anything else is a typo, and the CLI
 # would reject it anyway — catching it here gives a clearer message.
-FLOWS = {"classic", "tier0", "tier1", "tier2", "tier3"}
+FLOWS = {"classic", "full", "short"}
 
 
 def _ristretto() -> str | None:
@@ -48,10 +48,10 @@ def start(raw_args: str = "") -> str:
 
     tokens = (raw_args or "").split()
     if not tokens:
-        return "Which issue? e.g. !ris-start ABC-42 tier1 unattended"
+        return "Which issue? e.g. !ris-start ABC-42 short unattended"
 
     issue = None
-    flow = "tier1"
+    flow = ""  # empty means "the configured default"; the CLI resolves it
     unattended = False
     project = None
     for tok in tokens:
@@ -72,10 +72,14 @@ def start(raw_args: str = "") -> str:
     if project is None:
         return (
             f"I can't tell which project {issue} is in from Slack. "
-            f"Add it: !ris-start {issue} {flow} project:<name>"
+            f"Add it: !ris-start {issue} {flow or 'short'} project:<name>"
         )
 
-    args = [binary, "launch", project, issue, "--flow", flow, "--actor", "slack"]
+    args = [binary, "launch", project, issue, "--actor", "slack"]
+    # Only when one was typed. Omitted, the CLI uses the configured default,
+    # so there is no second default living here to drift from it.
+    if flow:
+        args[4:4] = ["--flow", flow]
     if unattended:
         args.append("--unattended")
     try:

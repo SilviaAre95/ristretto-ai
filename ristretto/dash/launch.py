@@ -59,8 +59,8 @@ WORKTREE_DIR = ".worktrees"
 CLAIM_TTL_SECONDS = 14400
 SKILL = "loop-runner"
 
-# Long enough for a slow tier1 build (the one measured run spent 51 minutes
-# in a single stage), short enough that a wedged run does not hold a worktree
+# Long enough for a slow build (the one measured run spent 51 minutes in a
+# single stage), short enough that a wedged run does not hold a worktree
 # overnight.
 MAX_RUNTIME_SECONDS = 5400
 # One retry. A loop that failed for a real reason fails the same way twice,
@@ -438,19 +438,26 @@ def active_runs() -> list[str]:
 def launch(
     project: str,
     issue: str,
-    flow: str = "tier1",
+    flow: str = "",
     *,
     actor: str = "dashboard",
     allow_busy: bool = False,
     unattended: bool = False,
     config_path: Path | None = None,
 ) -> Outcome:
-    """Create the task and dispatch it. Returns what happened, plainly."""
+    """Create the task and dispatch it. Returns what happened, plainly.
+
+    An empty flow means "whatever is configured". Every caller — the CLI, the
+    Slack plugin, the assistant, the launch form — used to carry its own
+    default, which is how they came to disagree: the form offered tier1 while
+    ristretto.yaml said classic, and nothing reported the difference.
+    """
     try:
         config, _ = load_config(config_path)
     except ConfigError as exc:
         return Outcome(False, f"configuration is not loadable: {exc}")
 
+    flow = flow.strip() or str(config.get("default_flow", ""))
     repo, error = validate(config, project, issue, flow)
     if repo is None:
         return Outcome(False, error)
@@ -574,7 +581,7 @@ def options(config_path: Path | None = None) -> dict[str, Any]:
     try:
         config, _ = load_config(config_path)
     except ConfigError:
-        return {"projects": [], "flows": [], "default_flow": "tier1"}
+        return {"projects": [], "flows": [], "default_flow": "full"}
     flows = config.get("flows") or {}
     return {
         "projects": sorted((config.get("repositories") or {})),
@@ -582,8 +589,9 @@ def options(config_path: Path | None = None) -> dict[str, Any]:
             {"name": name, "description": str(value.get("description", ""))}
             for name, value in flows.items()
         ],
-        # tier1 is the flow with a completed end-to-end run behind it, so it
-        # is the one to offer by default rather than whatever is configured
-        # as the global default.
-        "default_flow": "tier1" if "tier1" in flows else str(config.get("default_flow", "")),
+        # The configured default, not a hardcoded preference. This used to
+        # name tier1 directly, on the reasoning that it was the flow with a
+        # completed end-to-end run behind it — which meant the form and
+        # ristretto.yaml could disagree and nothing would say so.
+        "default_flow": str(config.get("default_flow", "")),
     }

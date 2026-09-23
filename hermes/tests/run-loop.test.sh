@@ -52,13 +52,14 @@ rm -f "$WT_M/.cc-ris-session"
 "$SCRIPT" t-model2 PROJ-03 'opus; rm -rf /' >/dev/null 2>&1
 t "junk model dropped (allowlist)"  "! grep -q -- '--model' '$FAKEBIN/argv'"
 
-# Local tier: routes to Ollama's Anthropic endpoint with the local coder model
+# The `local` tier is gone. A queued task still carrying it must drop to the
+# default rather than route a build to a local coder.
 "$SCRIPT" t-local PROJ-04 local >/dev/null 2>&1
-t "local tier: ollama model passed" "grep -q -- '--model qwen3.6:27b-coding-nvfp4' '$FAKEBIN/argv'"
-t "local tier: base_url exported"   "grep -q 'http://localhost:11434' '$FAKEBIN/baseurl'"
-t "local tier: no session flags"    "! grep -qE -- '--session-id|--resume' '$FAKEBIN/argv'"
-RIS_LOCAL_LOOP_MODEL="qwen3-coder-next:q4_K_M" "$SCRIPT" t-local2 PROJ-05 local >/dev/null 2>&1
-t "local tier: model override env"  "grep -q -- '--model qwen3-coder-next:q4_K_M' '$FAKEBIN/argv'"
+t "local tier: dropped, not honoured" "! grep -q -- '--model' '$FAKEBIN/argv'"
+t "local tier: no ollama base_url"    "grep -q '^none$' '$FAKEBIN/baseurl'"
+t "local tier: still a cloud session" "grep -qE -- '--session-id|--resume' '$FAKEBIN/argv'"
+RIS_LOCAL_LOOP_MODEL="qwen3-coder-next:q4_K_M" "$SCRIPT" t-local2 PROJ-05 >/dev/null 2>&1
+t "loop model env is inert"           "! grep -q -- '--model' '$FAKEBIN/argv'"
 
 # Resume-first cloud path: reuse the worktree session and clear it on success.
 cat > "$FAKEBIN/claude" <<EOF
@@ -108,7 +109,9 @@ cd "$WT_G"
 "$SCRIPT" t-ignore PROJ-11 >/dev/null 2>&1
 t "session file is git-excluded"     "git check-ignore -q --no-index .cc-ris-session"
 
-# Auto-fallback: claude unavailable (auth/limit) -> re-run once on the local model
+# Claude unavailable (auth/limit): the run fails. It used to re-run once on a
+# local coder; that fallback was removed 2026-09-23 and its absence is pinned
+# here, because a silent local build is exactly what nobody would notice.
 cat > "$FAKEBIN/claude" <<EOF
 #!/usr/bin/env bash
 echo "\$@" > "$FAKEBIN/argv"
@@ -118,9 +121,10 @@ exit 0
 EOF
 chmod +x "$FAKEBIN/claude"
 "$SCRIPT" t-fb PROJ-06 >/dev/null 2>"$FB_STDERR"; RC=$?
-t "fallback: local run succeeds"    "[ $RC -eq 0 ]"
-t "fallback: local model used"      "grep -q -- '--model qwen3.6:27b-coding-nvfp4' '$FAKEBIN/argv'"
-t "fallback: announced on stderr"   "grep -q 'falling back to local model' '$FB_STDERR'"
+t "unavailable: fails, no fallback" "[ $RC -ne 0 ]"
+t "unavailable: never goes local"   "grep -q '^none$' '$FAKEBIN/baseurl'"
+t "unavailable: no local model"     "! grep -q -- '--model qwen3' '$FAKEBIN/argv'"
+t "unavailable: announced on stderr" "grep -q 'claude unavailable' '$FB_STDERR'"
 
 # Non-auth failure must NOT fall back
 cat > "$FAKEBIN/claude" <<EOF
@@ -133,7 +137,7 @@ chmod +x "$FAKEBIN/claude"
 t "no fallback on real failure"     "[ $RC -eq 3 ]"
 t "no local model on real failure"  "! grep -q -- '--model' '$FAKEBIN/argv'"
 
-# RIS_LOCAL_FALLBACK=0 disables the fallback even on auth failures
+# The old opt-out is inert: an auth failure fails through either way.
 cat > "$FAKEBIN/claude" <<EOF
 #!/usr/bin/env bash
 echo "\$@" > "$FAKEBIN/argv"
@@ -141,8 +145,8 @@ echo "OAuth session expired"; exit 1
 EOF
 chmod +x "$FAKEBIN/claude"
 RIS_LOCAL_FALLBACK=0 "$SCRIPT" t-fboff PROJ-08 >/dev/null 2>&1; RC=$?
-t "fallback disabled: fails through" "[ $RC -eq 1 ]"
-t "fallback disabled: stays cloud"   "! grep -q -- '--model' '$FAKEBIN/argv'"
+t "auth failure: fails through"      "[ $RC -eq 1 ]"
+t "auth failure: stays cloud"        "! grep -q -- '--model' '$FAKEBIN/argv'"
 
 # Non-classic flow: dispatches the validated multi-stage runner and does not
 # create legacy Claude session state.
@@ -217,10 +221,10 @@ t "PATH is repaired before any tool is invoked" \
   "[ -n '$PATH_LINE' ] && [ -n '$REAP_LINE' ] && [ '$PATH_LINE' -lt '$REAP_LINE' ]"
 
 
-RIS_PYTHON="$FAKEBIN/python3" "$SCRIPT" t-flow PROJ-12 --flow tier1 >/dev/null 2>&1; RC=$?
+RIS_PYTHON="$FAKEBIN/python3" "$SCRIPT" t-flow PROJ-12 --flow full >/dev/null 2>&1; RC=$?
 t "custom flow: succeeds"             "[ $RC -eq 0 ]"
 t "custom flow: runner module"        "grep -q -- '-m ristretto.runner' '$FAKEBIN/python_argv'"
-t "custom flow: passes selection"     "grep -q -- '--flow tier1' '$FAKEBIN/python_argv'"
+t "custom flow: passes selection"     "grep -q -- '--flow full' '$FAKEBIN/python_argv'"
 t "custom flow: passes task and issue" "grep -q -- '--task-id t-flow --issue PROJ-12' '$FAKEBIN/python_argv'"
 t "custom flow: repo on PYTHONPATH"    "grep -Fq '$REPO_ROOT' '$FAKEBIN/pythonpath'"
 t "custom flow: no session state"     "[ ! -e '$WT_FLOW/.cc-ris-session' ]"

@@ -48,7 +48,7 @@ class Heard(NamedTuple):
 # to carry a list of someone's private projects.
 VOCABULARY = (
     "Nemo", "Ris", "Ristretto", "Hermes", "Linear", "Slack",
-    "tier0", "tier1", "tier2", "tier3", "kanban", "worktree",
+    "full", "short", "classic", "kanban", "worktree",
     "pull request", "approval", "the fleet", "the dashboard",
 )
 

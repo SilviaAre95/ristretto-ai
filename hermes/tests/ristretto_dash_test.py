@@ -15,7 +15,7 @@ from pathlib import Path
 from unittest import mock
 
 from ristretto import approvals, events
-from ristretto.dash import chat, control, data, launch, serve
+from ristretto.dash import control, data, launch, serve
 from ristretto.dash.serve import BindRefused, resolve_host
 
 try:
@@ -105,7 +105,7 @@ class RunTests(unittest.TestCase):
         # search, so a monitor watching for a runner reported itself as one.
         listing = (
             "/bin/zsh -c pgrep -f 'ristretto.runner --task-id t_faker'\n"
-            "/x/.venv/bin/python3 -m ristretto.runner --task-id t_real --issue A --flow tier1\n"
+            "/x/.venv/bin/python3 -m ristretto.runner --task-id t_real --issue A --flow full\n"
         )
         with mock.patch.object(
             data.subprocess, "run",
@@ -208,7 +208,7 @@ class RouteTests(unittest.TestCase):
     def test_the_post_surface_is_exactly_what_we_intend(self) -> None:
         # Every POST here is a deliberate decision, so the set is pinned:
         #   stop/unblock change running work,
-        #   chat spends a model turn but changes nothing and has no acting tools,
+        #   chat spends a model turn on the assistant loop but changes nothing,
         #   launch spends tokens and writes to a branch.
         # Launch was deliberately absent until it had its own design: its own
         # page rather than a fleet-view button, and four guards (preflight,
@@ -299,57 +299,18 @@ class CrossSiteTests(unittest.TestCase):
 
     def test_chat_is_same_origin_too(self) -> None:
         # It spends a model turn, and an endpoint anyone can drive is one
-        # anyone can drain.
-        with mock.patch.object(chat, "ask") as asked:
+        # anyone can drain. Patched on the assistant loop, which is what the
+        # route calls: this used to patch a dashboard-local chat module that
+        # the route had already stopped using, so it refused to answer a
+        # question nobody was asking.
+        from ristretto.assistant import loop
+
+        with mock.patch.object(loop, "ask") as asked:
             refused = self.client.post(
                 "/chat", json={"message": "hi"}, headers={"sec-fetch-site": "cross-site"}
             )
             self.assertEqual(refused.status_code, 403)
             asked.assert_not_called()
-
-
-class ChatTests(unittest.TestCase):
-    """Ris in the dashboard is Ris with its dangerous tools taken away."""
-
-    def test_toolset_excludes_everything_that_can_act(self) -> None:
-        # Unrestricted, asked to run a shell command, Ris runs it and reports
-        # the output. On a page with no login that is remote code execution.
-        forbidden = {"terminal", "file", "code_execution", "browser", "delegation", "cronjob"}
-        self.assertFalse(forbidden & set(chat.TOOLSETS.split(",")), chat.TOOLSETS)
-
-    def test_the_restriction_reaches_the_command_line(self) -> None:
-        completed = subprocess.CompletedProcess([], 0, "answer", "")
-        with mock.patch.object(chat.subprocess, "run", return_value=completed) as spawned, \
-             mock.patch.object(chat, "fleet_context", return_value="none"):
-            chat.ask("hello")
-        argv = spawned.call_args.args[0]
-        self.assertIn("-t", argv)
-        self.assertEqual(argv[argv.index("-t") + 1], chat.TOOLSETS)
-
-    def test_empty_and_oversized_questions_never_spawn(self) -> None:
-        with mock.patch.object(chat.subprocess, "run") as spawned:
-            self.assertFalse(chat.ask("   ").ok)
-            self.assertFalse(chat.ask("x" * (chat.MAX_MESSAGE + 1)).ok)
-            spawned.assert_not_called()
-
-    def test_a_timeout_is_reported_not_raised(self) -> None:
-        with mock.patch.object(chat, "fleet_context", return_value="none"), \
-             mock.patch.object(
-                 chat.subprocess, "run",
-                 side_effect=subprocess.TimeoutExpired("hermes", 180)):
-            reply = chat.ask("hello")
-        self.assertFalse(reply.ok)
-        self.assertIn("did not answer", reply.text)
-
-    def test_the_fleet_is_handed_over_not_looked_up(self) -> None:
-        # Context is injected precisely so Ris needs no tools to fetch it.
-        completed = subprocess.CompletedProcess([], 0, "answer", "")
-        with mock.patch.object(chat, "fleet_context", return_value="RUN-A is stalled"), \
-             mock.patch.object(chat.subprocess, "run", return_value=completed) as spawned:
-            chat.ask("what is stalled?")
-        prompt = spawned.call_args.args[0][2]
-        self.assertIn("RUN-A is stalled", prompt)
-        self.assertIn("what is stalled?", prompt)
 
 
 class ControlActionTests(unittest.TestCase):
@@ -575,7 +536,7 @@ class LaunchCoreTests(unittest.TestCase):
             "repositories": {"Kaffecard": str(self.repo)},
             "flows": {
                 "classic": {"description": "existing loop"},
-                "tier1": {"description": "local builds, Claude judges"},
+                "full": {"description": "plan, build, review, repair, verify, PR"},
             },
         }
         patcher = mock.patch.object(
@@ -585,16 +546,16 @@ class LaunchCoreTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def test_a_typo_is_refused_before_anything_is_spent(self) -> None:
-        repo, error = launch.validate(self.config, "Kaffecard", "kaffecard-42", "tier1")
+        repo, error = launch.validate(self.config, "Kaffecard", "kaffecard-42", "full")
         self.assertIsNone(repo)
         self.assertIn("not an issue key", error)
 
     def test_an_unknown_flow_names_the_ones_that_exist(self) -> None:
         _, error = launch.validate(self.config, "Kaffecard", "XARI-42", "tier9")
-        self.assertIn("tier1", error)
+        self.assertIn("full", error)
 
     def test_an_unconfigured_project_is_refused(self) -> None:
-        repo, error = launch.validate(self.config, "Nonexistent", "XARI-42", "tier1")
+        repo, error = launch.validate(self.config, "Nonexistent", "XARI-42", "full")
         self.assertIsNone(repo)
         self.assertTrue(error)
 
@@ -605,13 +566,13 @@ class LaunchCoreTests(unittest.TestCase):
 
     def test_the_idempotency_key_is_stable_within_a_day(self) -> None:
         # A tap that looks like nothing happened gets tapped again.
-        a = launch.idempotency_key("XARI-42", "tier1", now=1788346615)
-        b = launch.idempotency_key("XARI-42", "tier1", now=1788346615 + 3600)
+        a = launch.idempotency_key("XARI-42", "full", now=1788346615)
+        b = launch.idempotency_key("XARI-42", "full", now=1788346615 + 3600)
         self.assertEqual(a, b)
 
     def test_a_different_day_may_relaunch(self) -> None:
-        a = launch.idempotency_key("XARI-42", "tier1", now=1788346615)
-        b = launch.idempotency_key("XARI-42", "tier1", now=1788346615 + 86400 * 2)
+        a = launch.idempotency_key("XARI-42", "full", now=1788346615)
+        b = launch.idempotency_key("XARI-42", "full", now=1788346615 + 86400 * 2)
         self.assertNotEqual(a, b)
 
     def test_preflight_failure_refuses_the_launch(self) -> None:
@@ -620,7 +581,7 @@ class LaunchCoreTests(unittest.TestCase):
         with mock.patch.object(launch, "blocking_findings", return_value=["no .cc-verify"]), \
              mock.patch.object(launch, "pin_branch_to_base", return_value=""), \
              mock.patch.object(launch.subprocess, "run") as spawned:
-            outcome = launch.launch("Kaffecard", "XARI-42", "tier1")
+            outcome = launch.launch("Kaffecard", "XARI-42", "full")
         self.assertFalse(outcome.ok)
         self.assertIn("cannot run a loop", outcome.message)
         spawned.assert_not_called()
@@ -630,7 +591,7 @@ class LaunchCoreTests(unittest.TestCase):
              mock.patch.object(launch, "active_runs", return_value=["t_aaaaaa"]), \
              mock.patch.object(launch, "pin_branch_to_base", return_value=""), \
              mock.patch.object(launch.subprocess, "run") as spawned:
-            outcome = launch.launch("Kaffecard", "XARI-42", "tier1")
+            outcome = launch.launch("Kaffecard", "XARI-42", "full")
         self.assertFalse(outcome.ok)
         self.assertIn("already active", outcome.message)
         spawned.assert_not_called()
@@ -642,7 +603,7 @@ class LaunchCoreTests(unittest.TestCase):
              mock.patch.object(launch, "pin_branch_to_base", return_value=""), \
              mock.patch.object(launch.subprocess, "run") as spawned:
             spawned.return_value = subprocess.CompletedProcess([], 0, "created t_b1c2d3e4", "")
-            outcome = launch.launch("Kaffecard", "XARI-42", "tier1", allow_busy=True)
+            outcome = launch.launch("Kaffecard", "XARI-42", "full", allow_busy=True)
         self.assertTrue(outcome.ok)
         self.assertEqual(outcome.task_id, "t_b1c2d3e4")
 
@@ -653,10 +614,10 @@ class LaunchCoreTests(unittest.TestCase):
              mock.patch.object(launch, "pin_branch_to_base", return_value=""), \
              mock.patch.object(launch.subprocess, "run") as spawned:
             spawned.return_value = subprocess.CompletedProcess([], 0, "created t_b1c2d3e4", "")
-            launch.launch("Kaffecard", "XARI-42", "tier1")
+            launch.launch("Kaffecard", "XARI-42", "full")
         argv = spawned.call_args_list[0].args[0]
         body = argv[argv.index("--body") + 1]
-        for line in ("issue: XARI-42", "branch: xariprojects/xari-42", "flow: tier1"):
+        for line in ("issue: XARI-42", "branch: xariprojects/xari-42", "flow: full"):
             self.assertIn(line, body)
         self.assertIn("--idempotency-key", argv)
         self.assertEqual(argv[argv.index("--skill") + 1], "loop-runner")
@@ -673,7 +634,7 @@ class LaunchCoreTests(unittest.TestCase):
              mock.patch.object(launch, "pin_branch_to_base", return_value=""), \
              mock.patch.object(launch.subprocess, "run") as spawned:
             spawned.return_value = subprocess.CompletedProcess([], 1, "", "duplicate key")
-            outcome = launch.launch("Kaffecard", "XARI-42", "tier1")
+            outcome = launch.launch("Kaffecard", "XARI-42", "full")
         self.assertFalse(outcome.ok)
         self.assertIn("duplicate key", outcome.message)
 
@@ -690,7 +651,7 @@ class LaunchCoreTests(unittest.TestCase):
              mock.patch.object(launch, "start_flow", return_value="could not claim the task"), \
              mock.patch.object(launch.subprocess, "run") as spawned:
             spawned.return_value = subprocess.CompletedProcess([], 0, "created t_b1c2d3e4", "")
-            outcome = launch.launch("Kaffecard", "XARI-42", "tier1")
+            outcome = launch.launch("Kaffecard", "XARI-42", "full")
         self.assertFalse(outcome.ok)
         self.assertIn("did not start", outcome.message)
         self.assertIn("could not claim", outcome.message)
@@ -706,7 +667,7 @@ class LaunchCoreTests(unittest.TestCase):
              mock.patch.object(launch, "start_flow", return_value="") as started, \
              mock.patch.object(launch.subprocess, "run") as spawned:
             spawned.return_value = subprocess.CompletedProcess([], 0, "created t_b1c2d3e4", "")
-            outcome = launch.launch("Kaffecard", "XARI-42", "tier1")
+            outcome = launch.launch("Kaffecard", "XARI-42", "full")
 
         self.assertTrue(outcome.ok)
         started.assert_called_once()
@@ -728,7 +689,7 @@ class LaunchRouteTests(unittest.TestCase):
         # a test that needs one passes locally and fails in CI.
         with mock.patch.object(launch, "active_runs", return_value=[]):
             page = self.client.get("/launch").text
-        self.assertIn("tier1", page)
+        self.assertIn('<option value="full"', page)
         self.assertIn('action="/launch"', page)
         self.assertIn("Start a run", page)
 
@@ -737,7 +698,7 @@ class LaunchRouteTests(unittest.TestCase):
         with mock.patch.object(launch, "launch") as started:
             response = self.client.post(
                 "/launch",
-                data={"project": "Kaffecard", "issue": "XARI-42", "flow": "tier1"},
+                data={"project": "Kaffecard", "issue": "XARI-42", "flow": "full"},
                 headers={"sec-fetch-site": "cross-site"},
                 follow_redirects=False,
             )
@@ -750,7 +711,7 @@ class LaunchRouteTests(unittest.TestCase):
         ):
             response = self.client.post(
                 "/launch",
-                data={"project": "Kaffecard", "issue": "XARI-42", "flow": "tier1"},
+                data={"project": "Kaffecard", "issue": "XARI-42", "flow": "full"},
                 headers={"sec-fetch-site": "same-origin"},
                 follow_redirects=False,
             )
@@ -760,11 +721,11 @@ class LaunchRouteTests(unittest.TestCase):
 
     def test_a_launch_lands_on_the_task_it_started(self) -> None:
         with mock.patch.object(
-            launch, "launch", return_value=launch.Outcome(True, "XARI-42 started on tier1", "t_b1c2d3e4")
+            launch, "launch", return_value=launch.Outcome(True, "XARI-42 started on full", "t_b1c2d3e4")
         ):
             response = self.client.post(
                 "/launch",
-                data={"project": "Kaffecard", "issue": "XARI-42", "flow": "tier1"},
+                data={"project": "Kaffecard", "issue": "XARI-42", "flow": "full"},
                 headers={"sec-fetch-site": "same-origin"},
                 follow_redirects=False,
             )
@@ -776,7 +737,7 @@ class LaunchRouteTests(unittest.TestCase):
         with mock.patch.object(launch, "launch", return_value=launch.Outcome(True, "ok", "t_a1")) as started:
             self.client.post(
                 "/launch",
-                data={"project": "Kaffecard", "issue": "xari-42", "flow": "tier1"},
+                data={"project": "Kaffecard", "issue": "xari-42", "flow": "full"},
                 headers={"sec-fetch-site": "same-origin"},
                 follow_redirects=False,
             )
@@ -846,7 +807,7 @@ class AttendedTests(unittest.TestCase):
         from ristretto import runner
         with mock.patch.object(runner.subprocess, "run") as shown:
             shown.return_value = subprocess.CompletedProcess(
-                [], 0, "Body:\nissue: XARI-3\nflow: tier0\nunattended: true\n", ""
+                [], 0, "Body:\nissue: XARI-3\nflow: full\nunattended: true\n", ""
             )
             self.assertFalse(runner.attended("t_a1b2c3d4"))
 
@@ -854,7 +815,7 @@ class AttendedTests(unittest.TestCase):
         from ristretto import runner
         with mock.patch.object(runner.subprocess, "run") as shown:
             shown.return_value = subprocess.CompletedProcess(
-                [], 0, "Body:\nissue: XARI-3\nflow: tier0\n", ""
+                [], 0, "Body:\nissue: XARI-3\nflow: full\n", ""
             )
             self.assertTrue(runner.attended("t_a1b2c3d4"))
 
@@ -875,12 +836,12 @@ class AttendedTests(unittest.TestCase):
              mock.patch.object(launch, "active_runs", return_value=[]), \
              mock.patch.object(launch, "load_config", return_value=(
                  {"base_branch": "main", "repositories": {"P": "/tmp"},
-                  "flows": {"tier1": {}}}, Path("f.yaml"))), \
+                  "flows": {"full": {}}}, Path("f.yaml"))), \
              mock.patch.object(events, "emit"), \
              mock.patch.object(launch, "pin_branch_to_base", return_value=""), \
              mock.patch.object(launch.subprocess, "run") as spawned:
             spawned.return_value = subprocess.CompletedProcess([], 0, "created t_b1c2d3e4", "")
-            launch.launch("P", "XARI-42", "tier1", unattended=True)
+            launch.launch("P", "XARI-42", "full", unattended=True)
         argv = spawned.call_args_list[0].args[0]
         self.assertIn("unattended: true", argv[argv.index("--body") + 1])
 
@@ -949,7 +910,8 @@ class VocabularyTests(unittest.TestCase):
 
     def test_it_knows_the_flows_it_will_be_asked_for(self) -> None:
         from ristretto import voice
-        self.assertIn("tier1", voice.prompt())
+        for flow in ("full", "short", "classic"):
+            self.assertIn(flow, voice.prompt(), flow)
 
     def test_no_private_names_are_written_down_here(self) -> None:
         # Projects and the issue prefix are read from the user's config at

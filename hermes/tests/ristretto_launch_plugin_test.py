@@ -29,17 +29,27 @@ class ParseTest(unittest.TestCase):
         return self.run.call_args.args[0]
 
     def test_a_full_command_maps_to_the_cli(self) -> None:
-        plugin.start("XARI-42 tier1 unattended project:Kaffecard")
+        plugin.start("XARI-42 short unattended project:Kaffecard")
         self.assertEqual(
             self.argv()[1:],
-            ["launch", "Kaffecard", "XARI-42", "--flow", "tier1", "--actor", "slack", "--unattended"],
+            ["launch", "Kaffecard", "XARI-42", "--flow", "short", "--actor", "slack", "--unattended"],
         )
 
-    def test_the_default_flow_is_tier1_and_attended(self) -> None:
+    def test_no_flow_defers_to_the_configured_default(self) -> None:
+        # The plugin carries no default of its own. Omitting --flow is what
+        # keeps the CLI, the form and ristretto.yaml from disagreeing.
         plugin.start("XARI-7 project:Krome")
         argv = self.argv()
-        self.assertIn("tier1", argv)
+        self.assertNotIn("--flow", argv)
         self.assertNotIn("--unattended", argv)
+
+    def test_a_retired_tier_is_not_accepted_as_a_flow(self) -> None:
+        # A queued task, or a phone with muscle memory, can still say tier1.
+        # It must not reach the CLI as a flow selection.
+        plugin.start("XARI-8 tier1 project:Krome")
+        argv = self.argv()
+        self.assertNotIn("tier1", argv)
+        self.assertNotIn("--flow", argv)
 
     def test_a_lowercase_key_is_upcased(self) -> None:
         plugin.start("xari-9 project:Kaffecard")
@@ -51,10 +61,10 @@ class ParseTest(unittest.TestCase):
 
     def test_chat_client_noise_after_the_command_is_ignored(self) -> None:
         # Slack appends "*Sent using* Claude"; a stray word must not block a launch.
-        plugin.start("XARI-42 tier2 project:Kaffecard *Sent using* Claude")
+        plugin.start("XARI-42 short project:Kaffecard *Sent using* Claude")
         argv = self.argv()
         self.assertIn("XARI-42", argv)
-        self.assertIn("tier2", argv)
+        self.assertIn("short", argv)
 
     def test_a_missing_issue_is_explained_not_launched(self) -> None:
         plugin.start("do the thing")

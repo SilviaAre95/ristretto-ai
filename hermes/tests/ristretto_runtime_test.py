@@ -123,7 +123,7 @@ class LaunchUsesTheRuntimeTest(unittest.TestCase):
                                return_value=(prefix, env or {"PATH": "/usr/bin"}, warning)), \
              mock.patch.object(launch.subprocess, "run", side_effect=fake_run), \
              mock.patch.object(launch.subprocess, "Popen", side_effect=fake_popen):
-            launch.start_flow(str(self.repo), "feat/x", "t_abc", "XARI-1", "tier1")
+            launch.start_flow(str(self.repo), "feat/x", "t_abc", "XARI-1", "full")
         return spawned
 
     def test_the_flow_runs_under_the_pinned_interpreter(self) -> None:

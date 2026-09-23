@@ -58,29 +58,70 @@ class ConfigTests(unittest.TestCase):
     def test_repository_config_is_valid(self) -> None:
         validate_config(self.config)
 
+    def _with_local_flow(self) -> dict:
+        """A custom flow naming the local brain.
+
+        No shipped flow routes a stage to a local provider any more, but the
+        machinery is still reachable from a user's own config, so it is still
+        tested — against a fixture rather than against whatever the shipped
+        flows happen to contain.
+        """
+        config = copy.deepcopy(self.config)
+        config["flows"]["local-custom"] = {
+            "description": "A user flow naming the local brain.",
+            "stages": [
+                {
+                    "id": "plan",
+                    "role": "plan",
+                    "provider": "local-brain",
+                    "mutates": False,
+                    "output": "plan.md",
+                }
+            ],
+        }
+        return config
+
     def test_environment_model_override(self) -> None:
         flow = resolved_flow(
-            self.config,
-            "tier1",
-            {"RIS_LOCAL_LOOP_MODEL": "local-test-model"},
+            self._with_local_flow(),
+            "local-custom",
+            {"RIS_LOCAL_BRAIN_MODEL": "local-test-model"},
         )
-        self.assertEqual(flow["stages"][1]["provider_config"]["model"], "local-test-model")
+        self.assertEqual(flow["stages"][0]["provider_config"]["model"], "local-test-model")
+
+    def test_no_shipped_flow_gives_a_local_provider_a_mutating_stage(self) -> None:
+        # The premise that a local model writes code was retired 2026-09-23.
+        # Config validation cannot express "not local", so this is where it
+        # is enforced: a flow added later that routes a build to a local
+        # provider fails here rather than in production at 3am.
+        local = {
+            name for name, provider in self.config["providers"].items()
+            if provider.get("base_url")
+        }
+        self.assertIn("local-brain", local, "the fixture assumes a local provider exists")
+        for flow_name, flow in self.config["flows"].items():
+            for stage in flow.get("stages") or []:
+                if stage.get("mutates"):
+                    self.assertNotIn(
+                        stage["provider"], local,
+                        f"{flow_name}.{stage['id']} routes a mutating stage to a local model",
+                    )
 
     def test_review_is_forced_read_only(self) -> None:
         config = copy.deepcopy(self.config)
-        config["flows"]["tier1"]["stages"][2]["mutates"] = True
+        config["flows"]["full"]["stages"][2]["mutates"] = True
         with self.assertRaisesRegex(ConfigError, "review stages must be read-only"):
             validate_config(config)
 
     def test_artifacts_must_come_from_prior_stage(self) -> None:
         config = copy.deepcopy(self.config)
-        config["flows"]["tier1"]["stages"][0]["inputs"] = ["future.md"]
+        config["flows"]["full"]["stages"][0]["inputs"] = ["future.md"]
         with self.assertRaisesRegex(ConfigError, "unavailable artifact"):
             validate_config(config)
 
     def test_pr_must_be_last(self) -> None:
         config = copy.deepcopy(self.config)
-        stages = config["flows"]["tier1"]["stages"]
+        stages = config["flows"]["full"]["stages"]
         stages.append(
             {
                 "id": "after-pr",
@@ -123,12 +164,15 @@ class ConfigTests(unittest.TestCase):
 
     def test_unknown_provider_is_rejected(self) -> None:
         config = copy.deepcopy(self.config)
-        config["flows"]["tier1"]["stages"][0]["provider"] = "missing"
+        config["flows"]["full"]["stages"][0]["provider"] = "missing"
         with self.assertRaisesRegex(ConfigError, "unknown provider"):
             validate_config(config)
 
     def test_tokens_are_redacted_from_flow_output(self) -> None:
-        flow = resolved_flow(self.config, "tier1")
+        # Resolved against the local-provider fixture: the ollama placeholder
+        # is the only auth_token in the shipped config, and no shipped flow
+        # names a local provider any more.
+        flow = resolved_flow(self._with_local_flow(), "local-custom")
         rendered = flow_json(flow)
         self.assertNotIn('"auth_token": "ollama"', rendered)
         self.assertIn('"auth_token": "[redacted]"', rendered)
@@ -258,7 +302,7 @@ class ContextLengthTests(unittest.TestCase):
         return env
 
     def test_declared_window_is_exported(self) -> None:
-        env = self._command_env("local-coder")
+        env = self._command_env("local-brain")
         self.assertEqual(env.get("CLAUDE_CODE_MAX_CONTEXT_TOKENS"), "262144")
 
     def test_cloud_provider_gets_no_override(self) -> None:
@@ -269,7 +313,7 @@ class ContextLengthTests(unittest.TestCase):
     def test_context_length_must_be_a_positive_integer(self) -> None:
         for bad in ("262144", 0, -1, True, 1.5):
             config = copy.deepcopy(self.config)
-            config["providers"]["local-coder"]["context_length"] = bad
+            config["providers"]["local-brain"]["context_length"] = bad
             with self.assertRaisesRegex(ConfigError, "context_length", msg=f"accepted {bad!r}"):
                 validate_config(config)
 
@@ -393,7 +437,7 @@ class HeartbeatTest(unittest.TestCase):
 class StageOutcomeTests(unittest.TestCase):
     """A zero exit code is not proof that a stage did its job.
 
-    Every case here was observed in a real tier3 run that reported success.
+    Every case here was observed in a real all-local run that reported success.
     """
 
     BUILD = {"id": "build", "role": "build"}
@@ -633,7 +677,7 @@ class ConfigLayerTests(unittest.TestCase):
         )
         merged, _ = load_config(self.target)
         self.assertEqual(merged["providers"]["claude"]["model"], "haiku")
-        self.assertIn("local-coder", merged["providers"])
+        self.assertIn("local-brain", merged["providers"])
         self.assertEqual(sorted(merged["flows"]), sorted(self.project["flows"]))
 
     def test_write_user_config_drops_what_shipped_unchanged(self) -> None:
@@ -660,18 +704,18 @@ class ConfigLayerTests(unittest.TestCase):
 
     def test_identical_copies_are_reported_as_pinned(self) -> None:
         pinned = pinned_project_keys(self.project, self.project)
-        self.assertIn("flows.tier3", pinned)
-        self.assertIn("providers.local-coder", pinned)
+        self.assertIn("flows.short", pinned)
+        self.assertIn("providers.local-brain", pinned)
 
     def test_differences_are_reported_field_by_field(self) -> None:
         # A stale copy and a deliberate change look identical to a diff, so
         # the fields are shown rather than guessed at.
         stale = copy.deepcopy(self.project)
-        stale["providers"]["local-coder"].pop("context_length", None)
+        stale["providers"]["local-brain"].pop("context_length", None)
         report = entry_differences(stale, self.project)
-        self.assertIn("providers.local-coder", report)
+        self.assertIn("providers.local-brain", report)
         self.assertTrue(
-            any("context_length" in line for line in report["providers.local-coder"]),
+            any("context_length" in line for line in report["providers.local-brain"]),
             report,
         )
 
