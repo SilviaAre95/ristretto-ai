@@ -40,6 +40,32 @@ nothing is watching it but you.
 It also works in repositories that are not configured projects, because there
 is no project name to resolve — including this one.
 
+## Which copy of Ristretto runs
+
+A dispatched flow runs from `~/.ristretto/runtime` — a detached checkout of
+`origin/<base>` that nobody edits — not from your working tree. Build or
+update it deliberately:
+
+```bash
+make install-runtime
+```
+
+This exists because the skills are symlinks into the working checkout and the
+package is an editable install, so a flow used to execute whatever was in that
+tree at the moment it started: uncommitted edits, whichever branch was out. A
+run could be described only as "whatever was there at the time", and twice an
+experiment had to be preceded by `git checkout main` for its result to mean
+anything.
+
+Updating is a decision, not a background fast-forward — a runtime that moved
+on its own would reintroduce the same problem in a slower form. `flow.json`
+and the `control.launch` event both record which commit was chosen, and whether
+that checkout was clean.
+
+With no runtime installed a launch still works, runs from the development
+checkout, and says so. Standalone runs (`python -m ristretto.runner`) are
+unaffected: you chose the interpreter, so you already know which copy it is.
+
 ## The flows
 
 The tier number is how much Claude you are buying.

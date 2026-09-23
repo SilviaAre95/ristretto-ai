@@ -131,7 +131,11 @@ class StartFlowTest(unittest.TestCase):
             spawned.append((list(argv), kwargs))
             return mock.Mock(pid=4242)
 
-        with mock.patch.object(launch.subprocess, "run", side_effect=fake_run), \
+        # Pinned explicitly: exercising the real flow_interpreter would make
+        # the result depend on whether this machine has a runtime installed.
+        with mock.patch.object(launch, "flow_interpreter",
+                               return_value=([sys.executable, "-P"], {"PATH": "/usr/bin"}, "")), \
+             mock.patch.object(launch.subprocess, "run", side_effect=fake_run), \
              mock.patch.object(launch.subprocess, "Popen", side_effect=fake_popen):
             problem = launch.start_flow(str(self.repo), "feat/x", "t_abc", "XARI-1", "tier1")
         return problem, calls, spawned
@@ -174,7 +178,11 @@ class StartFlowTest(unittest.TestCase):
 
         self.assertEqual(len(spawned), 1, "exactly one flow process")
         argv, kwargs = spawned[0]
-        self.assertEqual(argv[:3], [sys.executable, "-m", "ristretto.runner"])
+        # Not sys.executable: the flow runs from the pinned runtime when one
+        # is installed, which is the whole point of separating them. What this
+        # guards is the invocation shape, not which copy answers.
+        self.assertEqual(argv[:2], [sys.executable, "-P"])
+        self.assertEqual(argv[2:4], ["-m", "ristretto.runner"])
         self.assertIn("--task-id", argv)
         self.assertEqual(kwargs["cwd"], self.repo / launch.WORKTREE_DIR / "t_abc")
         self.assertTrue(kwargs["start_new_session"],

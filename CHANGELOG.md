@@ -7,6 +7,32 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `make install-runtime` builds `~/.ristretto/runtime`, a detached checkout of
+  `origin/<base>` that dispatched flows run from instead of the working tree.
+  The skills are symlinks into the development checkout and the package is an
+  editable install, so a flow executed whatever was in that tree when it
+  started — uncommitted edits included — and a run could be described only as
+  "whatever was there at the time". The launcher stays where you invoked it;
+  what gets pinned is the hour of unattended work. Updating is deliberate
+  rather than automatic, because a runtime that fast-forwarded on its own
+  would run code you had not chosen, just from a different moment.
+
+  With no runtime installed a launch still starts, runs from the development
+  checkout, and says so in the launch outcome — visibly unpinned rather than
+  silently so.
+
+  The pin holds against both ways it can be undone: flows run with `-P` so the
+  worktree is not placed on `sys.path` (a worktree of *this* repository
+  contains a `ristretto/` package, so the pin was defeated for the repository
+  where it matters most), and `PYTHONPATH`/`PYTHONHOME`/`VIRTUAL_ENV` are
+  stripped, since `-P` does not cover them and `scripts/check.sh` and
+  `run-loop.sh` both export `PYTHONPATH`. The installer verifies the runtime
+  imports `ristretto` *from the runtime* rather than merely importing it at
+  all, refuses while a flow is running, and requires Python 3.11 like the rest
+  of the project.
+
 ### Changed
 
 - Local stages keep their hooks. A provider with a `base_url` gets

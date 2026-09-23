@@ -1,10 +1,13 @@
-.PHONY: setup install install-hermes install-push-guard install-dash-service update test check public-check doctor
+.PHONY: setup install install-runtime install-hermes install-push-guard install-dash-service update test check public-check doctor
 
 setup:
 	bash scripts/setup-dev.sh
 
 install:
 	bash scripts/install.sh
+
+install-runtime:
+	bash scripts/install-runtime.sh
 
 install-hermes: install
 	bash scripts/install-hermes.sh
