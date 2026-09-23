@@ -352,6 +352,106 @@ machine.
 It should be honest when it cannot finish. Today's installer already refuses
 rather than guessing when a path collides; the same standard applies here.
 
+## Where the line with Hermes falls
+
+Decided 2026-09-23, after the question was asked and found to have no recorded
+answer anywhere in this repository. Hermes was originally chosen to avoid
+reinventing computer-native assistants. That reason was never written down,
+which is how a premise outlives its expiry: nobody can check an assumption they
+cannot find.
+
+**Hermes stays.** It is `hermes-agent` by Nous Research, MIT licensed and
+publicly installable. It supplies message transport — Socket Mode, the user
+allowlist, command routing and reply rendering — plus scheduling, the task
+board, computer use, and every chat platform this project does not implement.
+Rebuilding those to avoid a dependency would be the harness becoming the
+project.
+
+**Three earlier retreats from Hermes were retreats from a local model.** The
+worker agent that read a silent stage as a hang, the chat loop that moved off
+`hermes -z`, and the coding tiers all ran on a locally served model, because the
+worker profile is configured to one. Hermes was faithfully running the model it
+was given. This is worth stating because two of those retreats were read at the
+time as evidence about Hermes.
+
+**The seam is a process boundary, not a library one.** There are no Python
+imports of Hermes anywhere in the package; every crossing is a subprocess call
+to the `hermes` CLI, in roughly eight files. Keep it that way.
+
+### Three relations, not two
+
+For any capability: **use** Hermes', **build** it here, or **build around** one
+of Hermes'. The third is where most of the product lives — a Hermes capability
+with this project's voice, persona or context layered over it. The test for a
+wrapper is that it adds judgement, not a nicer view of the same data.
+
+**Use interfaces, never internals.** `hermes kanban create` is an interface.
+Importing `tools.registry` inside a Hermes process is not, and the single place
+that does it — the morning-brief precheck — moves to the issue-tracker path the
+context assembler already has.
+
+Kept here because Hermes structurally cannot supply it: the staged flow runner
+with per-stage budgets, the approval clock-stop and interrupt preservation; the
+permission broker, which is a contract with Claude Code rather than with Hermes;
+the runtime pin; preflight and the convention-file seam; worktree collection;
+vault search; and the run lease.
+
+Kept here for other reasons: the fleet view, because the Hermes dashboard
+administers config, API keys and sessions rather than showing runs; the
+doorbell, because Hermes' notifications cover a task's terminal events while
+this reports mid-pipeline milestones; local push-to-talk voice, because Hermes'
+speech-to-text transcribes inbound chat audio, which is a different job; and the
+assistant loop, because it rides a Claude Code session rather than a metered
+API.
+
+### Models
+
+Coding runs on Claude. Everything else runs on a local model. The dividing line
+is bounded transformation against unbounded judgement, not important against
+unimportant.
+
+A consequence worth stating plainly: the hardware floor — a large-memory Apple
+Silicon machine — existed because local models were going to write the code.
+They are not. With coding on a hosted model and utility work on a small local
+one, that requirement drops a long way, and this becomes meaningfully easier for
+a stranger to install.
+
+**An assumption, recorded as one.** The assistant loop runs on Claude because
+its hard skill is reliable tool-calling and the local brain was expected to be
+weakest there. That was never measured. The loop reads its provider from config
+precisely so the switch costs one line. Until someone runs it, "local
+tool-calling is unreliable" is an expectation, not a finding.
+
+**The dispatcher stays out of the coding path.** Hermes' dispatcher spawns
+worker agents, which under this policy are local models, and a local model
+supervising an hour-long subprocess is the failure this project has already paid
+for. Launch claims the board task itself and runs the flow as a plain process.
+
+### The lease
+
+The board records what the work is and what became of it. It does not decide who
+may run it. `kanban heartbeat` emits a liveness event and does not renew a
+claim, so on a long run the claim lapses. What actually prevents a second runner
+entering a live worktree is that the task is created unassigned and the
+dispatcher only considers assigned ones — a predicate inside the engine, not a
+contract, and nothing here can test it.
+
+So the lease moves into this project: a row in the event database, renewed by
+the heartbeat the runner already sends every thirty seconds, with unassigned
+task creation kept as defence in depth.
+
+### The cost of keeping it
+
+A stranger must install a third-party agent platform before any of this runs,
+and this repository does not say where to get it — no URL, no package name, no
+version, anywhere. That is the cheapest thing on this list to fix.
+
+Beyond it: there is no version gate and no contract test over the board JSON
+this project parses, so an engine upgrade can break the fleet view silently; and
+an engine installed as a git checkout can carry local modifications that diverge
+from upstream with no record, which makes a working configuration
+unreproducible.
+
 ## Risks worth naming now
 
 **Prompt injection gets sharper.** Nemo will read issue text, vault notes and
