@@ -1,6 +1,6 @@
 """A flow must not spend its budget discovering the model is unreachable.
 
-tier1's build stage once spent a full hour producing 935 bytes of warnings:
+A tier1 build stage once spent a full hour producing 935 bytes of warnings:
 Claude Code rejects a model its catalog does not describe, and behind a
 custom base_url it then fails to terminate rather than erroring. Nothing said
 so until the timeout fired (XARI-119).
@@ -23,10 +23,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from ristretto import preflight, runner  # noqa: E402
 
+# A local provider as a *fallback target*. No shipped flow names one — the
+# local coder and the tier flows were retired 2026-09-23 — but the fallback
+# machinery stays reachable from a user's own config, so it stays tested.
+# Named for the local provider that still ships, so the fixture does not
+# outlive the thing it was named after.
 LOCAL = {
-    "name": "local-coder",
+    "name": "local-brain",
     "runner": "claude-code",
-    "model": "qwen3.6:27b-coding-nvfp4",
+    "model": "qwen3.6:35b-mlx",
     "base_url": "http://localhost:11434",
     "auth_token": "ollama",
 }
@@ -46,7 +51,7 @@ class PreflightProviderTest(unittest.TestCase):
             problem = runner.preflight_provider(LOCAL)
 
         self.assertIn("did not answer", problem)
-        self.assertIn("qwen3.6:27b-coding-nvfp4", problem)
+        self.assertIn("qwen3.6:35b-mlx", problem)
         # The message has to point at the cause, or the next person repeats
         # the hour of debugging this came from.
         self.assertIn("base_url", problem)
@@ -76,7 +81,7 @@ class PreflightProviderTest(unittest.TestCase):
         command = run.call_args.args[0]
         env = run.call_args.kwargs["env"]
         self.assertIn("--model", command)
-        self.assertIn("qwen3.6:27b-coding-nvfp4", command)
+        self.assertIn("qwen3.6:35b-mlx", command)
         self.assertEqual(env["ANTHROPIC_BASE_URL"], "http://localhost:11434")
         self.assertEqual(env["ANTHROPIC_AUTH_TOKEN"], "ollama")
         # A probe that waits as long as a stage would defeat the point.
@@ -140,7 +145,7 @@ class PreflightFlowTest(unittest.TestCase):
         flow = self.flow(CLAUDE, LOCAL)
         with mock.patch.object(
             runner, "preflight_provider",
-            side_effect=["", "local-coder (qwen) did not answer"],
+            side_effect=["", "local-brain (qwen) did not answer"],
         ):
             problem = runner.preflight_flow(flow)
 
@@ -155,7 +160,7 @@ class PreflightFlowTest(unittest.TestCase):
         run_stage does switch provider for this class of failure, so the flow
         really is covered and refusing would be the worse outcome.
         """
-        with_fallback = {**CLAUDE, "fallback": "local-coder"}
+        with_fallback = {**CLAUDE, "fallback": "local-brain"}
         with mock.patch.object(runner, "resolved_provider", return_value=LOCAL), \
              mock.patch.object(
                  runner, "preflight_provider",
@@ -174,7 +179,7 @@ class PreflightFlowTest(unittest.TestCase):
         that through reads as "the flow is covered" when it is not, and the
         hang is the exact failure this check exists for.
         """
-        with_fallback = {**CLAUDE, "fallback": "local-coder"}
+        with_fallback = {**CLAUDE, "fallback": "local-brain"}
         with mock.patch.object(runner, "resolved_provider", return_value=LOCAL), \
              mock.patch.object(
                  runner, "preflight_provider",
@@ -186,20 +191,20 @@ class PreflightFlowTest(unittest.TestCase):
 
     def test_a_fallback_that_is_itself_dead_does_not_excuse_the_flow(self) -> None:
         """Vouching for an unprobed provider is how the original hang shipped."""
-        with_fallback = {**CLAUDE, "fallback": "local-coder"}
+        with_fallback = {**CLAUDE, "fallback": "local-brain"}
         with mock.patch.object(runner, "resolved_provider", return_value=LOCAL), \
              mock.patch.object(
                  runner, "preflight_provider",
-                 side_effect=["claude refused: rate limit", "local-coder did not answer"],
+                 side_effect=["claude refused: rate limit", "local-brain did not answer"],
              ):
             problem = runner.preflight_flow(self.flow(with_fallback), config={})
 
         self.assertIn("rate limit", problem)
 
     def test_a_provider_with_no_fallback_does_block_the_flow(self) -> None:
-        """local-coder has nowhere to go, so its failure is the whole run."""
+        """A provider with nowhere to go: its failure is the whole run."""
         with mock.patch.object(
-            runner, "preflight_provider", return_value="local-coder did not answer"
+            runner, "preflight_provider", return_value="local-brain did not answer"
         ):
             problem = runner.preflight_flow(self.flow(LOCAL))
 

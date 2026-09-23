@@ -14,7 +14,12 @@ from pathlib import Path
 from typing import Any
 
 
-DONE_TYPES = {"completed", "canceled", "cancelled"}
+# Terminal state types, as Linear reports them in `state.type`. `duplicate`
+# was missing, so a duplicate issue counted as open and rode the brief every
+# morning — the feature says the precheck snapshots the *open* board, and a
+# duplicate is closed. Both spellings of cancelled are kept: the API returns
+# one, and it costs nothing to accept the other.
+DONE_TYPES = {"completed", "canceled", "cancelled", "duplicate"}
 
 
 def parse_args() -> argparse.Namespace:
