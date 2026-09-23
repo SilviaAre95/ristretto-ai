@@ -30,21 +30,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def unwrap_mcp_result(raw: str) -> dict[str, Any]:
-    data: Any = json.loads(raw)
-    if isinstance(data, dict) and "error" in data:
-        raise RuntimeError(str(data["error"]))
-    if isinstance(data, dict) and "result" in data:
-        data = data["result"]
-    if isinstance(data, str):
-        data = json.loads(data)
-    if not isinstance(data, dict):
-        raise RuntimeError("Linear list_issues returned an unexpected response")
-    if "error" in data:
-        raise RuntimeError(str(data["error"]))
-    return data
-
-
 def configured_team() -> str:
     if os.environ.get("RISTRETTO_LINEAR_TEAM"):
         return os.environ["RISTRETTO_LINEAR_TEAM"]
@@ -63,29 +48,37 @@ def configured_team() -> str:
 
 
 def fetch_issues() -> list[dict[str, Any]]:
-    # Imported lazily so fixture tests do not need the Hermes runtime.
-    from tools.mcp_tool import discover_mcp_tools
-    from tools.registry import registry
+    """The board, over the CLI.
 
-    discover_mcp_tools()
-    entry = registry.get_entry("mcp_linear_list_issues")
-    if entry is None:
-        raise RuntimeError("Linear list_issues tool is unavailable")
-    data = unwrap_mcp_result(
-        entry.handler(
-            {
-                "team": configured_team(),
-                "limit": 250,
-                "orderBy": "updatedAt",
-                "includeArchived": False,
-            }
-        )
+    This used to call Hermes' Linear MCP tool by importing `tools.registry`
+    inside the Hermes process — the only import of Hermes internals anywhere
+    in this project. A registry entry is a private interface: nothing warns
+    when an engine upgrade renames or removes one, and there is no
+    `hermes mcp call` to reach it as an interface instead. So the brief now
+    shells the same CLI it already uses for the team key, and that command
+    runs the GraphQL query in `ristretto/context.py`. One Linear client, one
+    process boundary, no internals.
+    """
+    result = subprocess.run(
+        ["ristretto", "issues", "--team", configured_team()],
+        text=True,
+        capture_output=True,
+        check=False,
     )
-    if data.get("hasNextPage"):
-        raise RuntimeError("Linear board exceeds the 250-issue snapshot limit")
+    if not (result.stdout or "").strip():
+        raise RuntimeError(
+            f"ristretto issues produced nothing: {(result.stderr or '').strip()}"
+        )
+    data: Any = json.loads(result.stdout)
+    if not isinstance(data, dict):
+        raise RuntimeError("ristretto issues returned an unexpected response")
+    if data.get("error"):
+        raise RuntimeError(str(data["error"]))
+    if result.returncode != 0:
+        raise RuntimeError(f"ristretto issues failed (rc={result.returncode})")
     issues = data.get("issues")
     if not isinstance(issues, list):
-        raise RuntimeError("Linear list_issues response has no issues list")
+        raise RuntimeError("ristretto issues response has no issues list")
     return [item for item in issues if isinstance(item, dict)]
 
 

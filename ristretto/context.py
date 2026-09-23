@@ -96,6 +96,88 @@ def linear_issue(issue: str, environ: Mapping[str, str] | None = None) -> dict[s
     }
 
 
+# The morning brief's board snapshot. Linear's own cap is 250 per page, and a
+# brief that silently describes two thirds of a board is worse than one that
+# refuses, so the caller is told when there is a next page rather than left to
+# assume completeness.
+MAX_BOARD_ISSUES = 250
+
+# Linear returns priority as a number and its label separately; the brief
+# wants both, and 0 means "no priority" rather than "most urgent".
+PRIORITY_NAMES = {0: "No priority", 1: "Urgent", 2: "High", 3: "Medium", 4: "Low"}
+
+
+def linear_issues(team: str, environ: Mapping[str, str] | None = None) -> dict[str, Any]:
+    """Open issues on one team, flattened for the morning brief.
+
+    The same endpoint and credential as `linear_issue`, listing instead of
+    fetching one. This exists because the brief's precheck used to import
+    `tools.registry` inside a Hermes process to reach Hermes' Linear MCP tool
+    — the only import of Hermes internals anywhere in this project, and a
+    private interface that an engine upgrade could remove without warning.
+    There is no `hermes mcp call`, so a process boundary was not available
+    that way; the GraphQL path was already here.
+
+    Raises rather than returning empty: a brief built on a board we could not
+    read should not look like a quiet morning.
+    """
+    env = os.environ if environ is None else environ
+    token = str(env.get(LINEAR_TOKEN_ENV, "")).strip()
+    if not token:
+        raise RuntimeError(f"{LINEAR_TOKEN_ENV} is not set; the board cannot be read")
+
+    query = (
+        "query($team:String!,$first:Int!){issues(filter:{team:{key:{eq:$team}}},"
+        "first:$first,orderBy:updatedAt){pageInfo{hasNextPage}nodes{identifier title "
+        "updatedAt archivedAt priority priorityLabel state{name type}project{name}}}}"
+    )
+    body = json.dumps(
+        {"query": query, "variables": {"team": team, "first": MAX_BOARD_ISSUES}}
+    ).encode("utf-8")
+    request = urllib.request.Request(
+        LINEAR_API,
+        data=body,
+        headers={"Authorization": token, "Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=LINEAR_TIMEOUT) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, OSError, ValueError, TimeoutError) as exc:
+        raise RuntimeError(f"Linear is unreachable: {exc}") from exc
+
+    if payload.get("errors"):
+        raise RuntimeError(f"Linear rejected the query: {payload['errors']}")
+    connection = ((payload or {}).get("data") or {}).get("issues") or {}
+    if connection.get("pageInfo", {}).get("hasNextPage"):
+        raise RuntimeError(
+            f"Linear board exceeds the {MAX_BOARD_ISSUES}-issue snapshot limit"
+        )
+
+    issues = []
+    for node in connection.get("nodes") or []:
+        if not isinstance(node, dict):
+            continue
+        state = node.get("state") or {}
+        priority = node.get("priority")
+        value = int(priority) if isinstance(priority, (int, float)) else 0
+        issues.append(
+            {
+                "identifier": str(node.get("identifier") or ""),
+                "title": str(node.get("title") or ""),
+                "project": str((node.get("project") or {}).get("name") or ""),
+                "status": str(state.get("name") or ""),
+                "statusType": str(state.get("type") or ""),
+                "priority": {
+                    "value": value,
+                    "name": str(node.get("priorityLabel") or PRIORITY_NAMES.get(value, "")),
+                },
+                "updatedAt": str(node.get("updatedAt") or ""),
+                "archivedAt": node.get("archivedAt"),
+            }
+        )
+    return {"issues": issues}
+
+
 def vault_notes(issue: str, config: Mapping[str, Any] | None = None) -> list[dict[str, str]]:
     """Notes that mention the issue, newest match first.
 
