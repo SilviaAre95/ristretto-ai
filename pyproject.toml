@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ristretto-ops"
+name = "cuzam-ops"
 version = "0.2.0"
 description = "Configurable local-first operations assistant built on Hermes Agent"
 readme = "README.md"
@@ -17,16 +17,23 @@ dependencies = ["PyYAML>=6.0,<7.0"]
 dash = ["fastapi>=0.115", "jinja2>=3.1", "uvicorn>=0.30"]
 
 [project.scripts]
-ristretto = "ristretto.cli:main"
-# The product is Nemo; the package rename is deferred, the name is not.
-nemo = "ristretto.cli:main"
-ristretto-run-flow = "ristretto.runner:main"
+cuzam = "cuzam.cli:main"
+# The system is Cuzam; the assistant is Zam. Both reach the same CLI.
+zam = "cuzam.cli:main"
+cuzam-run-flow = "cuzam.runner:main"
+# Deprecated, kept for one release. A cron job, a shell alias or a script
+# written before the rename calls `ristretto`, and a console script costs
+# nothing next to that breaking silently in an unattended run. The migration
+# removes the ~/.local/bin link; these are what keep PATH working until the
+# next install. Remove after 0.3.0.
+ristretto = "cuzam.cli:main"
+nemo = "cuzam.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["ristretto*"]
+include = ["cuzam*"]
 
 [tool.setuptools.package-data]
-"ristretto.dash" = ["templates/*.html"]
+"cuzam.dash" = ["templates/*.html"]
 
 [tool.setuptools.data-files]
-"share/ristretto" = ["ristretto.yaml"]
+"share/cuzam" = ["cuzam.yaml"]

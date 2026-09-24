@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Install Ristretto's public Hermes assets without overwriting user-owned
+# Install Cuzam's public Hermes assets without overwriting user-owned
 # config, persona, credentials, jobs, or unrelated skills.
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-hermes_home="${RISTRETTO_HERMES_HOME:-${HERMES_HOME:-$HOME/.hermes}}"
+hermes_home="${CUZAM_HERMES_HOME:-${RISTRETTO_HERMES_HOME:-${HERMES_HOME:-$HOME/.hermes}}}"
 install_service=0
 
 if [ "${1:-}" = "--service" ]; then
@@ -21,16 +21,16 @@ command -v hermes >/dev/null || {
   echo "  or: pip install 'hermes-agent==0.18.*'" >&2
   exit 1
 }
-command -v ristretto >/dev/null || {
-  echo "install-hermes: ristretto CLI is required; run make install first" >&2
+command -v cuzam >/dev/null || {
+  echo "install-hermes: cuzam CLI is required; run make install first" >&2
   exit 1
 }
 
-ristretto validate
-linear_team="$(ristretto instance get linear_team)" || exit 1
-home_channel="$(ristretto instance get slack_home_channel)" || exit 1
-ristretto instance get slack_prs_channel >/dev/null
-ristretto instance get slack_alerts_channel >/dev/null
+cuzam validate
+linear_team="$(cuzam instance get linear_team)" || exit 1
+home_channel="$(cuzam instance get slack_home_channel)" || exit 1
+cuzam instance get slack_prs_channel >/dev/null
+cuzam instance get slack_alerts_channel >/dev/null
 
 mkdir -p "$hermes_home" "$hermes_home/scripts" \
   "$hermes_home/skills/software-development"
@@ -96,39 +96,39 @@ bash "$repo/scripts/link-loop-runner.sh"
 # is worse than no plugin.
 mkdir -p "$hermes_home/plugins"
 link_skill \
-  "$repo/hermes/plugins/ris-approvals" \
-  "$hermes_home/plugins/ris-approvals"
+  "$repo/hermes/plugins/zam-approvals" \
+  "$hermes_home/plugins/zam-approvals"
 link_skill \
-  "$repo/hermes/plugins/ris-launch" \
-  "$hermes_home/plugins/ris-launch"
+  "$repo/hermes/plugins/zam-launch" \
+  "$hermes_home/plugins/zam-launch"
 link_skill \
-  "$repo/hermes/plugins/ris-chat" \
-  "$hermes_home/plugins/ris-chat"
+  "$repo/hermes/plugins/zam-chat" \
+  "$hermes_home/plugins/zam-chat"
 # Linking is not enabling: a discovered plugin sits at "not enabled" and its
-# commands never register, so !ris-approve silently does nothing. Enabling is
+# commands never register, so !zam-approve silently does nothing. Enabling is
 # idempotent and safe to repeat.
 if ! HERMES_HOME="$hermes_home" hermes plugins list 2>/dev/null \
-     | grep -q "ris-approvals.*enabled"; then
-  HERMES_HOME="$hermes_home" hermes plugins enable ris-approvals >/dev/null 2>&1 || true
+     | grep -q "zam-approvals.*enabled"; then
+  HERMES_HOME="$hermes_home" hermes plugins enable zam-approvals >/dev/null 2>&1 || true
 fi
 if ! HERMES_HOME="$hermes_home" hermes plugins list 2>/dev/null \
-     | grep -q "ris-launch.*enabled"; then
-  HERMES_HOME="$hermes_home" hermes plugins enable ris-launch >/dev/null 2>&1 || true
+     | grep -q "zam-launch.*enabled"; then
+  HERMES_HOME="$hermes_home" hermes plugins enable zam-launch >/dev/null 2>&1 || true
 fi
 if ! HERMES_HOME="$hermes_home" hermes plugins list 2>/dev/null \
-     | grep -q "ris-chat.*enabled"; then
-  HERMES_HOME="$hermes_home" hermes plugins enable ris-chat >/dev/null 2>&1 || true
+     | grep -q "zam-chat.*enabled"; then
+  HERMES_HOME="$hermes_home" hermes plugins enable zam-chat >/dev/null 2>&1 || true
 fi
 
 install -m 0755 \
   "$repo/hermes/scripts/morning-brief-precheck.py" \
   "$hermes_home/scripts/morning-brief-precheck.py"
 install -m 0755 \
-  "$repo/hermes/scripts/ris-stop.sh" \
-  "$hermes_home/scripts/ris-stop.sh"
+  "$repo/hermes/scripts/zam-stop.sh" \
+  "$hermes_home/scripts/zam-stop.sh"
 install -m 0755 \
-  "$repo/hermes/scripts/ris-event.py" \
-  "$hermes_home/scripts/ris-event.py"
+  "$repo/hermes/scripts/zam-event.py" \
+  "$hermes_home/scripts/zam-event.py"
 mkdir -p "$hermes_home/agent-hooks"
 # Copy only when it differs. Hermes fingerprints an approved hook script, so
 # rewriting an identical copy would invalidate the approval on every install
@@ -140,32 +140,32 @@ if ! cmp -s "$repo/hermes/agent-hooks/loop-flow-guard.sh" \
     "$hermes_home/agent-hooks/loop-flow-guard.sh"
 fi
 install -m 0755 \
-  "$repo/hermes/scripts/ris-doorbell.sh" \
-  "$hermes_home/scripts/ris-doorbell.sh"
+  "$repo/hermes/scripts/zam-doorbell.sh" \
+  "$hermes_home/scripts/zam-doorbell.sh"
 
-if [ ! -d "$hermes_home/profiles/ris-worker" ]; then
-  HERMES_HOME="$hermes_home" hermes profile create ris-worker --no-skills \
+if [ ! -d "$hermes_home/profiles/zam-worker" ]; then
+  HERMES_HOME="$hermes_home" hermes profile create zam-worker --no-skills \
     --description "Detached supervised coding worker" >/dev/null
 fi
-profile_skills="$hermes_home/profiles/ris-worker/skills/software-development"
+profile_skills="$hermes_home/profiles/zam-worker/skills/software-development"
 mkdir -p "$profile_skills"
 for skill in durable-dev loop-runner; do
   link_skill "$repo/hermes/skills/$skill" "$profile_skills/$skill"
 done
 
-HERMES_HOME="$hermes_home" hermes -p ris-worker config set model.provider custom >/dev/null
-HERMES_HOME="$hermes_home" hermes -p ris-worker config set model.default qwen3.6:35b-mlx >/dev/null
-HERMES_HOME="$hermes_home" hermes -p ris-worker config set model.base_url http://localhost:11434/v1 >/dev/null
-HERMES_HOME="$hermes_home" hermes -p ris-worker config set agent.max_turns 300 >/dev/null
-HERMES_HOME="$hermes_home" hermes -p ris-worker config set tool_loop_guardrails.hard_stop_enabled true >/dev/null
-HERMES_HOME="$hermes_home" hermes -p ris-worker config set session_reset.idle_minutes 180 >/dev/null
+HERMES_HOME="$hermes_home" hermes -p zam-worker config set model.provider custom >/dev/null
+HERMES_HOME="$hermes_home" hermes -p zam-worker config set model.default qwen3.6:35b-mlx >/dev/null
+HERMES_HOME="$hermes_home" hermes -p zam-worker config set model.base_url http://localhost:11434/v1 >/dev/null
+HERMES_HOME="$hermes_home" hermes -p zam-worker config set agent.max_turns 300 >/dev/null
+HERMES_HOME="$hermes_home" hermes -p zam-worker config set tool_loop_guardrails.hard_stop_enabled true >/dev/null
+HERMES_HOME="$hermes_home" hermes -p zam-worker config set session_reset.idle_minutes 180 >/dev/null
 # The terminal tool returns control when it times out, and the default 180s is
 # far shorter than a loop. That leaves the worker "waiting" for its own flow —
 # which depends on the model choosing to wait, and one did not: it sat for 43
 # minutes, then ended its turn and killed the running build with it. A blocking
 # call cannot be abandoned, so the worker blocks and the task's own max-runtime
 # stays the real bound.
-HERMES_HOME="$hermes_home" hermes -p ris-worker config set terminal.timeout 7200 >/dev/null
+HERMES_HOME="$hermes_home" hermes -p zam-worker config set terminal.timeout 7200 >/dev/null
 # Hooks are per profile, and the worker profile is the one that calls
 # kanban_complete — declaring the guard only in the top-level config would
 # leave the process it exists to gate completely ungated.
@@ -175,19 +175,25 @@ HERMES_HOME="$hermes_home" hermes -p ris-worker config set terminal.timeout 7200
 #   hooks: {pre_tool_call: '[{...}]'}
 # which loads as no hooks at all. That silently disarmed the guard on every
 # reinstall, and nothing said so.
-profile_config="$hermes_home/profiles/ris-worker/config.yaml"
+profile_config="$hermes_home/profiles/zam-worker/config.yaml"
 python3 - "$profile_config" <<'GUARD'
 import sys
 from pathlib import Path
 
 path = Path(sys.argv[1])
 text = path.read_text() if path.exists() else ""
-begin, end = "# ris:flow-guard begin", "# ris:flow-guard end"
+begin, end = "# zam:flow-guard begin", "# zam:flow-guard end"
 
-if begin in text and end in text:
-    head, _, rest = text.partition(begin)
-    _, _, tail = rest.partition(end)
-    text = head.rstrip("\n") + "\n" + tail.lstrip("\n")
+# The pre-rename marker is stripped as well, for one release. The hooks keys
+# below are dropped whatever they are called, so leaving this out would not
+# disarm anything — it would leave two orphaned comment lines wrapped around
+# nothing, which is the kind of litter that gets read as a second block by
+# the next person to edit this file. Drop in 0.3.0.
+for first, last in ((begin, end), ("# ris:flow-guard begin", "# ris:flow-guard end")):
+    if first in text and last in text:
+        head, _, rest = text.partition(first)
+        _, _, tail = rest.partition(last)
+        text = head.rstrip("\n") + "\n" + tail.lstrip("\n")
 
 # Drop any earlier hooks mapping, children included. Removing only the
 # top-level keys orphans their indented entries and leaves YAML that will
@@ -221,9 +227,9 @@ GUARD
 
 # Configuring is not the same as working: prove the guard is actually
 # registered rather than trusting that writing the file was enough.
-if ! HERMES_HOME="$hermes_home" hermes -p ris-worker hooks list 2>/dev/null \
+if ! HERMES_HOME="$hermes_home" hermes -p zam-worker hooks list 2>/dev/null \
      | grep -q "loop-flow-guard"; then
-  echo "install-hermes: the loop flow guard is not registered on the ris-worker profile" >&2
+  echo "install-hermes: the loop flow guard is not registered on the zam-worker profile" >&2
   echo "  a worker could complete a task without running its loop — refusing to finish silently" >&2
   exit 1
 fi
@@ -233,24 +239,24 @@ fi
 # rather than leaving the operator to find out from a worker that skipped its
 # loop. Do not "fix" this by revoking: that disarms the hook outright until an
 # agent runs again.
-if HERMES_HOME="$hermes_home" hermes -p ris-worker hooks doctor 2>/dev/null \
+if HERMES_HOME="$hermes_home" hermes -p zam-worker hooks doctor 2>/dev/null \
    | grep -q "modified since approval"; then
   echo "Loop flow guard needs re-approval after this update. Run once:" >&2
-  echo "  hermes -p ris-worker --accept-hooks -z ok" >&2
+  echo "  hermes -p zam-worker --accept-hooks -z ok" >&2
 else
-  echo "Loop flow guard armed on the ris-worker profile."
+  echo "Loop flow guard armed on the zam-worker profile."
 fi
 
 # The doorbell turns pipeline milestones into Slack messages. Run as a cron
 # rather than a daemon: a missed tick delivers late, a crashed daemon delivers
 # never, and the cursor makes catching up free.
-if ! HERMES_HOME="$hermes_home" hermes cron list --all | grep -Fq "Ris doorbell"; then
+if ! HERMES_HOME="$hermes_home" hermes cron list --all | grep -Fq "Zam doorbell"; then
   HERMES_HOME="$hermes_home" hermes cron create "*/2 * * * *" "[SILENT]" \
-    --name "Ris doorbell" \
-    --script "ris-doorbell.sh" >/dev/null
-  echo "Created Ris doorbell cron job."
+    --name "Zam doorbell" \
+    --script "zam-doorbell.sh" >/dev/null
+  echo "Created Zam doorbell cron job."
 else
-  echo "Kept existing Ris doorbell cron job."
+  echo "Kept existing Zam doorbell cron job."
 fi
 
 if ! HERMES_HOME="$hermes_home" hermes cron list --all | grep -Fq "Morning brief"; then
@@ -270,4 +276,4 @@ else
   echo "Gateway service unchanged. Re-run with --service to install/start it."
 fi
 
-echo "Ristretto Hermes assets installed. Run: ristretto doctor"
+echo "Cuzam Hermes assets installed. Run: cuzam doctor"

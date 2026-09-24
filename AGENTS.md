@@ -1,6 +1,6 @@
-# Ristretto contributor context
+# Cuzam contributor context
 
-Ristretto is an open-source, configurable personal operations assistant built
+Cuzam is an open-source, configurable personal operations assistant built
 on Hermes Agent. It integrates Slack, Linear, local or cloud model providers,
 durable coding workers, approval gates, and named multi-model coding flows.
 

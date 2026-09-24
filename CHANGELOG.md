@@ -1,11 +1,58 @@
 # Changelog
 
-All notable changes to Ristretto will be documented here.
+All notable changes to Cuzam will be documented here. Entries written
+before 2026-09-24 name the project Ristretto and the assistant Nemo or
+Ris; they are left as written, because what happened, happened under
+those names.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+### Changed
+
+- **Ristretto is now Cuzam, and Nemo/Ris is now Zam.** The system took the
+  name `cuzam`, the assistant took `zam`: `ris-*` became `zam-*` (plugins
+  `zam-approvals`, `zam-launch`, `zam-chat`; `!zam-approve`), `RIS_*` became
+  `ZAM_*`, and `RISTRETTO_*` became `CUZAM_*`. The old `RISTRETTO_*` and
+  `RIS_*` names are still read as a fallback for one release, so an
+  environment set before the rename keeps working; they are removed in 0.3.0.
+  The Python package moved `ristretto/` -> `cuzam/`, the state home
+  `~/.ristretto` -> `~/.cuzam`, the user config `~/.config/ristretto` ->
+  `~/.config/cuzam`, and run artifacts `.ristretto/` -> `.cuzam/` inside a
+  worktree.
+
+  Deliberately **not** renamed: the checkout directory and the GitHub
+  repository, which stay `ristretto-ai`; `.cc-verify`, `.cc-dev.yaml` and
+  `.cc-deploy.yaml`, which are a contract with wayworks rather than names
+  this project owns; and the CHANGELOG entries above.
+
+### Upgrade notes
+
+This release moves state and links that live outside the checkout, so the
+usual `make update` is not enough on its own and will refuse if it runs
+first. Once, in this order:
+
+```
+git switch main && git pull
+make migrate          # moves state, unlinks the old names, relabels launchd
+make install-runtime  # rebuilds ~/.cuzam/runtime; the old one is deleted, never moved
+make update
+```
+
+`make migrate` is idempotent and refuses while a run is live. Three things it
+cannot do for you:
+
+- **The microphone grant.** The voice app's bundle id changed
+  (`com.ristretto.nemo` -> `com.cuzam.zam`), which revokes its TCC grant.
+  macOS asks again on first use; approve it once.
+- **The Slack manifest.** `slack/cuzam-slack-manifest.json` is inert until it
+  is re-uploaded by hand in the Slack app settings.
+- **`SOUL.md`**, if you have edited it. The migration replaces it only when
+  your copy still matches the version it was seeded from; otherwise the
+  persona keeps introducing itself as Nemo until you port the change. It
+  says which it did.
 
 ### Added
 

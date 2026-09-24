@@ -1,13 +1,13 @@
 # Project Status
 
-> **Superseded in part.** `docs/nemo-architecture.md` re-frames this project:
-> Ristretto is Nemo, a personal assistant that can write code, rather than a
+> **Superseded in part.** `docs/zam-architecture.md` re-frames this project:
+> Cuzam is Zam, a personal assistant that can write code, rather than a
 > coding harness with a chat surface. The workshop described below is intact
 > and carried forward; the centre of the system moves from runs to
 > conversation, Linear and the vault.
 
 
-Ristretto is preparing its first public `0.1.0` release.
+Cuzam is preparing its first public `0.1.0` release.
 
 ## Implemented
 
@@ -28,9 +28,9 @@ Ristretto is preparing its first public `0.1.0` release.
 Personal instance state, issue exports, channel IDs, repository mappings, and
 runtime logs intentionally live outside this public repository.
 
-## Nemo (exploration)
+## Zam (exploration)
 
-`docs/nemo-feasibility.md` — feasibility check on giving Ristretto a body, a
+`docs/zam-feasibility.md` — feasibility check on giving Cuzam a body, a
 push-to-talk input and an on-screen presence. Not scheduled. Records the
 resolved rule for voice and authority (voice composes, a click commits) and
 notes that the launch surface is a prerequisite.

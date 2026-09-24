@@ -1,6 +1,6 @@
 # Release Process
 
-Ristretto uses Semantic Versioning and tags releases as `vMAJOR.MINOR.PATCH`.
+Cuzam uses Semantic Versioning and tags releases as `vMAJOR.MINOR.PATCH`.
 The first planned public version is `0.1.0`.
 
 ## Before the first public release
@@ -9,7 +9,7 @@ The current private Git history must not be pushed. After committing and
 passing both gates, export a history-free tree:
 
 ```bash
-bash scripts/export-public.sh /absolute/path/to/ristretto-public
+bash scripts/export-public.sh /absolute/path/to/cuzam-public
 ```
 
 The exporter initializes a fresh repository and stages the public tree without

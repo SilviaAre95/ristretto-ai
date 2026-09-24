@@ -13,9 +13,9 @@
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-label="com.ristretto.dash"
+label="com.cuzam.dash"
 plist="$HOME/Library/LaunchAgents/$label.plist"
-port="${RISTRETTO_DASH_PORT:-8787}"
+port="${CUZAM_DASH_PORT:-${RISTRETTO_DASH_PORT:-8787}}"
 logs="$HOME/Library/Logs"
 
 python_bin="$repo/.venv/bin/python3"
@@ -23,7 +23,7 @@ if [ ! -x "$python_bin" ]; then
   echo "install-dash-service: no interpreter at $python_bin — run 'make setup' first" >&2
   exit 1
 fi
-if ! "$python_bin" -c "import ristretto.dash.app" >/dev/null 2>&1; then
+if ! "$python_bin" -c "import cuzam.dash.app" >/dev/null 2>&1; then
   echo "install-dash-service: that interpreter cannot import the dashboard" >&2
   echo "install-dash-service: run 'make setup' (the [dash] extra is required)" >&2
   exit 1
@@ -57,7 +57,7 @@ cat > "$plist" <<PLIST
   <array>
     <string>$python_bin</string>
     <string>-m</string>
-    <string>ristretto.cli</string>
+    <string>cuzam.cli</string>
     <string>dash</string>
     <string>--port</string>
     <string>$port</string>
@@ -82,26 +82,26 @@ cat > "$plist" <<PLIST
   <key>KeepAlive</key><true/>
   <!-- Without this a crash-looping server restarts as fast as it can fail. -->
   <key>ThrottleInterval</key><integer>10</integer>
-  <key>StandardOutPath</key><string>$logs/ristretto-dash.log</string>
-  <key>StandardErrorPath</key><string>$logs/ristretto-dash.log</string>
+  <key>StandardOutPath</key><string>$logs/cuzam-dash.log</string>
+  <key>StandardErrorPath</key><string>$logs/cuzam-dash.log</string>
 </dict>
 </plist>
 PLIST
 
 # Any hand-started copy owns the port and would make the service crash-loop
 # on bind. Take it down before handing over.
-pkill -f "ristretto.cli dash" 2>/dev/null || true
+pkill -f "cuzam.cli dash" 2>/dev/null || true
 sleep 1
 # Verify rather than assume: a survivor keeps the port and the new service
 # crash-loops behind it, still serving whatever the old one was built from.
 for _ in 1 2 3; do
-  survivors="$(pgrep -f "ristretto.cli dash" || true)"
+  survivors="$(pgrep -f "cuzam.cli dash" || true)"
   [ -z "$survivors" ] && break
   # shellcheck disable=SC2086
   kill -9 $survivors 2>/dev/null || true
   sleep 1
 done
-if pgrep -f "ristretto.cli dash" >/dev/null 2>&1; then
+if pgrep -f "cuzam.cli dash" >/dev/null 2>&1; then
   echo "install-dash-service: a dashboard process survived and holds port $port" >&2
   echo "install-dash-service: kill it before installing, or the service crash-loops" >&2
   exit 1
@@ -111,16 +111,16 @@ launchctl bootout "gui/$UID/$label" 2>/dev/null || true
 launchctl bootstrap "gui/$UID" "$plist"
 launchctl kickstart -k "gui/$UID/$label" 2>/dev/null || true
 
-# Tell Nemo where to find this dashboard. The address is a fact about this
+# Tell Zam where to find this dashboard. The address is a fact about this
 # machine, so it is written here rather than compiled into the app.
 link_host="$("$python_bin" -c "
 import sys; sys.path.insert(0, '$repo')
-from ristretto.dash.serve import link_host
+from cuzam.dash.serve import link_host
 print(link_host())" 2>/dev/null || echo 127.0.0.1)"
-mkdir -p "$HOME/.ristretto"
-printf 'http://%s:%s\n' "$link_host" "$port" > "$HOME/.ristretto/dash-url"
+mkdir -p "$HOME/.cuzam"
+printf 'http://%s:%s\n' "$link_host" "$port" > "$HOME/.cuzam/dash-url"
 
 echo "dash service installed: $plist"
-echo "  logs:    $logs/ristretto-dash.log"
+echo "  logs:    $logs/cuzam-dash.log"
 echo "  restart: launchctl kickstart -k gui/$UID/$label"
 echo "  remove:  scripts/install-dash-service.sh uninstall"

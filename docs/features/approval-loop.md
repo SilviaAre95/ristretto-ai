@@ -19,11 +19,11 @@ non_goals:
 
 ## Summary
 
-Risky actions require an explicit mobile Approve/Deny decision before Ris proceeds, creating a hard gate around destructive, costly, production, or secret-bearing operations.
+Risky actions require an explicit mobile Approve/Deny decision before Zam proceeds, creating a hard gate around destructive, costly, production, or secret-bearing operations.
 
 ## Behavior
 
-When Ris is about to take a risky action, it renders Approve/Deny buttons plus a text fallback. If the user does not respond, the task is parked rather than proceeding. Silence is never approval.
+When Zam is about to take a risky action, it renders Approve/Deny buttons plus a text fallback. If the user does not respond, the task is parked rather than proceeding. Silence is never approval.
 
 ## Out of scope
 

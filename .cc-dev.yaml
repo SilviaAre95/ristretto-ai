@@ -1,4 +1,4 @@
-# /loop-dev configuration for Ristretto.
+# /loop-dev configuration for Cuzam.
 graders: [code-review, security, bugs]
 max_retries: 3
 max_review_rounds: 3

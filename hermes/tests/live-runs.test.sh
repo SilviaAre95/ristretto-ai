@@ -9,7 +9,7 @@
 set -uo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-tmp="$(mktemp -d "${TMPDIR:-/tmp}/ristretto-live-runs-test.XXXXXX")"
+tmp="$(mktemp -d "${TMPDIR:-/tmp}/cuzam-live-runs-test.XXXXXX")"
 started=""
 cleanup() {
   for pid in $started; do kill "$pid" 2>/dev/null || true; done
@@ -61,13 +61,26 @@ assert "a live classic loop exits 0" \
 stop "$classic"
 
 # Staged: the runner's own command line.
-bash -c "exec -a 'python3 -m ristretto.runner --task-id t_abc123 --flow full' sleep 30" &
+bash -c "exec -a 'python3 -m cuzam.runner --task-id t_abc123 --flow full' sleep 30" &
 staged=$!
 started="$started $staged"
 sleep 0.4
 out="$(bash "$repo/scripts/live-runs.sh")"
-assert "a live staged runner is reported" grep -q "ristretto.runner --task-id" <<<"$out"
+assert "a live staged runner is reported" grep -q "cuzam.runner --task-id" <<<"$out"
 stop "$staged"
+
+# A run that predates the rename. Its command line says `ristretto.runner`
+# for the whole hour it lives, and it must still block an update — matching
+# only the new name would reopen the hole #66 closed, one release later and
+# with nothing to say so. Delete with the old name in 0.3.0.
+bash -c "exec -a 'python3 -m ristretto.runner --task-id t_old123 --flow full' sleep 30" &
+legacy=$!
+started="$started $legacy"
+sleep 0.4
+out="$(bash "$repo/scripts/live-runs.sh")"
+assert "a run started under the old module name is still reported" \
+  grep -q "ristretto.runner --task-id" <<<"$out"
+stop "$legacy"
 
 # A shell that merely names the runner is not running it. This is the case
 # `pgrep -f` got wrong: it matches the command line of whatever runs the
@@ -77,7 +90,7 @@ stop "$staged"
 # The loop is load-bearing: `bash -c` with a single simple command execs it
 # and the shell's own argv — comment included — disappears, so the fixture
 # would pass against any implementation.
-bash -c 'while :; do sleep 1; done # -m ristretto.runner --task-id t_notreal' &
+bash -c 'while :; do sleep 1; done # -m cuzam.runner --task-id t_notreal' &
 mentioner=$!
 started="$started $mentioner"
 sleep 0.4

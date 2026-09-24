@@ -15,7 +15,7 @@ open('$logs/big.log','w').write('noise\n' * 200000)
 open('$logs/small.log','w').write('keep me\n')
 "
 before_inode="$(ls -i "$logs/big.log" | awk '{print $1}')"
-out="$(RISTRETTO_LOG_DIR=$logs RISTRETTO_LOG_MAX_BYTES=1048576 bash "$script" 2>&1)"
+out="$(CUZAM_LOG_DIR=$logs CUZAM_LOG_MAX_BYTES=1048576 bash "$script" 2>&1)"
 
 t "oversized log is trimmed"        "[ \$(wc -c < \"$logs/big.log\") -lt 1048576 ]"
 t "trim is reported"                "echo '$out' | grep -q 'big.log'"
@@ -27,11 +27,11 @@ t "the tail is what survives"       "tail -1 '$logs/big.log' | grep -q noise"
 t "no leftover temp files"          "[ -z \"\$(ls '$logs' | grep -c '\.trim\.' | grep -v '^0$')\" ]"
 
 # A missing directory is a no-op, not a crash: this runs from cron.
-out2="$(RISTRETTO_LOG_DIR=$tmp/absent bash "$script" 2>&1)"; rc2=$?
+out2="$(CUZAM_LOG_DIR=$tmp/absent bash "$script" 2>&1)"; rc2=$?
 t "missing log dir exits 0"         "[ $rc2 -eq 0 ]"
 t "missing log dir says so"         "echo '$out2' | grep -qi 'no log directory'"
 
-out3="$(RISTRETTO_LOG_DIR=$logs RISTRETTO_LOG_MAX_BYTES=999999999 bash "$script" 2>&1)"
+out3="$(CUZAM_LOG_DIR=$logs CUZAM_LOG_MAX_BYTES=999999999 bash "$script" 2>&1)"
 t "nothing oversized is a no-op"    "echo '$out3' | grep -qi 'nothing over'"
 
 rm -rf "$tmp"

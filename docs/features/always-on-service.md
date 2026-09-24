@@ -18,11 +18,11 @@ non_goals:
 
 ## Summary
 
-The gateway can run as a background launchd service so Ris continues after terminal closure. Wake management remains a separate explicit user choice.
+The gateway can run as a background launchd service so Zam continues after terminal closure. Wake management remains a separate explicit user choice.
 
 ## Behavior
 
-On macOS, `hermes gateway install` creates a launchd service that survives terminal closure. Ristretto does not change `pmset`; users who need an always-awake workstation must choose and manage that separately.
+On macOS, `hermes gateway install` creates a launchd service that survives terminal closure. Cuzam does not change `pmset`; users who need an always-awake workstation must choose and manage that separately.
 
 ## Out of scope
 
@@ -40,7 +40,7 @@ None.
 
 ## It deploys itself
 
-The service runs with `--reload`, watching the `ristretto` package only.
+The service runs with `--reload`, watching the `cuzam` package only.
 Editing docs or tests does not bounce a server someone is reading; changing
 the code does.
 

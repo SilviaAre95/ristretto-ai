@@ -3,13 +3,13 @@
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-config_dir="${RISTRETTO_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/ristretto}"
-bin_dir="${RISTRETTO_BIN_DIR:-$HOME/.local/bin}"
+config_dir="${CUZAM_CONFIG_DIR:-${RISTRETTO_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/cuzam}}"
+bin_dir="${CUZAM_BIN_DIR:-${RISTRETTO_BIN_DIR:-$HOME/.local/bin}}"
 config="$config_dir/config.yaml"
-link="$bin_dir/ristretto"
-target="$repo/.venv/bin/ristretto"
+link="$bin_dir/cuzam"
+target="$repo/.venv/bin/cuzam"
 
-if [ "${RISTRETTO_SKIP_SETUP:-0}" != "1" ]; then
+if [ "${CUZAM_SKIP_SETUP:-${RISTRETTO_SKIP_SETUP:-0}}" != "1" ]; then
   bash "$repo/scripts/setup-dev.sh"
 fi
 if [ ! -x "$target" ]; then
@@ -20,7 +20,7 @@ fi
 
 mkdir -p "$config_dir" "$bin_dir"
 if [ ! -e "$config" ]; then
-  cp "$repo/ristretto.yaml" "$config"
+  cp "$repo/cuzam.yaml" "$config"
   chmod 0600 "$config"
   echo "Created user configuration: $config"
 else
@@ -42,6 +42,6 @@ else
 fi
 
 "$target" --config "$config" validate
-echo "Installed Ristretto CLI: $link"
-echo "Next: edit $config, then run: ristretto doctor"
+echo "Installed Cuzam CLI: $link"
+echo "Next: edit $config, then run: cuzam doctor"
 echo "Hermes skills and services were not changed."

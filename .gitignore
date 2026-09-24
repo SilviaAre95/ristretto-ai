@@ -7,7 +7,7 @@ secrets/
 *.pem
 *.key
 .venv
-# Run worktrees. Hermes and `ristretto launch` both cut them here, and a
+# Run worktrees. Hermes and `cuzam launch` both cut them here, and a
 # stray `git add -A` in the primary checkout would commit one as a gitlink.
 .worktrees/
 __pycache__/
@@ -16,7 +16,7 @@ __pycache__/
 dist/
 build/
 *.egg-info/
-.ristretto/
+.cuzam/
 
 # Local planning and agent-run artifacts
 HANDOVER.md

@@ -24,11 +24,11 @@ non_goals:
 
 ## Summary
 
-Ris delegates coding work to a selected, supervised flow that works on a branch and opens a PR. `classic` uses Claude Code; configurable flows assign Claude Code, a local model, or Codex independently by stage.
+Zam delegates coding work to a selected, supervised flow that works on a branch and opens a PR. `classic` uses Claude Code; configurable flows assign Claude Code, a local model, or Codex independently by stage.
 
 ## Behavior
 
-The selected flow never pushes to the base branch unattended. Risky steps pass through the approval loop. `classic` resumes a cloud session per worktree after worker crashes; multi-stage flows exchange explicit artifacts between fresh isolated processes. When ready, Ris posts the exact PR URL for user review and merge.
+The selected flow never pushes to the base branch unattended. Risky steps pass through the approval loop. `classic` resumes a cloud session per worktree after worker crashes; multi-stage flows exchange explicit artifacts between fresh isolated processes. When ready, Zam posts the exact PR URL for user review and merge.
 
 ## Out of scope
 

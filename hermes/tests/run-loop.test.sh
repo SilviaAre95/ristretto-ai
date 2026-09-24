@@ -23,7 +23,7 @@ echo "\$@" > "$FAKEBIN/argv"
 echo "\${ANTHROPIC_BASE_URL:-none}" > "$FAKEBIN/baseurl"
 sleep 2
 [ -f "$PID_DIR/t-run.json" ] && echo yes > "$FAKEBIN/record_existed"
-[ -s ".cc-ris-session" ] && cp ".cc-ris-session" "$FAKEBIN/session_during_run"
+[ -s ".cc-zam-session" ] && cp ".cc-zam-session" "$FAKEBIN/session_during_run"
 exit 7
 EOF
 chmod +x "$FAKEBIN/claude"
@@ -39,7 +39,7 @@ t "permission mode pinned"          "grep -q -- '--permission-mode acceptEdits' 
 t "issue key passed to /loop-dev"   "grep -q '/harness:loop-dev PROJ-00' '$FAKEBIN/argv'"
 t "fresh run gets a session id"     "grep -q -- '--session-id' '$FAKEBIN/argv'"
 t "session file exists during run"  "[ -s '$FAKEBIN/session_during_run' ]"
-t "failed run keeps session id"     "[ -s '$WT/.cc-ris-session' ]"
+t "failed run keeps session id"     "[ -s '$WT/.cc-zam-session' ]"
 t "no dangerous flag anywhere"      "! grep -rq 'dangerously-skip-permissions' '$ROOT/skills'"
 t "no --model flag without arg"     "! grep -q -- '--model' '$FAKEBIN/argv'"
 
@@ -48,7 +48,7 @@ WT_M="$(mktemp -d)"; cd "$WT_M"
 "$SCRIPT" t-model PROJ-02 sonnet >/dev/null 2>&1
 t "valid model appended"            "grep -q -- '--model sonnet' '$FAKEBIN/argv'"
 t "cloud tier: no base_url export"  "grep -q '^none$' '$FAKEBIN/baseurl'"
-rm -f "$WT_M/.cc-ris-session"
+rm -f "$WT_M/.cc-zam-session"
 "$SCRIPT" t-model2 PROJ-03 'opus; rm -rf /' >/dev/null 2>&1
 t "junk model dropped (allowlist)"  "! grep -q -- '--model' '$FAKEBIN/argv'"
 
@@ -79,13 +79,13 @@ exit 0
 EOF
 chmod +x "$FAKEBIN/claude"
 WT_R="$(mktemp -d)"; cd "$WT_R"
-printf '%s\n' '11111111-1111-1111-1111-111111111111' > .cc-ris-session
+printf '%s\n' '11111111-1111-1111-1111-111111111111' > .cc-zam-session
 "$SCRIPT" t-resume PROJ-09 >/dev/null 2>&1; RC=$?
 t "resume: succeeds"                 "[ $RC -eq 0 ]"
 t "resume: existing id reused"       "grep -q -- '--resume 11111111-1111-1111-1111-111111111111' '$FAKEBIN/argv'"
 t "resume: continuation prompt"      "grep -q 'continue: finish the armed dev loop for PROJ-09' '$FAKEBIN/argv'"
 t "resume: does not re-invoke skill" "! grep -q '/harness:loop-dev' '$FAKEBIN/argv'"
-t "success removes session file"     "[ ! -e '$WT_R/.cc-ris-session' ]"
+t "success removes session file"     "[ ! -e '$WT_R/.cc-zam-session' ]"
 
 # A quick resume rejection gets one fresh cloud session with a new id.
 cat > "$FAKEBIN/claude" <<EOF
@@ -97,15 +97,15 @@ EOF
 chmod +x "$FAKEBIN/claude"
 rm -f "$FAKEBIN/argv_log"
 WT_RF="$(mktemp -d)"; cd "$WT_RF"
-printf '%s\n' '22222222-2222-2222-2222-222222222222' > .cc-ris-session
-RIS_RESUME_FAILURE_WINDOW=30 "$SCRIPT" t-resume-fallback PROJ-10 >/dev/null 2>"$FAKEBIN/resume_stderr"; RC=$?
+printf '%s\n' '22222222-2222-2222-2222-222222222222' > .cc-zam-session
+ZAM_RESUME_FAILURE_WINDOW=30 "$SCRIPT" t-resume-fallback PROJ-10 >/dev/null 2>"$FAKEBIN/resume_stderr"; RC=$?
 t "resume fallback: fresh succeeds"  "[ $RC -eq 0 ]"
 t "resume fallback: two cloud calls" "[ \$(wc -l < '$FAKEBIN/argv_log' | tr -d ' ') -eq 2 ]"
 t "resume fallback: resume first"     "sed -n '1p' '$FAKEBIN/argv_log' | grep -q -- '--resume 22222222-2222-2222-2222-222222222222'"
 t "resume fallback: fresh second"    "sed -n '2p' '$FAKEBIN/argv_log' | grep -q -- '--session-id'"
 t "resume fallback: new id used"     "! sed -n '2p' '$FAKEBIN/argv_log' | grep -q '22222222-2222-2222-2222-222222222222'"
 t "resume fallback: announced"       "grep -q 'resume failed quickly' '$FAKEBIN/resume_stderr'"
-t "resume fallback: success cleans"  "[ ! -e '$WT_RF/.cc-ris-session' ]"
+t "resume fallback: success cleans"  "[ ! -e '$WT_RF/.cc-zam-session' ]"
 
 # Session state is local runtime data and must never be staged into a task PR.
 cat > "$FAKEBIN/claude" <<EOF
@@ -117,7 +117,7 @@ WT_G="$(mktemp -d)"
 git -C "$WT_G" init -q
 cd "$WT_G"
 "$SCRIPT" t-ignore PROJ-11 >/dev/null 2>&1
-t "session file is git-excluded"     "git check-ignore -q --no-index .cc-ris-session"
+t "session file is git-excluded"     "git check-ignore -q --no-index .cc-zam-session"
 
 # Claude unavailable (auth/limit): the run fails. It used to re-run once on a
 # local coder; that fallback was removed 2026-09-23 and its absence is pinned
@@ -175,23 +175,23 @@ LINKDIR="$(mktemp -d)/skills/software-development"
 mkdir -p "$LINKDIR"
 ln -s "$(cd -P "$(dirname "$SCRIPT")/.." && pwd -P)" "$LINKDIR/loop-runner"
 LINKED_ROOT="$(cd -P "$LINKDIR/loop-runner/scripts/../../../.." && pwd -P)"
-t "symlinked skill resolves the repo root" "[ -f '$LINKED_ROOT/ristretto/runner.py' ]"
+t "symlinked skill resolves the repo root" "[ -f '$LINKED_ROOT/cuzam/runner.py' ]"
 t "symlinked skill does not resolve to HERMES_HOME" "[ '$LINKED_ROOT' != \"$HOME/.hermes\" ]"
 
 # Regression: a detached worker's PATH finds /usr/bin/python3, which has no
-# PyYAML, so `import ristretto` failed for a missing dependency while the
+# PyYAML, so `import cuzam` failed for a missing dependency while the
 # package itself was reachable. The runner must pick an interpreter that
 # works rather than trusting whatever python3 resolves to.
 REPO_PY="$REPO_ROOT/.venv/bin/python3"
 if [ -x "$REPO_PY" ]; then
-  t "repo venv interpreter can import ristretto" \
-    "PYTHONPATH='$REPO_ROOT' '$REPO_PY' -c 'import ristretto.runner' 2>/dev/null"
+  t "repo venv interpreter can import cuzam" \
+    "PYTHONPATH='$REPO_ROOT' '$REPO_PY' -c 'import cuzam.runner' 2>/dev/null"
   t "run-loop does not hardcode a bare python3 for the runner" \
-    "! grep -qE '^\\s*exec python3 -m ristretto.runner' '$SCRIPT'"
+    "! grep -qE '^\\s*exec python3 -m cuzam.runner' '$SCRIPT'"
   t "run-loop selects an interpreter that can import" \
-    "grep -q 'ris_python' '$SCRIPT'"
-  t "an explicit RIS_PYTHON override is honoured" \
-    "grep -q 'RIS_PYTHON' '$SCRIPT'"
+    "grep -q 'zam_python' '$SCRIPT'"
+  t "an explicit ZAM_PYTHON override is honoured" \
+    "grep -q 'ZAM_PYTHON' '$SCRIPT'"
 fi
 
 # Regression: the loop must NOT detach. Hermes supervises a task by the
@@ -203,7 +203,7 @@ t "run-loop does not fork itself into the background" \
   "! grep -q 'os.fork' '$SCRIPT'"
 t "run-loop does not start a new session" \
   "! grep -q 'os.setsid\|[^a-z]setsid ' '$SCRIPT'"
-t "no re-exec guard is left behind" "! grep -q 'RIS_DETACHED' '$SCRIPT'"
+t "no re-exec guard is left behind" "! grep -q 'ZAM_DETACHED' '$SCRIPT'"
 
 # The runner's exit status must survive the tee. Reporting a failed flow as a
 # success is the one outcome this script may never produce.
@@ -231,13 +231,13 @@ t "PATH is repaired before any tool is invoked" \
   "[ -n '$PATH_LINE' ] && [ -n '$REAP_LINE' ] && [ '$PATH_LINE' -lt '$REAP_LINE' ]"
 
 
-RIS_PYTHON="$FAKEBIN/python3" "$SCRIPT" t-flow PROJ-12 --flow full >/dev/null 2>&1; RC=$?
+ZAM_PYTHON="$FAKEBIN/python3" "$SCRIPT" t-flow PROJ-12 --flow full >/dev/null 2>&1; RC=$?
 t "custom flow: succeeds"             "[ $RC -eq 0 ]"
-t "custom flow: runner module"        "grep -q -- '-m ristretto.runner' '$FAKEBIN/python_argv'"
+t "custom flow: runner module"        "grep -q -- '-m cuzam.runner' '$FAKEBIN/python_argv'"
 t "custom flow: passes selection"     "grep -q -- '--flow full' '$FAKEBIN/python_argv'"
 t "custom flow: passes task and issue" "grep -q -- '--task-id t-flow --issue PROJ-12' '$FAKEBIN/python_argv'"
 t "custom flow: repo on PYTHONPATH"    "grep -Fq '$REPO_ROOT' '$FAKEBIN/pythonpath'"
-t "custom flow: no session state"     "[ ! -e '$WT_FLOW/.cc-ris-session' ]"
+t "custom flow: no session state"     "[ ! -e '$WT_FLOW/.cc-zam-session' ]"
 rm -f "$FAKEBIN/python3"
 
 # Test: child exits immediately (before ps can capture lstart)

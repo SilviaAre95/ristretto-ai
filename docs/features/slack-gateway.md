@@ -20,16 +20,16 @@ non_goals:
 
 ## Summary
 
-Ris talks to one configured user in Slack over Socket Mode, restricted by member ID. No public endpoint is exposed, and non-allowlisted users cannot invoke or receive responses from the assistant.
+Zam talks to one configured user in Slack over Socket Mode, restricted by member ID. No public endpoint is exposed, and non-allowlisted users cannot invoke or receive responses from the assistant.
 
 ## Behavior
 
-Ris connects to Slack over Socket Mode, so no public URL or inbound webhook is required. For each DM or invited-channel mention, the gateway checks the sender against `SLACK_ALLOWED_USERS`. Non-allowlisted events are ignored; the configured user receives a response in the same DM or thread.
+Zam connects to Slack over Socket Mode, so no public URL or inbound webhook is required. For each DM or invited-channel mention, the gateway checks the sender against `SLACK_ALLOWED_USERS`. Non-allowlisted events are ignored; the configured user receives a response in the same DM or thread.
 
 ## Out of scope
 
 - NOT public/multi-user: V0 serves one explicitly allowlisted user. Multi-user support would require per-user authorization, scoping, and audit trails.
-- NOT other chat platforms: Slack is the only chat integration. A Telegram ops lane existed and was removed — its rejected token retried every five minutes and took the shared gateway adapters down with it, which is why Slack never received an inbound message. Conversation with Ris also happens in the fleet view; see `fleet-view`.
+- NOT other chat platforms: Slack is the only chat integration. A Telegram ops lane existed and was removed — its rejected token retried every five minutes and took the shared gateway adapters down with it, which is why Slack never received an inbound message. Conversation with Zam also happens in the fleet view; see `fleet-view`.
 - NOT unauthenticated access: every inbound event is checked against the allowlist before any processing occurs; there is no anonymous or guest mode.
 
 ## Open questions

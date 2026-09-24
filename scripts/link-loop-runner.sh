@@ -9,11 +9,11 @@
 # that hour runs whatever branch happens to be out and whatever edit was
 # half-finished when it started.
 #
-# That is the exact problem ristretto/runtime.py was written to solve, and it
+# That is the exact problem cuzam/runtime.py was written to solve, and it
 # solved it for the Python half only: launch.py hands the staged runner a
 # pinned interpreter, but the classic path never touches Python, so nothing
 # pinned it. This closes that hole by pointing the skill itself at
-# ~/.ristretto/runtime, so `make install-runtime` moves the classic and staged
+# ~/.cuzam/runtime, so `make install-runtime` moves the classic and staged
 # paths together and flow.json's recorded commit is true for both.
 #
 # Falls back to the working checkout when no runtime is pinned yet, because a
@@ -21,10 +21,10 @@
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-hermes_home="${RISTRETTO_HERMES_HOME:-${HERMES_HOME:-$HOME/.hermes}}"
+hermes_home="${CUZAM_HERMES_HOME:-${RISTRETTO_HERMES_HOME:-${HERMES_HOME:-$HOME/.hermes}}}"
 # eval so a configured ~ expands the way events.state_home() expands it, the
 # same reason install-runtime.sh does it.
-eval runtime="${RISTRETTO_STATE_HOME:-$HOME/.ristretto}/runtime"
+eval runtime="${CUZAM_STATE_HOME:-${RISTRETTO_STATE_HOME:-$HOME/.cuzam}}/runtime"
 
 destination="$hermes_home/skills/software-development/loop-runner"
 repo_source="$repo/hermes/skills/loop-runner"

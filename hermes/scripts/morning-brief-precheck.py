@@ -36,10 +36,15 @@ def parse_args() -> argparse.Namespace:
 
 
 def configured_team() -> str:
-    if os.environ.get("RISTRETTO_LINEAR_TEAM"):
-        return os.environ["RISTRETTO_LINEAR_TEAM"]
+    # The fallback is spelled out rather than imported from cuzam.env: this
+    # script is copied into ~/.hermes/scripts and runs under whatever
+    # interpreter Hermes' cron has, so it imports nothing but the standard
+    # library. Drop the old name in 0.3.0.
+    for name in ("CUZAM_LINEAR_TEAM", "RISTRETTO_LINEAR_TEAM"):
+        if os.environ.get(name):
+            return os.environ[name]
     result = subprocess.run(
-        ["ristretto", "instance", "get", "linear_team"],
+        ["cuzam", "instance", "get", "linear_team"],
         text=True,
         capture_output=True,
         check=False,
@@ -47,7 +52,7 @@ def configured_team() -> str:
     team = result.stdout.strip()
     if result.returncode != 0 or not team:
         raise RuntimeError(
-            "Linear team is not configured; run ristretto configure --linear-team <KEY>"
+            "Linear team is not configured; run cuzam configure --linear-team <KEY>"
         )
     return team
 
@@ -61,11 +66,11 @@ def fetch_issues() -> list[dict[str, Any]]:
     when an engine upgrade renames or removes one, and there is no
     `hermes mcp call` to reach it as an interface instead. So the brief now
     shells the same CLI it already uses for the team key, and that command
-    runs the GraphQL query in `ristretto/context.py`. One Linear client, one
+    runs the GraphQL query in `cuzam/context.py`. One Linear client, one
     process boundary, no internals.
     """
     result = subprocess.run(
-        ["ristretto", "issues", "--team", configured_team()],
+        ["cuzam", "issues", "--team", configured_team()],
         text=True,
         capture_output=True,
         check=False,
@@ -76,20 +81,20 @@ def fetch_issues() -> list[dict[str, Any]]:
     # into a bare JSONDecodeError and throw away the stderr that says why.
     if result.returncode != 0:
         detail = stdout or stderr or "no output"
-        raise RuntimeError(f"ristretto issues failed (rc={result.returncode}): {detail}")
+        raise RuntimeError(f"cuzam issues failed (rc={result.returncode}): {detail}")
     if not stdout:
-        raise RuntimeError(f"ristretto issues produced nothing: {stderr}")
+        raise RuntimeError(f"cuzam issues produced nothing: {stderr}")
     try:
         data: Any = json.loads(stdout)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"ristretto issues did not return JSON: {exc}") from exc
+        raise RuntimeError(f"cuzam issues did not return JSON: {exc}") from exc
     if not isinstance(data, dict):
-        raise RuntimeError("ristretto issues returned an unexpected response")
+        raise RuntimeError("cuzam issues returned an unexpected response")
     if data.get("error"):
         raise RuntimeError(str(data["error"]))
     issues = data.get("issues")
     if not isinstance(issues, list):
-        raise RuntimeError("ristretto issues response has no issues list")
+        raise RuntimeError("cuzam issues response has no issues list")
     return [item for item in issues if isinstance(item, dict)]
 
 

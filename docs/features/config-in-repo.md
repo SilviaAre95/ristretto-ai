@@ -20,16 +20,16 @@ non_goals:
 
 ## Summary
 
-Public Hermes baselines and Ristretto behavior are versioned in the repository. The installer copies or links only managed assets while user configuration, credentials, runtime state, and jobs remain local.
+Public Hermes baselines and Cuzam behavior are versioned in the repository. The installer copies or links only managed assets while user configuration, credentials, runtime state, and jobs remain local.
 
 ## Behavior
 
-Ristretto's own configuration is layered rather than copied. `providers` and
-`flows` describe how Ristretto works and are read from the shipped
-`ristretto.yaml`; the user's `~/.config/ristretto/config.yaml` holds only what
+Cuzam's own configuration is layered rather than copied. `providers` and
+`flows` describe how Cuzam works and are read from the shipped
+`cuzam.yaml`; the user's `~/.config/cuzam/config.yaml` holds only what
 describes their machine — `instance`, `repositories`, and any deliberate
 override. A user entry replaces the shipped one by name, so overriding a
-single provider does not pin the rest. `ristretto migrate` reports which
+single provider does not pin the rest. `cuzam migrate` reports which
 entries a pre-existing config is holding a private copy of, shows the
 field-level differences for those that diverge, and rewrites the file with
 `--force` (`--adopt` takes the shipped version for the diverging ones too).
@@ -38,7 +38,7 @@ so it is reported rather than guessed at.
 
 `hermes/SOUL.md`, `hermes/config.yaml`, skills, scripts, and `jobs.example.json` are public inputs. Existing user config and persona are never overwritten. Secrets remain only in `~/.hermes/.env`. Live cron state is never tracked.
 
-Three delivery mechanisms, chosen by what happens if the file changes under something already running: skills and plugins are **linked** as managed code, because they are read inside a turn someone is watching and drift from the CLI is the risk; cron scripts and the agent hook are **copied**, because Hermes requires scripts inside `~/.hermes/scripts` and fingerprints an approved hook; and the `loop-runner` skill is **pinned**, linked to `~/.ristretto/runtime` rather than the working checkout, because `run-loop.sh` is the classic loop and runs unattended for an hour. README has the diagram.
+Three delivery mechanisms, chosen by what happens if the file changes under something already running: skills and plugins are **linked** as managed code, because they are read inside a turn someone is watching and drift from the CLI is the risk; cron scripts and the agent hook are **copied**, because Hermes requires scripts inside `~/.hermes/scripts` and fingerprints an approved hook; and the `loop-runner` skill is **pinned**, linked to `~/.cuzam/runtime` rather than the working checkout, because `run-loop.sh` is the classic loop and runs unattended for an hour. README has the diagram.
 
 The installer records which template version seeded the user's persona and config (`~/.hermes/.template-seeds`). `make update` pulls the release, re-runs the installers, reports — never merges — template drift via `scripts/template-drift.sh`, and restarts the gateway; the user reviews reported drift against the changelog's Upgrade notes and acknowledges with `--ack`.
 

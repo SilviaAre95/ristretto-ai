@@ -4,12 +4,12 @@ status: active
 tags: [project/ristretto-ai, system/dev]
 created: 2026-07-02
 updated: 2026-07-02
-summary: "Readable guide to the generic Ristretto Slack app manifest."
+summary: "Readable guide to the generic Cuzam Slack app manifest."
 ---
 
-# Ristretto AI — Slack App Manifest
+# Cuzam AI — Slack App Manifest
 
-The uploadable manifest lives at `slack/ristretto-slack-manifest.json`.
+The uploadable manifest lives at `slack/cuzam-slack-manifest.json`.
 
 ## How to use
 1. Go to <https://api.slack.com/apps> → **Create New App** → **From an app manifest**.
@@ -22,13 +22,13 @@ The uploadable manifest lives at `slack/ristretto-slack-manifest.json`.
 ```json
 {
   "display_information": {
-    "name": "Ristretto Ops",
-    "description": "Ristretto AI — personal ops assistant (Hermes Agent gateway)",
+    "name": "Cuzam Ops",
+    "description": "Cuzam AI — personal ops assistant (Hermes Agent gateway)",
     "background_color": "#1a1d29"
   },
   "features": {
     "bot_user": {
-      "display_name": "RistrettoOps",
+      "display_name": "CuzamOps",
       "always_online": true
     }
   },

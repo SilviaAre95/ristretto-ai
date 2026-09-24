@@ -24,8 +24,8 @@ non_goals:
 
 ## Summary
 
-`ristretto dash` serves a read-only view of every run across every project,
-joining Hermes' task board to Ristretto's pipeline event log on task id. It
+`cuzam dash` serves a read-only view of every run across every project,
+joining Hermes' task board to Cuzam's pipeline event log on task id. It
 binds to this machine's Tailscale address, so a phone or iPad on the tailnet
 can reach it and nothing else can.
 
@@ -45,7 +45,7 @@ something changed, so a quiet fleet costs a query and sends nothing.
 The design called for a heartbeat-age rule, but Hermes exposes no
 `last_heartbeat_at` through its CLI, and reaching into `kanban.db` would break
 the boundary the event spine deliberately keeps. Liveness is therefore derived
-from the newest signal Ristretto actually has — a recorded pipeline event, or
+from the newest signal Cuzam actually has — a recorded pipeline event, or
 failing that the run's start — and every card states which one it used. A run
 that is active with no signal for fifteen minutes is shown as stalled.
 
@@ -75,7 +75,7 @@ launching one spends tokens and writes code to a branch, so it was not added
 by analogy to the other two — it has a validated form, an idempotency key, and
 a preflight warning when the verify gate has not been proven.
 
-### Asking Ris
+### Asking Zam
 
 `POST /chat` reaches the assistant's own loop — conversation state, its own
 memory and its own tool boundary — and the dashboard is one surface onto it
@@ -97,7 +97,7 @@ continues across requests instead of restarting each time.
 
 The design called for the web process to run as an unprivileged `_risdash`.
 It does not, because the split cannot work here and pretending otherwise
-would be worse than not doing it: `ris-stop.sh` has to signal a worker owned
+would be worse than not doing it: `zam-stop.sh` has to signal a worker owned
 by the primary user, and one user cannot kill another's processes. Bridging
 that needs a sudo rule letting the web user run a script as the owner, which
 is itself an escalation path — more attack surface than the split removes.

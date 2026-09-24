@@ -1,6 +1,6 @@
-# Contributing to Ristretto
+# Contributing to Cuzam
 
-Ristretto is a public, open-source project. All changes travel supervised
+Cuzam is a public, open-source project. All changes travel supervised
 feature branches and pull requests — never direct pushes to `main`.
 
 ## Development workflow
@@ -31,7 +31,7 @@ See [docs/development.md](docs/development.md) for the complete setup.
 Use concise conventional-style subjects such as:
 
 ```text
-feat(ris): add configurable coding pipeline
+feat(zam): add configurable coding pipeline
 fix(cron): suppress unchanged morning brief
 docs: explain local development setup
 ```

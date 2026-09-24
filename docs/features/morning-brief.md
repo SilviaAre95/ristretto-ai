@@ -25,11 +25,11 @@ An 8am cron posts a prioritized, project-grouped board brief to the configured S
 
 ## Behavior
 
-Every day at 08:00, a precheck snapshots the configured open board and compares it with the previous snapshot. It emits a compact delta plus Urgent, High, and In Progress issues, or exactly `NO_CHANGES`. Ris composes the brief and asks what the user wants to work on. `[SILENT]` suppresses unchanged delivery.
+Every day at 08:00, a precheck snapshots the configured open board and compares it with the previous snapshot. It emits a compact delta plus Urgent, High, and In Progress issues, or exactly `NO_CHANGES`. Zam composes the brief and asks what the user wants to work on. `[SILENT]` suppresses unchanged delivery.
 
 ## Out of scope
 
-- NOT acting on the board automatically: the brief is read-only reporting — Ris does not create, update, or close Linear issues as part of generating or sending it.
+- NOT acting on the board automatically: the brief is read-only reporting — Zam does not create, update, or close Linear issues as part of generating or sending it.
 - NOT posting when nothing is new: rather than posting a noisy "nothing to report" message every day, the brief is skipped (marked `[SILENT]`) when there's no new signal.
 
 ## Open questions

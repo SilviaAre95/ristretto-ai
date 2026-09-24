@@ -1,4 +1,4 @@
-# UI Gadget Concept: Ristretto Shot
+# UI Gadget Concept: Cuzam Shot
 
 ## Recommendation
 
@@ -7,7 +7,7 @@ Slack remains the conversational surface; the gadget is the fast operational
 control surface for status, approvals, and model flows.
 
 ```text
-┌─ ☕ Ris ─────────────────────────────┐
+┌─ ☕ Zam ─────────────────────────────┐
 │ ● Running        Local brain: Qwen │
 │                                      │
 │ Current work                         │
@@ -46,9 +46,9 @@ control surface for status, approvals, and model flows.
 The editor should show a simple stage graph: `Plan → Build → Review → Verify →
 PR`. Each stage chooses a configured provider/model, timeout, mutation flag,
 declared artifact inputs/output, and fallback. It reads and writes schema
-version 1 from `ristretto.yaml`; saving must pass the same validation as
-`ristretto validate`. Users can add stages and save custom presets without
+version 1 from `cuzam.yaml`; saving must pass the same validation as
+`cuzam validate`. Users can add stages and save custom presets without
 editing YAML, while an advanced view exposes the generated configuration.
 
-The gadget must talk to a local Ristretto/Hermes API and contain no provider or
+The gadget must talk to a local Cuzam/Hermes API and contain no provider or
 Slack credentials itself.

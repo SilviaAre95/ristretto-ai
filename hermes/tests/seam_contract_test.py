@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""The contract between Nemo and wayworks.
+"""The contract between Zam and wayworks.
 
-Nemo reads convention files that wayworks' harness-init writes. They live in
+Zam reads convention files that wayworks' harness-init writes. They live in
 separate repositories with separate suites, so a rename on either side breaks
 the other silently. This is the one test that spans the boundary.
 
@@ -15,7 +15,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
-from ristretto import seam
+from cuzam import seam
 
 # wayworks is expected beside ristretto-ai in the same parent directory.
 WAYWORKS = Path(__file__).resolve().parents[2].parent / "wayworks"
@@ -23,16 +23,16 @@ HARNESS_INIT = WAYWORKS / "plugins" / "harness" / "commands" / "harness-init.md"
 
 
 class SeamDeclarationTest(unittest.TestCase):
-    """Nemo's side: the names are declared once and used from there."""
+    """Zam's side: the names are declared once and used from there."""
 
     def test_preflight_uses_the_declared_names(self) -> None:
-        from ristretto import preflight
+        from cuzam import preflight
         self.assertIs(preflight.GATE_FILES, seam.GATE_FILES)
 
     def test_the_verify_gate_name_is_not_re_hardcoded(self) -> None:
         # A stray "\.cc-verify" literal is how the single source of truth
         # quietly stops being single.
-        src = (Path(__file__).resolve().parents[2] / "ristretto").rglob("*.py")
+        src = (Path(__file__).resolve().parents[2] / "cuzam").rglob("*.py")
         offenders = []
         for path in src:
             if path.name == "seam.py":
@@ -45,7 +45,7 @@ class SeamDeclarationTest(unittest.TestCase):
 
 @unittest.skipUnless(HARNESS_INIT.is_file(), "wayworks not checked out as a sibling")
 class WayworksContractTest(unittest.TestCase):
-    """wayworks' side: harness-init still creates the names Nemo reads."""
+    """wayworks' side: harness-init still creates the names Zam reads."""
 
     def setUp(self) -> None:
         self.init = HARNESS_INIT.read_text()

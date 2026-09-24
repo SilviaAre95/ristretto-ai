@@ -52,13 +52,13 @@ t "no run marker: tells the worker what to run" "printf '%s' '$OUT' | grep -q ru
 t "no run marker: says to revert its own edits" "printf '%s' '$OUT' | grep -q revert"
 
 # --- the marker a real loop leaves behind is accepted -------------------------
-mkdir -p "$WT/.ristretto/runs/t_known"
-echo '{}' > "$WT/.ristretto/runs/t_known/loop.json"
+mkdir -p "$WT/.cuzam/runs/t_known"
+echo '{}' > "$WT/.cuzam/runs/t_known/loop.json"
 OUT="$(run_guard t_known "$WT")"
 t "run marker present: completion is allowed"  "! blocked '$OUT'"
 
 # --- a marker for a different task does not count ----------------------------
-WT2="$(mktemp -d)"; mkdir -p "$WT2/.ristretto/runs/t_other"
+WT2="$(mktemp -d)"; mkdir -p "$WT2/.cuzam/runs/t_other"
 OUT="$(run_guard t_known "$WT2")"
 t "another task's marker does not count"       "blocked '$OUT'"
 
