@@ -194,6 +194,45 @@ fi
 step "State home"
 if [ -d "$old_state" ]; then
   mkdir -p "$new_state"
+
+  # Collisions are checked first, across everything, and they are fatal.
+  #
+  # Warning and carrying on was the original behaviour and it was wrong in
+  # the worst available way: the migration would report success, the install
+  # would come up pointing at whatever was already under the new name, and
+  # every surface would agree that nothing had ever happened. That is the
+  # same silent-empty-store failure `cuzam/env.py` exists to prevent,
+  # reached through a different door.
+  #
+  # It is not hypothetical. Before this was caught, `make check` left an
+  # empty `approvals.db` and `events.db` in the real state home, because the
+  # dashboard route tests rendered the fleet without overriding it — which
+  # would have stranded 73 KB of approvals and 60 KB of events here.
+  #
+  # Checked in a pass of its own so nothing has moved when it refuses: a
+  # half-migrated state home is worse than one that has not started.
+  collisions=""
+  for path in "$old_state"/* "$old_state"/.[!.]*; do
+    [ -e "$path" ] || continue
+    name="$(basename "$path")"
+    [ "$name" = "runtime" ] && continue
+    [ -e "$new_state/$name" ] && collisions="$collisions $name"
+  done
+  if [ -n "$collisions" ]; then
+    echo "migrate: $new_state already holds state this would overwrite" >&2
+    for name in $collisions; do
+      printf '  %-20s old %8s bytes   new %8s bytes\n' \
+        "$name" \
+        "$(wc -c < "$old_state/$name" 2>/dev/null || echo '?')" \
+        "$(wc -c < "$new_state/$name" 2>/dev/null || echo '?')" >&2
+    done
+    echo "  Refusing to choose between them — approvals.db and events.db are" >&2
+    echo "  the only irreplaceable state here, and picking the wrong copy is" >&2
+    echo "  silent. Keep the one you want, remove the other, and re-run:" >&2
+    echo "    ls -la $old_state $new_state" >&2
+    exit 1
+  fi
+
   for path in "$old_state"/* "$old_state"/.[!.]*; do
     [ -e "$path" ] || continue
     name="$(basename "$path")"
@@ -204,10 +243,6 @@ if [ -d "$old_state" ]; then
     if [ "$name" = "runtime" ]; then
       rm -rf "$path"
       done_ "deleted runtime/ (rebuilt by make install-runtime, never moved)"
-      continue
-    fi
-    if [ -e "$new_state/$name" ]; then
-      warn "$name already exists in $new_state, left the old copy at $path"
       continue
     fi
     mv "$path" "$new_state/$name"

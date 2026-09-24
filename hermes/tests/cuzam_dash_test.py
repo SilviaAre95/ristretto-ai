@@ -7,6 +7,7 @@ dependencies, and skip cleanly when those are absent.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import tempfile
 import time
@@ -176,6 +177,20 @@ class RunTests(unittest.TestCase):
 @unittest.skipUnless(WEB, "dashboard extras not installed")
 class RouteTests(unittest.TestCase):
     def setUp(self) -> None:
+        # Point the state home somewhere disposable BEFORE the first request.
+        # Rendering the fleet opens the event log and the approvals store, and
+        # opening them creates them — so without this the suite reaches into
+        # the developer's live `~/.cuzam` and leaves an empty pair of
+        # databases there. That went unnoticed for as long as the directory
+        # already existed; the rename created a fresh one and made it visible,
+        # where it would then have collided with the real state the migration
+        # was trying to move in.
+        home = tempfile.TemporaryDirectory()
+        self.addCleanup(home.cleanup)
+        state = mock.patch.dict(os.environ, {"CUZAM_STATE_HOME": home.name})
+        state.start()
+        self.addCleanup(state.stop)
+
         self.client = TestClient(app)
         patcher = mock.patch.object(data, "board", return_value=[task()])
         patcher.start()
