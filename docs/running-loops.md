@@ -9,7 +9,7 @@ something is known to be broken it says so rather than describing the intent.
 **Dispatched.** `cuzam launch <project> <issue>` creates a Hermes task,
 claims it, cuts a worktree at `origin/<base>`, and starts the flow as a
 detached process. No worker agent is involved: the board keeps the card and
-the lease, and the runner heartbeats and reports its own outcome.
+the lease, and the flow reports its own outcome.
 
 It used to hand the task to an agent profile, which meant a language model was
 the thing running a script and waiting for it. That needs no judgement, and
@@ -19,6 +19,13 @@ as a hang. Hermes' own supervision was never the problem; it leases a claim,
 watches a pid and expects a heartbeat, all deterministic. The mistake was
 putting deterministic work inside an agent turn.
 
+`classic` was the last flow that still worked that way, and it stopped on
+2026-09-24. It is spawned here too, as `run-loop.sh` rather than as the
+multi-stage runner — which refuses it — with `--model <tier>` for the one
+flow that takes one. Two things follow. A classic run no longer dies when the
+gateway restarts, because no worker holds it. And nothing is retried on crash:
+that went with the worker, and `cuzam relaunch` is the deliberate replacement.
+
 **Standalone.** You run the flow yourself, in a directory you chose:
 
 ```bash
@@ -26,16 +33,30 @@ putting deterministic work inside an agent turn.
   --task-id t_anything --issue XARI-123 --flow full
 ```
 
+For `classic` the standalone form is the script, since the staged runner
+refuses that flow:
+
+```bash
+bash ~/.hermes/skills/software-development/loop-runner/scripts/run-loop.sh \
+  t_anything XARI-123 --flow classic
+```
+
+Run it from the worktree you want it to work in. It is no longer an agent-facing
+skill — the directory is still linked there because `zam-stop.sh` finds
+`reap.sh` through that path, but its `SKILL.md` is gone and no agent is given
+it.
+
 `--task-id` is only a label. It names the artifact directory and keys your
 approvals; **it does not have to exist on any board.** Nothing about the flow
 needs Hermes.
 
-Standalone is worth knowing about because the two modes fail very differently.
-The flow runner is reliable — it produced the work in kaffecard #24 and #25.
-The supervision layer above it is where every failure on 2026-09-10 came from:
-a worker agent that read a silent stage as a hang and killed three healthy runs.
-Standalone removes that layer entirely; the flow is an ordinary subprocess and
-nothing is watching it but you.
+Standalone is worth knowing about because the flow runner has always been the
+reliable half — it produced the work in kaffecard #24 and #25 — while every
+failure on 2026-09-10 came from the agent supervising it, which read a silent
+stage as a hang and killed three healthy runs. That layer is gone from the
+dispatched path too as of 2026-09-24, so the difference is now smaller than it
+was: standalone means the run has no board entry, no claim and no artifact
+directory you did not choose, and nothing watching it but you.
 
 It also works in repositories that are not configured projects, because there
 is no project name to resolve — including this one.
@@ -159,15 +180,17 @@ looks exactly like a model failure three stages later.
 
 `cuzam runs` prints every run with the paths to reach it — worktree, branch,
 the log to tail, the runner's pid and, for a classic loop, the pid of the
-Claude process it is waiting on. It shows the same facts as the fleet view and
+Claude process it is waiting on. A launched classic run has a `flow.out` like
+any other, filled with the harness's own output as it goes and Claude's when
+the run ends; a hand-run one keeps Claude's output in a temporary file and
+offers no log. It shows the same facts as the fleet view and
 reads from the same module; the command exists so the paths can be pasted
 straight into a terminal. `cuzam runs <issue>` narrows to one,
 `cuzam runs --json` is the machine-readable form.
 
-A path appears only when there is something at the end of it. A classic loop
-keeps Claude's output in a temporary file, so it has no log to tail and none
-is offered; a worktree `cuzam gc` has reclaimed is still named, marked as
-gone.
+A path appears only when there is something at the end of it: a worktree
+`cuzam gc` has reclaimed is still named, marked as gone, and a log is offered
+only when the file is really there.
 
 ## When it goes wrong
 

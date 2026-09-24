@@ -12,24 +12,35 @@
 # Run from the task's worktree (the dispatcher sets cwd to the workspace).
 set -u
 
-# This script runs in the FOREGROUND and must keep doing so. It used to
-# detach into its own session, which was wrong for a reason that is not
-# obvious: Hermes supervises a task by the liveness of the worker pid it
-# spawned, and a worker that exits while its task is still `running` is
-# recorded as a protocol violation that trips the circuit breaker on the
-# FIRST occurrence. Detaching therefore got every run marked crashed about
-# two minutes in, however well the flow was going. Heartbeats do not help —
-# `heartbeat_worker` is explicitly "orthogonal to the PID check".
+# This script must not detach, and the reason changed on 2026-09-24 without the
+# rule changing. Both reasons are worth keeping, because the old one is what
+# makes the new arrangement correct.
 #
-# So the worker holds this script for the whole flow, and the pid Hermes
-# watches is a pid that is genuinely doing the work. The runner reports the
-# outcome itself, which moves the task out of `running` BEFORE the worker
-# exits, so the clean-exit sweep never sees it.
+# It used to run in the foreground of a Hermes worker. Detaching there was wrong
+# for a reason that is not obvious: Hermes supervises a task by the liveness of
+# the worker pid it spawned, and a worker that exits while its task is still
+# `running` is recorded as a protocol violation that trips the circuit breaker on
+# the FIRST occurrence. Detaching therefore got every run marked crashed about
+# two minutes in, however well the flow was going. Heartbeats did not help —
+# `heartbeat_worker` is explicitly "orthogonal to the PID check". The conclusion
+# written here at the time was that taking the loop out of Hermes' dispatcher
+# entirely was the fix, not detaching underneath a supervisor counting pids.
 #
-# The corollary, for whoever is tempted to background this again: the loop
-# now dies if the gateway restarts mid-flow. That is a real cost and the
-# accepted one. Taking the loop out of Hermes's dispatcher entirely is the
-# fix, not detaching underneath a supervisor that is counting pids.
+# That is what happened. `cuzam/dash/launch.py` spawns this script itself, in its
+# own session, with the task claimed and deliberately unassigned so no worker can
+# be given it. There is no worker pid being counted any more, so the old hazard
+# is gone — and with it the cost the old comment accepted, that the loop died
+# whenever the gateway restarted.
+#
+# It still must not detach, for a different reason: this process IS the run as
+# far as every surface is concerned. `cuzam/runs.py` and `scripts/live-runs.sh`
+# both identify a classic run by this script's command line and report this pid
+# as its runner, and `zam-stop.sh` kills it by a signature built from the same
+# argv. A version that forked and returned would leave all three watching a pid
+# that had exited: the fleet view would call a working run dead and invite a
+# relaunch, and stop would report success having killed a shell that was already
+# gone. Staying in the foreground of the session the launcher made is what keeps
+# the pid everything watches a pid that is doing the work.
 
 # The loop needs claude, codex and the node toolchain, and it does not get to
 # choose who launches it. A run started from the dashboard inherits launchd's

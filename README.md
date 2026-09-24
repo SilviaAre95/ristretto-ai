@@ -8,8 +8,8 @@
 
 **Cuzam ("Zam") is a configurable, always-on personal operations
 assistant** built on the open-source Hermes Agent runtime. Zam talks in Slack,
-tracks configured work in Linear, runs supervised coding tasks in durable
-workers, and requests approval before risky actions.
+tracks configured work in Linear, runs supervised coding tasks as durable
+detached processes, and requests approval before risky actions.
 
 > **New here?** Follow the step-by-step
 > [Getting Started guide](docs/getting-started.md).
@@ -22,7 +22,7 @@ workers, and requests approval before risky actions.
 - 🏠 **Local-first** orchestrator through Ollama.
 - 💬 **Slack Socket Mode** with an explicit user allowlist.
 - 📋 **Linear-backed morning brief** with unchanged-board suppression.
-- 🔁 **Crash-safe, one-at-a-time coding workers** using feature branches and
+- 🔁 **Crash-safe, one-at-a-time coding runs** using feature branches and
   pull requests.
 - 🧩 **Named/custom model flows** with enforced read-only planning and review.
 - 🔒 **No auto-merge** — production, destructive, costly, and secret-bearing
@@ -34,7 +34,8 @@ workers, and requests approval before risky actions.
 flowchart LR
     U([You]) <-->|Slack| G["Hermes gateway<br/>(local model via Ollama)"]
     G <-->|briefs and updates| LIN[Linear]
-    G -->|queues one task at a time| W[Durable coding worker]
+    G -->|one task at a time| L["cuzam launch<br/>(claims, cuts a worktree, spawns)"]
+    L -->|detached process, no agent| W[Coding flow]
     W -->|plan, build, review, repair, verify| PR[Feature branch and PR]
     PR -->|milestone| U
     G -.->|risky action| AP{Approval gate}
@@ -53,7 +54,7 @@ flowchart TB
         PL[plugins<br/>zam-approvals · zam-launch · zam-chat]
         SK[skills<br/>durable-dev · issue-closeout]
         SC[cron scripts + agent hook<br/>morning-brief-precheck · zam-stop · zam-event]
-        LR[loop-runner skill<br/>run-loop.sh]
+        LR["the classic loop<br/>run-loop.sh"]
         PKG[the cuzam package]
     end
     PIN["~/.cuzam/runtime<br/>detached clone of origin/main"]
@@ -71,15 +72,17 @@ flowchart TB
 |---|---|---|
 | **symlink** | plugins, `durable-dev`, `issue-closeout` | live on purpose. These are read inside a turn you are watching, and the danger is a plugin disagreeing with the CLI about what "approve" means — not staleness. |
 | **copy** | cron scripts, the agent hook | Hermes requires scripts inside `~/.hermes/scripts`, and it fingerprints an approved hook — a symlink would let the content change underneath the approval. Refreshed by `make update`, never edited in place. |
-| **pin** | the `cuzam` package **and the `loop-runner` skill** | a flow runs unattended for an hour. It must not execute whichever branch you happen to have checked out, or an edit you were halfway through. `make install-runtime` moves both together. |
+| **pin** | the `cuzam` package **and `run-loop.sh`** | a flow runs unattended for an hour. It must not execute whichever branch you happen to have checked out, or an edit you were halfway through. `make install-runtime` moves both together. |
 
-The third row is the one that is easy to get wrong. `run-loop.sh` is filed as
-a skill but behaves as a runtime — it *is* the classic loop. Pinning the
+The third row is the one that is easy to get wrong. `run-loop.sh` was filed as
+a skill and behaved as a runtime — it *is* the classic loop. Pinning the
 Python package alone left the classic path following the working checkout,
 so the guarantee held for staged flows and quietly did not for the path most
-runs take. `scripts/link-loop-runner.sh` points that one skill at the pinned
-clone, falling back to the checkout when nothing is pinned yet and saying
-which it chose.
+runs take. It is no longer a skill at all: its `SKILL.md` is deleted and the
+launcher resolves the pinned script itself, the same way it resolves the pinned
+interpreter. `scripts/link-loop-runner.sh` still points the installed path at
+the pinned clone — `zam-stop.sh` reaches `reap.sh` through it — falling back to
+the checkout when nothing is pinned yet and saying which it chose.
 
 ## 📁 Repository map
 
@@ -154,8 +157,9 @@ make install-hermes
 
 This preserves existing Hermes config, persona, credentials, jobs, and
 unrelated skills. It adds Cuzam's skills/scripts, creates the isolated
-worker profile when missing, and creates the morning brief only when no job
-with that name exists. The gateway service remains unchanged. To explicitly
+`zam-worker` profile when missing — which now carries the loop-completion guard
+and nothing else, since no work is dispatched to it — and creates the morning
+brief only when no job with that name exists. The gateway service remains unchanged. To explicitly
 install and start the service:
 
 ```bash

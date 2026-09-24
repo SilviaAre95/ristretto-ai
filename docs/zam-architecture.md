@@ -426,6 +426,10 @@ tool-calling is unreliable" is an expectation, not a finding.
 worker agents, which under this policy are local models, and a local model
 supervising an hour-long subprocess is the failure this project has already paid
 for. Launch claims the board task itself and runs the flow as a plain process.
+Completed 2026-09-24: `classic` was the last flow still dispatched, and it is
+spawned by the launcher now too, as `run-loop.sh` rather than as the multi-stage
+runner. Nothing is assigned to `zam-worker` and the profile keeps no skills, so
+there is no path left from a queued task to an agent turn.
 
 ### The lease
 
@@ -465,14 +469,22 @@ in `config.yaml`, or `HERMES_RESTART_DRAIN_TIMEOUT` — and setting it would buy
 seconds against runs measured in hours, so it is not the fix and this project
 leaves it at the default.
 
-What the restart actually kills is narrower than it looks. Staged flows are
-spawned detached, so they outlive it; the classic loop does not, because
-`run-loop.sh` deliberately stays in the foreground under the Hermes worker
-that supervises it by pid — detaching it got every run marked crashed two
-minutes in. The comment at the top of that script already names this as the
-accepted cost, and the stated fix is to take the loop out of Hermes'
-dispatcher entirely rather than to detach underneath a supervisor counting
-pids.
+What the restart actually kills is narrower than it looks, and since 2026-09-24
+it kills no run at all. Every flow is spawned detached by the launcher, so all
+of them outlive a gateway restart.
+
+The classic loop used not to, and the reason is worth keeping because it is what
+made the fix the fix. `run-loop.sh` stayed in the foreground under the Hermes
+worker that supervised it by pid; detaching it there got every run marked
+crashed two minutes in, because a worker exiting while its task is still
+`running` trips
+the circuit breaker on the first occurrence. The comment at the top of that
+script named the cost as accepted and the fix as taking the loop out of Hermes'
+dispatcher entirely rather than detaching underneath a supervisor counting
+pids. That is what was done, so the cost is gone rather than mitigated — and
+the script
+still must not detach itself, now because its pid is the one every surface reads
+as the run.
 
 The defect was therefore ours, not Hermes': `make update` restarted the
 gateway with no check for work in flight, and so did every other step it runs
