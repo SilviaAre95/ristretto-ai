@@ -161,6 +161,43 @@ class ProcessShapeTests(unittest.TestCase):
             self.classify("python3 -c import_x -m cuzam.runner --task-id t_fake")
         )
 
+    def test_the_console_script_is_a_run_too(self) -> None:
+        # pyproject ships `cuzam-run-flow` and runner.py sets `prog` to it, so
+        # it is a supported way to start a run — and it carries no `-m`.
+        # Missing it did not merely hide the run: the board still said
+        # `running`, so it rendered dead with a relaunch prompt while
+        # install-runtime.sh rebuilt the runtime underneath it.
+        found = self.classify("/x/.venv/bin/cuzam-run-flow --task-id t_s --issue A-1 --flow full")
+        self.assertEqual((found.task_id, found.shape, found.flow), ("t_s", "staged", "full"))
+
+    def test_a_classic_flow_given_positionally_is_read_correctly(self) -> None:
+        # run-loop.sh also takes the flow positionally, so guessing `classic`
+        # from the absence of a --flow flag labelled a `full` run wrongly on
+        # every surface — overriding the task body, which was right.
+        found = self.classify("/x/loop-runner/scripts/run-loop.sh t_c A-1 sonnet full")
+        self.assertEqual(found.flow, "full")
+        bare = self.classify("/x/loop-runner/scripts/run-loop.sh t_c A-1")
+        self.assertEqual(bare.flow, "classic")
+
+    def test_the_module_is_found_after_an_earlier_unrelated_dash_m(self) -> None:
+        # The awk in live-runs.sh scans every -m; stopping at the first would
+        # answer differently from the guard the installer trusts.
+        found = self.classify(
+            "/x/python3 -m coverage -m cuzam.runner --task-id t_m --flow full"
+        )
+        self.assertEqual(found.task_id, "t_m")
+
+    def test_one_task_with_two_processes_resolves_to_the_runner(self) -> None:
+        # A staged flow started through run-loop.sh leaves the wrapper in the
+        # foreground piping the runner through tee, so both match under one
+        # task id. Whichever ps emitted last used to win, which could label a
+        # `full` run classic and report the shell's pid as its runner.
+        wrapper = "/bin/bash /x/loop-runner/scripts/run-loop.sh t_b A-1 --flow full"
+        child = "/x/python3 -m cuzam.runner --task-id t_b --issue A-1 --flow full"
+        for pairing in ({1: wrapper, 2: child}, {2: child, 1: wrapper}):
+            chosen = runs._live_map(pairing)["t_b"]
+            self.assertEqual((chosen.shape, chosen.pid), ("staged", 2), pairing)
+
     def test_a_named_but_unidentified_runner_is_not_a_run(self) -> None:
         # No --task-id means nothing to attribute the process to, and a run
         # that cannot be named cannot be shown.
@@ -181,6 +218,67 @@ class ProcessShapeTests(unittest.TestCase):
     def test_an_unreadable_process_table_is_not_a_machine_full_of_dead_runs(self) -> None:
         with mock.patch.object(runs.subprocess, "run", side_effect=OSError("no ps")):
             self.assertEqual(runs.running_flows(), set())
+
+
+class UnreadableProcessTableTests(unittest.TestCase):
+    """An absent answer is not the answer "no".
+
+    `_ps` used to swallow every failure into an empty list, which downstream
+    is indistinguishable from a quiet machine. With `dead` derived from that,
+    one `ps` timing out under load painted the whole fleet red and told the
+    operator to relaunch runs that were working — the 2026-09-10 shape,
+    reintroduced by the feature written to prevent it.
+    """
+
+    def test_an_unreadable_table_is_none_not_empty(self) -> None:
+        with mock.patch.object(runs.subprocess, "run", side_effect=OSError("no ps")):
+            self.assertIsNone(runs._ps(10))
+        with mock.patch.object(
+            runs.subprocess, "run",
+            side_effect=subprocess.TimeoutExpired("ps", 10),
+        ):
+            self.assertIsNone(runs._ps(10))
+        with mock.patch.object(
+            runs.subprocess, "run",
+            return_value=subprocess.CompletedProcess([], 1, "", "ps: cannot"),
+        ):
+            self.assertIsNone(runs._ps(10))
+
+    def test_a_quiet_machine_is_still_an_empty_list(self) -> None:
+        with mock.patch.object(
+            runs.subprocess, "run",
+            return_value=subprocess.CompletedProcess([], 0, "", ""),
+        ):
+            self.assertEqual(runs._ps(10), [])
+
+    def test_nothing_is_called_dead_on_evidence_that_could_not_be_read(self) -> None:
+        run = runs.build_run(task(), [event("stage.started", age=30, stage="build")])
+        self.assertEqual(run.health, "dead")
+        run.liveness_known = False
+        self.assertNotEqual(run.health, "dead")
+
+    def test_an_unread_table_falls_back_to_the_signal_age_guess(self) -> None:
+        # Which is what every surface did before there was a `dead` at all.
+        quiet = runs.build_run(task(), [event("stage.started", age=3600, stage="build")])
+        quiet.liveness_known = False
+        self.assertEqual(quiet.health, "stalled")
+
+
+class SnapshotOrderTests(unittest.TestCase):
+    def test_the_board_is_read_before_the_process_table(self) -> None:
+        """Reading `ps` first leaves a window a launch fits through.
+
+        `launch` claims the task and spawns the flow between the two reads, so
+        the run is `running` on a board read afterwards and absent from a
+        snapshot taken before it existed — reported dead, with an invitation
+        to relaunch something that had just started.
+        """
+        order = []
+        with mock.patch.object(runs, "board", side_effect=lambda *a, **k: order.append("board") or []), \
+             mock.patch.object(runs, "_ps", side_effect=lambda *a, **k: order.append("ps") or []), \
+             mock.patch.object(runs.events, "read", return_value=[]):
+            runs.fleet()
+        self.assertEqual(order, ["board", "ps"])
 
 
 class LocatorTests(unittest.TestCase):
@@ -405,6 +503,7 @@ class ReturnShapeTests(unittest.TestCase):
             set(shape),
             {
                 "task_id", "issue_key", "title", "project", "status", "health", "alive",
+                "liveness_known",
                 "flow", "shape", "stage", "branch", "worktree", "worktree_gone",
                 "artifact_dir", "log",
                 "runner_pid", "claude_pid", "started_at", "completed_at", "elapsed",

@@ -11,6 +11,7 @@ acceptance_criteria:
   - A classic run is as visible as a staged one
   - A run that has gone quiet is shown as stalled, not as healthy
   - A run the board calls running with no process behind it is shown as dead
+  - Nothing is called dead when the process table could not be read
   - Every locator needed to reach a run is shown - worktree, branch, log,
     runner pid, and for classic the Claude child pid
   - The same facts are available without a browser, from a command
@@ -74,6 +75,12 @@ as though the work were still in flight.
 run the board still calls `running` with no process behind it is shown as
 dead, immediately, rather than reading healthy for fifteen minutes and then
 reading as a guess.
+
+`dead` is claimed only on evidence. When the process table cannot be read at
+all — `ps` timing out under load is the realistic case — an absent answer is
+not the answer "no": every surface says so and falls back to the signal-age
+guess, because the alternative is painting a working fleet red and inviting
+the operator to relaunch all of it.
 
 **Nothing is done about it.** The board is not reclaimed, the card is not
 moved, no process is signalled. On 2026-09-10 a surface that could not tell

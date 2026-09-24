@@ -88,6 +88,15 @@ class LiveRunContractTest(unittest.TestCase):
         # A run that predates the rename still has to count: its command line
         # says `ristretto.runner` for its whole hour. Drop in 0.3.0.
         cls.processes["legacy"] = spawn_staged("t_legacy0", "full", "ristretto.runner")
+        # The same program reached by the console script pyproject.toml ships.
+        # It carries no `-m`, so both implementations missed it — which meant
+        # the board called it `running`, every surface called it dead, and
+        # install-runtime.sh was free to rebuild the runtime underneath it.
+        cls.processes["console"] = subprocess.Popen(
+            ["bash", "-c",
+             "exec -a 'cuzam-run-flow --task-id t_consol --issue ABC-1 --flow full' "
+             f"sleep {FIXTURE_SECONDS}"]
+        )
 
         # The negatives. Both are processes that merely *mention* the runner,
         # which is the failure `pgrep -f` had: it matched the command line of
@@ -144,6 +153,9 @@ class LiveRunContractTest(unittest.TestCase):
     def test_a_pre_rename_run_is_live_in_both(self) -> None:
         self.assert_agree("legacy", True)
 
+    def test_the_console_script_is_live_in_both(self) -> None:
+        self.assert_agree("console", True)
+
     def test_a_shell_that_mentions_the_runner_is_ignored_by_both(self) -> None:
         self.assert_agree("shell", False)
 
@@ -191,6 +203,24 @@ class LiveRunContractTest(unittest.TestCase):
         self.assertEqual(
             (short.task_id, short.shape, short.flow), ("t_short00", "staged", "short")
         )
+
+    def test_a_run_invisible_to_one_side_is_the_dangerous_asymmetry(self) -> None:
+        """Why this file compares pids rather than trusting either side.
+
+        The two implementations answer for different callers: this module
+        decides what a surface shows, `live-runs.sh` decides whether
+        `install-runtime.sh` and `update.sh` may proceed. A process one sees
+        and the other does not is a run the operator is told is dead while the
+        installer rebuilds the runtime out from under it — which is how the
+        console-script case above went unnoticed.
+        """
+        self.assertEqual(
+            self.bash & set(self.fixture_pids()),
+            self.python & set(self.fixture_pids()),
+        )
+
+    def fixture_pids(self) -> list[int]:
+        return [process.pid for process in self.processes.values()]
 
     def test_running_flows_is_the_task_ids_of_those_processes(self) -> None:
         """The set every caller of `running_flows` actually consumes."""

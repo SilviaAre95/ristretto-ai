@@ -74,6 +74,13 @@
     {% endif %}
   </div>
 
+  {% if not run.liveness_known %}
+    <p class="banner bad">
+      Could not read this machine's process table. Liveness here is guessed
+      from signal age, and this run is not being called dead on missing evidence.
+    </p>
+  {% endif %}
+
   {% if run.health == "dead" %}
     <p class="banner bad">
       No process is running this. The board still calls it <code>running</code>, and

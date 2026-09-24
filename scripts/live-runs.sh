@@ -57,6 +57,13 @@ live="$(printf '%s\n' "$listing" | awk '
     exe = $2
     sub(/.*\//, "", exe)
     if (exe == "sh" || exe == "bash" || exe == "zsh") next
+
+    # The same program reached by its console script rather than by `-m`.
+    # pyproject.toml ships `cuzam-run-flow`, so this is a supported way to
+    # start a run, and its command line carries no `-m` to scan for. Missing
+    # it let `make update` restart the gateway over a live flow.
+    if (exe == "cuzam-run-flow") { print; next }
+
     # Fields are offset by the pid in $1, so the argv starts at $2.
     for (i = 2; i < NF; i++) {
       if ($i == "-c") break

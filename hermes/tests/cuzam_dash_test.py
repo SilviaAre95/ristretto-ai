@@ -382,13 +382,19 @@ class BuildStampTests(unittest.TestCase):
     reason. Both were invisible: the page looked fine.
     """
 
+    def setUp(self) -> None:
+        # Stamp before patching. The stamp is taken on first use rather than
+        # at import, so a test that patches `_read_commit` first would be
+        # asserting against its own fixture.
+        self.loaded, _ = runs.loaded_build()
+
     def test_it_reports_the_commit_it_loaded_not_the_one_checked_out(self) -> None:
         # The stamp existed to catch a stale process and could not: it shelled
         # git per request, so a server running three-hour-old code displayed
         # the newest commit and looked current.
         with mock.patch.object(runs, "_read_commit", return_value=("ffffff1", False)):
             stamp = runs.build_stamp()
-        self.assertEqual(stamp["commit"], runs.LOADED_COMMIT)
+        self.assertEqual(stamp["commit"], self.loaded)
         self.assertNotEqual(stamp["commit"], "ffffff1")
 
     def test_a_process_older_than_the_checkout_says_so(self) -> None:
@@ -396,7 +402,7 @@ class BuildStampTests(unittest.TestCase):
             self.assertTrue(runs.build_stamp()["stale"])
 
     def test_a_current_process_is_not_flagged(self) -> None:
-        with mock.patch.object(runs, "_read_commit", return_value=(runs.LOADED_COMMIT, False)):
+        with mock.patch.object(runs, "_read_commit", return_value=(self.loaded, False)):
             self.assertFalse(runs.build_stamp()["stale"])
 
     def test_an_unreadable_checkout_is_not_called_stale(self) -> None:

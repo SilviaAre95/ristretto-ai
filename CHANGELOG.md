@@ -48,6 +48,19 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   drifted, including one in the runner beside its own unused constant.
 - `stalled_runs` takes one process snapshot for the whole fleet instead of one
   per task on the board.
+- Ten defects found by review of this change, before it merged. The one that
+  mattered: an unreadable process table was indistinguishable from an idle
+  one, so a single `ps` timeout would have called every claimed run `dead` and
+  told the operator to relaunch a working fleet — the failure `dead` exists to
+  prevent. Nothing is called dead now without evidence, and every surface says
+  when it could not look. Also fixed: the board is read before the process
+  table, so a run launched between the two is not reported dead; a staged flow
+  started through `run-loop.sh` resolves to its runner rather than to whichever
+  of its two processes `ps` listed last; a classic flow given positionally is
+  read the way `run-loop.sh` reads it instead of guessed; the shipped
+  `cuzam-run-flow` console script counts as a live run in both implementations;
+  and the build stamp is taken on first use, so importing the runner no longer
+  shells out to `git` twice for something it never reads.
 - The installer no longer says the loop flow guard "needs re-approval" after
   an update that changes it. The guard is still armed — Hermes matches an
   approved hook on event and command, never on the script's timestamp — so

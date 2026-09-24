@@ -29,7 +29,7 @@ from fastapi.responses import (
 )
 from fastapi.templating import Jinja2Templates
 
-from .. import actions, approvals, events, runs, voice
+from .. import actions, approvals, runs, voice
 from . import control, launch as launcher
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -51,7 +51,12 @@ def _snapshot(show_all: bool = False) -> dict[str, Any]:
         "hidden": hidden,
         "show_all": show_all,
         "total": len(everything),
-        "live": len([r for r in everything if r.status in runs.LIVE_STATES]),
+        # Counted on health, not board status. Counting `live` from the board
+        # while counting `dead` from the process table put the dead runs
+        # inside the live number, so the header read "live 5 · dead 3" with
+        # three of the five being the three — the exact ambiguity this
+        # feature exists to remove.
+        "live": len([r for r in everything if r.health == "running"]),
         "stalled": len([r for r in everything if r.health == "stalled"]),
         # Counted separately from stalled because the two need opposite
         # responses: a stall may just be a quiet build stage, a dead run is
@@ -60,6 +65,9 @@ def _snapshot(show_all: bool = False) -> dict[str, Any]:
         "blocked": len([r for r in everything if r.health == "blocked"]),
         # A flow stopped waiting on a person is the one thing that must not
         # need drilling into a task page to notice.
+        # Whether `ps` could be read at all. Degrading silently to the
+        # signal-age guess looks exactly like a healthy fleet.
+        "liveness_known": not everything or everything[0].liveness_known,
         "waiting": approvals.pending(),
         "build": runs.build_stamp(),
     }

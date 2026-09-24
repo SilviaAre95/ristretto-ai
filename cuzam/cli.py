@@ -249,6 +249,14 @@ def _print_runs(run_data: Any, args: Any) -> int:
     view will be missing it too.
     """
     fleet = run_data.fleet()
+    if fleet and not fleet[0].liveness_known:
+        # Said, not swallowed. Without this the command silently degrades to
+        # the old signal-age guess and reads exactly like a healthy fleet.
+        print(
+            "could not read the process table — liveness below is guessed from "
+            "signal age, and no run is called dead\n",
+            file=sys.stderr,
+        )
 
     if args.target:
         one = run_data.find(args.target, fleet)
@@ -271,12 +279,14 @@ def _print_runs(run_data: Any, args: Any) -> int:
     live = [run for run in fleet if run.flow_alive]
     dead = [run for run in fleet if run.health == "dead"]
     shown = {run.task_id for run in live} | {run.task_id for run in dead}
-    rest, _ = run_data.recent(fleet)
+    # --all means the whole board in both renderings. It used to widen the
+    # JSON to the full fleet while the text path still showed only what
+    # `recent` had kept, so the same flag answered two different questions.
+    rest = fleet if args.all else run_data.recent(fleet)[0]
     rest = [run for run in rest if run.task_id not in shown]
 
     if args.json:
-        chosen = fleet if args.all else live + dead + rest
-        print(json.dumps([run.as_dict() for run in chosen], indent=2, sort_keys=True))
+        print(json.dumps([run.as_dict() for run in live + dead + rest], indent=2, sort_keys=True))
         return 0
 
     if not live:

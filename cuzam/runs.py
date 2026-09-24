@@ -83,7 +83,14 @@ CLASSIC_SCRIPT = "loop-runner/scripts/run-loop.sh"
 # a live run as dead, which is the exact inversion this module exists to stop.
 # Drop the old name in 0.3.0, once no run can predate the rename.
 RUNNER_MODULES = ("cuzam.runner", "ristretto.runner")
-_SHELLS = {"sh", "bash", "zsh", "dash", "ksh"}
+# The same program reached by its console script rather than by `-m`.
+# `pyproject.toml` ships it, `runner.py` sets `prog` to it, so it is a
+# supported way to start a run — and it carries no `-m` on its command line.
+# Missing it did not merely hide the run: the board still called it `running`,
+# so it rendered as dead with an invitation to relaunch, while
+# `install-runtime.sh` rebuilt the runtime underneath it.
+RUNNER_SCRIPTS = ("cuzam-run-flow",)
+_SHELLS = {"sh", "bash", "zsh"}
 
 
 @dataclass(frozen=True)
@@ -128,6 +135,10 @@ class Run:
     shape: str | None = None
     runner_pid: int | None = None
     claude_pid: int | None = None
+    # Whether the process table could be read at all. A missing answer is not
+    # the answer "no": with this False, `dead` is never claimed, because the
+    # evidence for it is exactly the evidence that is missing.
+    liveness_known: bool = True
 
     @property
     def flow_alive(self) -> bool:
@@ -212,8 +223,11 @@ class Run:
             return "running"
         # Claimed and started, with nothing behind it. This is a fact, not the
         # guess that `stalled` is, and it is reported immediately rather than
-        # after fifteen minutes of reading as healthy.
-        if self.status == "running":
+        # after fifteen minutes of reading as healthy — but only when the
+        # process table was actually read. Unread, this falls through to the
+        # signal-age guess below, which is what the surfaces did before there
+        # was a `dead` at all.
+        if self.status == "running" and self.liveness_known:
             return "dead"
         # Every other active state is a task that never started a process, so
         # its absence proves nothing. Only silence is left to go on.
@@ -257,6 +271,7 @@ class Run:
             "status": self.status,
             "health": self.health,
             "alive": self.flow_alive,
+            "liveness_known": self.liveness_known,
             "flow": self.flow,
             "shape": self.shape,
             "stage": self.stage,
@@ -308,14 +323,21 @@ def humanise(seconds: int | None) -> str:
     return f"{seconds // 86400}d"
 
 
-def _ps(timeout: int) -> list[tuple[int, str]]:
-    """One snapshot of every process, as (pid, command).
+def _ps(timeout: int) -> list[tuple[int, str]] | None:
+    """One snapshot of every process, as (pid, command). `None` if unreadable.
 
     Snapshot first and filter here, rather than `pgrep -f`: a pattern search
     matches the command line of whatever runs the search, so any shell
     mentioning `cuzam.runner --task-id` — including a monitor watching for
     one — reports itself as a live flow. Capturing the listing before the
     filter exists is what keeps the filter out of its own results.
+
+    `None` rather than an empty list, and the distinction is the whole point.
+    This used to swallow every failure into `[]`, which downstream is
+    indistinguishable from a quiet machine — so one `ps` that timed out under
+    load made `health` call every claimed run `dead`, and both surfaces told
+    the operator to relaunch a fleet that was working. An absent answer is not
+    the answer "no".
     """
     try:
         listing = subprocess.run(
@@ -323,7 +345,9 @@ def _ps(timeout: int) -> list[tuple[int, str]]:
             capture_output=True, text=True, check=False, timeout=timeout,
         )
     except (OSError, subprocess.SubprocessError):
-        return []
+        return None
+    if listing.returncode != 0:
+        return None
     rows = []
     for line in listing.stdout.splitlines():
         head, _, command = line.strip().partition(" ")
@@ -340,6 +364,20 @@ def _flag(argv: list[str], name: str) -> str | None:
         if index + 1 < len(argv):
             return argv[index + 1]
     return None
+
+
+def _run_loop_flow(rest: list[str]) -> str:
+    """The flow a classic invocation names, read the way run-loop.sh reads it.
+
+    Mirrors its own parser rather than looking for `--flow`, because it also
+    accepts the flow positionally — `run-loop.sh TASK ISSUE sonnet full` is a
+    `full` run with no flag on its command line, and guessing `classic` from
+    the flag's absence labelled it wrongly on every surface, overriding the
+    task body that said otherwise.
+    """
+    if rest and rest[0] in ("--model", "--flow"):
+        return _flag(rest, "--flow") or "classic"
+    return rest[1] if len(rest) > 1 else "classic"
 
 
 def _classify(pid: int, command: str) -> Process | None:
@@ -361,9 +399,19 @@ def _classify(pid: int, command: str) -> Process | None:
                 task_id=task_id,
                 pid=pid,
                 shape="classic",
-                flow=_flag(argv, "--flow") or "classic",
+                flow=_run_loop_flow(argv[position + 3:]),
                 command=command,
             )
+
+    # Staged, reached by its console script: no `-m`, nothing to scan for.
+    if Path(argv[0]).name in RUNNER_SCRIPTS and "--task-id" in argv:
+        task_id = _flag(argv, "--task-id") or ""
+        if SAFE_TASK_ID.fullmatch(task_id):
+            return Process(
+                task_id=task_id, pid=pid, shape="staged",
+                flow=_flag(argv, "--flow"), command=command,
+            )
+        return None
 
     # Staged. Mentioning the runner is not running it, and the mention can
     # come from something that is not a shell: a `python -c` whose source text
@@ -376,10 +424,17 @@ def _classify(pid: int, command: str) -> Process | None:
         return None
     if Path(argv[0]).name in _SHELLS:
         return None
-    flag = argv.index("-m")
-    if "-c" in argv[:flag]:
-        return None
-    if flag + 1 >= len(argv) or argv[flag + 1] not in RUNNER_MODULES:
+    # Every `-m` before the first `-c`, not only the first `-m`: the awk in
+    # live-runs.sh scans them all, and an implementation that stopped at the
+    # first would answer differently from the guard the installer trusts.
+    handed_the_module = False
+    for index, word in enumerate(argv):
+        if word == "-c":
+            break
+        if word == "-m" and index + 1 < len(argv) and argv[index + 1] in RUNNER_MODULES:
+            handed_the_module = True
+            break
+    if not handed_the_module:
         return None
     task_id = _flag(argv, "--task-id") or ""
     if not SAFE_TASK_ID.fullmatch(task_id):
@@ -402,7 +457,7 @@ def live_processes(timeout: int = 10) -> list[Process]:
     """
     return [
         process
-        for process in (_classify(pid, command) for pid, command in _ps(timeout))
+        for process in (_classify(pid, command) for pid, command in (_ps(timeout) or []))
         if process
     ]
 
@@ -457,7 +512,7 @@ def claude_child(task_id: str, commands: Mapping[int, str] | None = None) -> int
     runner = str(record.get("runner") or "claude")
 
     if commands is None:
-        commands = dict(_ps(10))
+        commands = dict(_ps(10) or [])
     command = commands.get(pid)
     if not command:
         return None
@@ -604,20 +659,31 @@ def fleet(limit_events: int = 200) -> list[Run]:
     recorded: dict[str, list[Mapping[str, Any]]] = {}
     for item in events.read(limit=limit_events * 10):
         recorded.setdefault(str(item.get("task_id")), []).append(item)
-    commands = dict(_ps(10))
+    # The board first, the process table second, and the order is load-bearing:
+    # reading `ps` first leaves a window in which `launch` claims a task and
+    # spawns its flow, so the run is `running` on a board read afterwards and
+    # missing from a snapshot taken before it existed — reported dead, with an
+    # invitation to relaunch something that had just started. Taking the
+    # snapshot last cannot invent that gap; at worst it sees a run the board
+    # has not heard of yet, which no surface asks about. `detail` already did
+    # it in this order.
+    tasks = board()
+    listing = _ps(10)
+    known = listing is not None
+    commands = dict(listing or [])
     live = _live_map(commands)
     runs = []
-    for task in board():
+    for task in tasks:
         task_id = str(task.get("id"))
         process = live.get(task_id)
-        runs.append(
-            build_run(
-                task,
-                recorded.get(task_id, []),
-                process,
-                _claude_for(process, commands),
-            )
+        run = build_run(
+            task,
+            recorded.get(task_id, []),
+            process,
+            _claude_for(process, commands),
         )
+        run.liveness_known = known
+        runs.append(run)
     runs.sort(key=lambda r: (r.last_signal_at or 0), reverse=True)
     return runs
 
@@ -638,26 +704,42 @@ def detail(task_id: str) -> tuple[Run | None, dict[str, Any]]:
     task = payload.get("task") or {}
     if not task:
         return None, payload
-    commands = dict(_ps(10))
+    listing = _ps(10)
+    commands = dict(listing or [])
     process = _live_map(commands).get(str(task.get("id")))
-    return (
-        build_run(
-            task,
-            events.read(task_id, limit=500),
-            process,
-            _claude_for(process, commands),
-        ),
-        payload,
+    run = build_run(
+        task,
+        events.read(task_id, limit=500),
+        process,
+        _claude_for(process, commands),
     )
+    run.liveness_known = listing is not None
+    return run, payload
 
 
 def _live_map(commands: Mapping[int, str]) -> dict[str, Process]:
-    """Every live run in one snapshot, keyed by task id."""
-    live = {}
+    """Every live run in one snapshot, keyed by task id.
+
+    One task can put two processes on the table. A staged flow started through
+    `run-loop.sh` leaves the wrapper in the foreground — it pipes the runner
+    through `tee`, which is where `loop.log` comes from — so both the bash
+    script and its Python child match, under the same task id. Whichever `ps`
+    happened to emit last used to win, which meant a `full` run could be
+    labelled `(classic)`, report the shell's pid as its runner, and send
+    `_claude_for` hunting for a pid record a staged flow never writes.
+
+    The child is the run; the wrapper is how it was started. So the staged
+    shape wins, deterministically, rather than by listing order.
+    """
+    live: dict[str, Process] = {}
     for pid, command in commands.items():
         process = _classify(pid, command)
-        if process:
-            live[process.task_id] = process
+        if not process:
+            continue
+        existing = live.get(process.task_id)
+        if existing and existing.shape == "staged" and process.shape != "staged":
+            continue
+        live[process.task_id] = process
     return live
 
 
@@ -745,23 +827,43 @@ def _read_commit() -> tuple[str, bool]:
     return commit, dirty
 
 
-# Stamped once, at import, alongside STARTED_AT. Read per request it was
-# worse than useless: it reported whatever the checkout says *now*, so a
-# process running three-hour-old code displayed the newest commit and looked
-# current. The whole point of the stamp is to catch that, and it could not.
-LOADED_COMMIT, LOADED_DIRTY = _read_commit()
+# Stamped once and then kept. Read per request it was worse than useless: it
+# reported whatever the checkout says *now*, so a process running three-hour-old
+# code displayed the newest commit and looked current. The whole point of the
+# stamp is to catch that, and it could not.
+#
+# Stamped on first use rather than at import, which is a change forced by this
+# module's new position. It used to live in `dash/data.py`, imported only by a
+# web process that was about to render the stamp anyway. Now `runner.py` and
+# `control.py` import it at module scope, so two `git` subprocesses — one of
+# them `git status --porcelain`, which is not cheap on a cold or large
+# worktree — ran on every flow start for a stamp no flow ever reads. Measured
+# at 30ms of a 57ms `import cuzam.runner` on a warm clean checkout.
+#
+# "First use" is within a request or two of start for the dashboard, which is
+# the only caller, so the stamp still catches the case it exists for.
+_LOADED: tuple[str, bool] | None = None
+
+
+def loaded_build() -> tuple[str, bool]:
+    """The commit this process started on, remembered from the first ask."""
+    global _LOADED
+    if _LOADED is None:
+        _LOADED = _read_commit()
+    return _LOADED
 
 
 def build_stamp() -> dict[str, str | bool]:
     """What this process is running — not what the checkout says today."""
+    loaded_commit, loaded_dirty = loaded_build()
     current, _ = _read_commit()
     return {
-        "commit": LOADED_COMMIT,
-        "dirty": LOADED_DIRTY,
+        "commit": loaded_commit,
+        "dirty": loaded_dirty,
         "uptime": humanise(int(time.time()) - STARTED_AT) or "0s",
         # A running process older than the checkout is the failure this
         # exists to surface, so it is stated rather than left to be inferred
         # from two hex strings.
-        "stale": current != LOADED_COMMIT and current != "unknown",
+        "stale": current != loaded_commit and current != "unknown",
         "current": current,
     }

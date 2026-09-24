@@ -81,6 +81,13 @@
   <p class="hint">Zam answers from the fleet above. It has no terminal, file or code tools here.</p>
 </section>
 
+{% if not liveness_known %}
+  <p class="banner bad">
+    Could not read this machine's process table, so liveness below is guessed
+    from signal age and nothing is called dead. A run shown as running may not be.
+  </p>
+{% endif %}
+
 <p class="note">
   <b>Dead</b> is a fact: the board still calls the run <code>running</code> and there is
   no process behind it. Nothing here acts on that — the board is not touched and no card
