@@ -27,8 +27,27 @@
 # live classic loop walked straight through it.
 set -uo pipefail
 
-PATTERN='ristretto\.runner --task-id|loop-runner/scripts/run-loop\.sh'
+# Snapshot first, filter second, and never `pgrep -f`. A pattern search matches
+# the command line of whatever runs the search, so the filter reports itself as
+# a live run — `running_flows` in ristretto/dash/data.py documents this and
+# avoids pgrep for the same reason. Capturing `ps` before the filter process
+# exists is what keeps the filter out of its own results.
+listing="$(ps -eo pid=,command= 2>/dev/null || true)"
 
-live="$(pgrep -fl "$PATTERN" 2>/dev/null || true)"
+live="$(printf '%s\n' "$listing" | awk '
+  # Classic: the script must be what is executing, not merely named on some
+  # other command line. It is reached either through a shell or by its shebang,
+  # so the script path is the first or the second field after the pid.
+  $2 ~ /loop-runner\/scripts\/run-loop\.sh$/ || $3 ~ /loop-runner\/scripts\/run-loop\.sh$/ { print; next }
+
+  # Staged: a shell that merely mentions the runner is not running it.
+  index($0, "-m ristretto.runner") && index($0, "--task-id") {
+    exe = $2
+    sub(/.*\//, "", exe)
+    if (exe == "sh" || exe == "bash" || exe == "zsh") next
+    print
+  }
+')"
+
 [ -n "$live" ] || exit 1
 printf '%s\n' "$live"

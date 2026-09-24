@@ -69,6 +69,26 @@ out="$(bash "$repo/scripts/live-runs.sh")"
 assert "a live staged runner is reported" grep -q "ristretto.runner --task-id" <<<"$out"
 stop "$staged"
 
+# A shell that merely names the runner is not running it. This is the case
+# `pgrep -f` got wrong: it matches the command line of whatever runs the
+# search, so a monitor watching for a flow reported itself as one. Verified
+# against the old implementation, which reported this process as a live run.
+#
+# The loop is load-bearing: `bash -c` with a single simple command execs it
+# and the shell's own argv — comment included — disappears, so the fixture
+# would pass against any implementation.
+bash -c 'while :; do sleep 1; done # -m ristretto.runner --task-id t_notreal' &
+mentioner=$!
+started="$started $mentioner"
+sleep 0.4
+if out="$(bash "$repo/scripts/live-runs.sh")"; then
+  assert "a shell that only mentions the runner is not reported" \
+    bash -c "! grep -q t_notreal <<<'$out'"
+else
+  assert "a shell that only mentions the runner is not reported" true
+fi
+stop "$mentioner"
+
 # The guards must run BEFORE the destructive step, not merely exist. Checked
 # statically rather than by executing update.sh, because a guard that failed
 # would then pull and reinstall against the developer's own checkout.
