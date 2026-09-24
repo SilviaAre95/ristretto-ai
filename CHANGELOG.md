@@ -58,6 +58,24 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `make update` no longer runs over work in flight. It restarted the gateway
+  unconditionally, and `hermes gateway restart` is a kill: Hermes resolves its
+  drain budget to `0` by default and documents why — a window large enough to
+  save a long agent turn would have to outlast an unbounded task. So
+  `agent.restart_drain_timeout` exists but buys seconds against runs measured
+  in hours, and the default stands. The restart is also not the only hazard;
+  `install-hermes.sh` repoints the `loop-runner` link and a runtime rebuild
+  swaps code a staged flow is executing out of, so the refusal covers the
+  whole update rather than the restart alone.
+
+  `scripts/live-runs.sh` answers "is anything live" from the operating system
+  rather than the board, because a run whose process died stays `running` and
+  claimed and reads as healthy from every surface — so a stalled run does not
+  block an update. It matches both shapes, which `install-runtime.sh`'s
+  existing guard did not: that one matched only `ristretto.runner`, and the
+  classic loop is pinned the same way, so a live `run-loop.sh` walked straight
+  through it.
+
 - A stage killed by a signal keeps what it wrote. XARI-118 covered the
   runner's own deadline and a later change covered the runner being signalled,
   but neither fired when the *stage child* was killed and the runner lived to

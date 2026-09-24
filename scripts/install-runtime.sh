@@ -29,9 +29,11 @@ fi
 # flow — and its later stages re-read them: the broker is respawned per stage
 # and several imports are lazy. That is the exact failure this feature exists
 # to remove, relocated one directory over.
-live="$(pgrep -f "ristretto\.runner --task-id" 2>/dev/null | tr '\n' ' ' || true)"
-if [ -n "$live" ]; then
-  echo "install-runtime: refusing while a flow is running (pids: $live)" >&2
+# Covers the classic loop as well as the staged runner; this guard used to
+# match only `ristretto.runner`, and `run-loop.sh` is pinned here too.
+if live="$(bash "$repo/scripts/live-runs.sh")"; then
+  echo "install-runtime: refusing while a run is live" >&2
+  printf '  %s\n' "$live" >&2
   echo "  updating would swap code under it — stop it, or wait" >&2
   exit 1
 fi
