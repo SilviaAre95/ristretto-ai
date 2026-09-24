@@ -68,9 +68,12 @@ ISSUE_KEY="${2:?usage: run-loop.sh <task_id> <issue_key> [--model tier] [--flow 
 shift 2
 # Optional model tier (S-sized tasks run on a cheaper tier). Strict allowlist
 # — anything else is silently dropped from legacy positional calls and
-# rejected from explicit flags. `local` was a member and is not any more; a
-# queued task still carrying it is dropped to the default rather than routed
-# to a local coder.
+# rejected from explicit flags. `local` was a member and is not any more: it
+# is accepted and DROPPED, on both paths, so the run continues on the Claude
+# default. Rejecting it would be worse than useless — a task queued before
+# 2026-09-23 still carries `model: local` in its body, SKILL.md passes that
+# through as --model, and exiting 2 would block the task rather than run it
+# on Claude, which is the entire point of retiring the local coder.
 MODEL=""
 FLOW="classic"
 if [ "${1:-}" = "--model" ] || [ "${1:-}" = "--flow" ]; then
@@ -92,6 +95,10 @@ if [ "${1:-}" = "--model" ] || [ "${1:-}" = "--flow" ]; then
         ;;
     esac
   done
+  if [ "$MODEL" = "local" ]; then
+    echo "run-loop: the local tier was retired; running on the Claude default" >&2
+    MODEL=""
+  fi
   [[ "$MODEL" =~ ^(sonnet|haiku|opus)?$ ]] || {
     echo "run-loop: invalid model tier: $MODEL" >&2
     exit 2

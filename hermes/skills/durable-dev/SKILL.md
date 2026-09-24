@@ -31,7 +31,7 @@ Dev work must survive crashes and restarts, so it is queued — never executed i
    - **There is no local coding flow.** "locally" used to select `tier3`; the tiers were retired on 2026-09-23 because local models do not write production code here. If the user asks for a local run, say so rather than silently picking a Claude flow.
    - No flow request → `flow: classic`, preserving the existing `/loop-dev` behavior.
 
-   For `classic` only, use `model: sonnet` by default; omit the model line for auth, payments, security, sensitive data, or requests containing "carefully". `model: local` was removed with the tiers and is no longer accepted. Non-classic flows get their models from validated Ristretto configuration and omit the model line.
+   For `classic` only, use `model: sonnet` by default; omit the model line for auth, payments, security, sensitive data, or requests containing "carefully". `model: local` was removed with the tiers; a task queued with it still runs, on the Claude default, rather than failing. Non-classic flows get their models from validated Ristretto configuration and omit the model line.
    ```bash
    hermes kanban create "<KEY> · loop-dev" \
      --body "issue: <KEY>

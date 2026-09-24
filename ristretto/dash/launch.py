@@ -457,7 +457,9 @@ def launch(
     except ConfigError as exc:
         return Outcome(False, f"configuration is not loadable: {exc}")
 
-    flow = flow.strip() or str(config.get("default_flow", ""))
+    # str(... or "") rather than .strip(): the tool schema says "omit for the
+    # configured default", which invites a model to send an explicit null.
+    flow = str(flow or "").strip() or str(config.get("default_flow", ""))
     repo, error = validate(config, project, issue, flow)
     if repo is None:
         return Outcome(False, error)

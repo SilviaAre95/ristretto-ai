@@ -72,7 +72,7 @@ def start(raw_args: str = "") -> str:
     if project is None:
         return (
             f"I can't tell which project {issue} is in from Slack. "
-            f"Add it: !ris-start {issue} {flow or 'short'} project:<name>"
+            f"Add it: !ris-start {issue}{' ' + flow if flow else ''} project:<name>"
         )
 
     args = [binary, "launch", project, issue, "--actor", "slack"]

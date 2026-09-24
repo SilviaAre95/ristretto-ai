@@ -56,9 +56,17 @@ stage explicitly sets `mutates: true`. Stage outputs and logs are stored under
 variables and are never written into the resolved flow output.
 
 Task requests may select a flow explicitly, for example "do PROJ-123 on
-short." Requests without a flow use `full`. There is no longer a way to ask
-for a local coding run: `local-brain` is the only local provider a flow can
-name, and no shipped flow gives it a mutating stage.
+short." Without one, there are two entry points and they differ deliberately:
+
+- `ristretto launch`, the Slack `!ris-start` command and the launch form send
+  no flow, so the configured `default_flow` applies — `full` as shipped.
+- A conversational request handled by the `durable-dev` skill writes
+  `flow: classic` into the task body explicitly, preserving the proven
+  `/loop-dev` path for work that arrives as chat rather than as a launch.
+
+There is no longer a way to ask for a local coding run: `local-brain` is the
+only local provider a flow can name, and no shipped flow gives it a mutating
+stage.
 
 ## Custom flow example
 

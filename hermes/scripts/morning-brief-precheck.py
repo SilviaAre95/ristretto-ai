@@ -70,17 +70,23 @@ def fetch_issues() -> list[dict[str, Any]]:
         capture_output=True,
         check=False,
     )
-    if not (result.stdout or "").strip():
-        raise RuntimeError(
-            f"ristretto issues produced nothing: {(result.stderr or '').strip()}"
-        )
-    data: Any = json.loads(result.stdout)
+    stdout = (result.stdout or "").strip()
+    stderr = (result.stderr or "").strip()
+    # Exit status first. Parsing first would turn any non-JSON failure output
+    # into a bare JSONDecodeError and throw away the stderr that says why.
+    if result.returncode != 0:
+        detail = stdout or stderr or "no output"
+        raise RuntimeError(f"ristretto issues failed (rc={result.returncode}): {detail}")
+    if not stdout:
+        raise RuntimeError(f"ristretto issues produced nothing: {stderr}")
+    try:
+        data: Any = json.loads(stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"ristretto issues did not return JSON: {exc}") from exc
     if not isinstance(data, dict):
         raise RuntimeError("ristretto issues returned an unexpected response")
     if data.get("error"):
         raise RuntimeError(str(data["error"]))
-    if result.returncode != 0:
-        raise RuntimeError(f"ristretto issues failed (rc={result.returncode})")
     issues = data.get("issues")
     if not isinstance(issues, list):
         raise RuntimeError("ristretto issues response has no issues list")

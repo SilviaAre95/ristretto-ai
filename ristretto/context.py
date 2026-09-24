@@ -100,7 +100,18 @@ def linear_issue(issue: str, environ: Mapping[str, str] | None = None) -> dict[s
 # brief that silently describes two thirds of a board is worse than one that
 # refuses, so the caller is told when there is a next page rather than left to
 # assume completeness.
+#
+# The query filters closed states server-side, so this budget is spent on open
+# issues only. Without that filter it covers the whole history of the team:
+# measured on the real board, 146 issues of which 67 were open, so the cap
+# would have been reached by issues nobody wanted in the brief, and the
+# failure would have read as "your open board is too big".
 MAX_BOARD_ISSUES = 250
+
+# State types that mean the issue is finished. Filtered server-side here and
+# again client-side in the brief's precheck: one keeps the page budget for
+# issues that matter, the other is the thing that has a test.
+CLOSED_STATE_TYPES = ("completed", "canceled", "duplicate")
 
 # Linear returns priority as a number and its label separately; the brief
 # wants both, and 0 means "no priority" rather than "most urgent".
@@ -119,15 +130,25 @@ def linear_issues(team: str, environ: Mapping[str, str] | None = None) -> dict[s
     that way; the GraphQL path was already here.
 
     Raises rather than returning empty: a brief built on a board we could not
-    read should not look like a quiet morning.
+    read should not look like a quiet morning. That is why the team key is
+    resolved in the same query. Linear answers an unknown key with an empty
+    node list and no error, so a renamed or mistyped team would otherwise
+    read as "every issue closed overnight" — the precheck would report the
+    whole board as having left it and then overwrite its snapshot with
+    nothing, re-adding all of it the next morning. Verified against the API:
+    `NOSUCHTEAM` returns 0 nodes and no `errors`.
     """
     env = os.environ if environ is None else environ
     token = str(env.get(LINEAR_TOKEN_ENV, "")).strip()
     if not token:
         raise RuntimeError(f"{LINEAR_TOKEN_ENV} is not set; the board cannot be read")
 
+    closed = ",".join(f'"{name}"' for name in CLOSED_STATE_TYPES)
     query = (
-        "query($team:String!,$first:Int!){issues(filter:{team:{key:{eq:$team}}},"
+        "query($team:String!,$first:Int!){"
+        "teams(filter:{key:{eq:$team}},first:1){nodes{key}}"
+        "issues(filter:{team:{key:{eq:$team}},"
+        f"state:{{type:{{nin:[{closed}]}}}}}},"
         "first:$first,orderBy:updatedAt){pageInfo{hasNextPage}nodes{identifier title "
         "updatedAt archivedAt priority priorityLabel state{name type}project{name}}}}"
     )
@@ -147,10 +168,15 @@ def linear_issues(team: str, environ: Mapping[str, str] | None = None) -> dict[s
 
     if payload.get("errors"):
         raise RuntimeError(f"Linear rejected the query: {payload['errors']}")
-    connection = ((payload or {}).get("data") or {}).get("issues") or {}
+    data = (payload or {}).get("data") or {}
+    if not ((data.get("teams") or {}).get("nodes") or []):
+        raise RuntimeError(
+            f"Linear has no team with key {team!r}; check instance.linear_team"
+        )
+    connection = data.get("issues") or {}
     if connection.get("pageInfo", {}).get("hasNextPage"):
         raise RuntimeError(
-            f"Linear board exceeds the {MAX_BOARD_ISSUES}-issue snapshot limit"
+            f"the open board exceeds the {MAX_BOARD_ISSUES}-issue snapshot limit"
         )
 
     issues = []

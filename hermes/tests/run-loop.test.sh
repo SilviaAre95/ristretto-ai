@@ -60,6 +60,16 @@ t "local tier: no ollama base_url"    "grep -q '^none$' '$FAKEBIN/baseurl'"
 t "local tier: still a cloud session" "grep -qE -- '--session-id|--resume' '$FAKEBIN/argv'"
 RIS_LOCAL_LOOP_MODEL="qwen3-coder-next:q4_K_M" "$SCRIPT" t-local2 PROJ-05 >/dev/null 2>&1
 t "loop model env is inert"           "! grep -q -- '--model' '$FAKEBIN/argv'"
+# A task queued before the tiers were retired still carries `model: local`,
+# and SKILL.md passes it through as --model. Blocking it would strand the
+# task; it must run on the Claude default instead.
+"$SCRIPT" t-local3 PROJ-05 --model local >/dev/null 2>"$FAKEBIN/local_stderr"; RC=$?
+# Not exit 2: that is the allowlist rejection, which would strand the task.
+# The fake claude in this section fails on purpose, so 0 is not the check.
+t "queued --model local: not rejected" "[ $RC -ne 2 ]"
+t "queued --model local: dropped"      "! grep -q -- '--model' '$FAKEBIN/argv'"
+t "queued --model local: says so"      "grep -q 'local tier was retired' '$FAKEBIN/local_stderr'"
+t "queued --model local: stays cloud"  "grep -q '^none$' '$FAKEBIN/baseurl'"
 
 # Resume-first cloud path: reuse the worktree session and clear it on success.
 cat > "$FAKEBIN/claude" <<EOF
