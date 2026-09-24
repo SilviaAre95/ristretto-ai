@@ -16,6 +16,9 @@ fi
 
 command -v hermes >/dev/null || {
   echo "install-hermes: hermes is required; install Hermes Agent first" >&2
+  echo "  hermes-agent (MIT, Nous Research) — https://github.com/NousResearch/hermes-agent" >&2
+  echo "  curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash" >&2
+  echo "  or: pip install 'hermes-agent==0.18.*'" >&2
   exit 1
 }
 command -v ristretto >/dev/null || {

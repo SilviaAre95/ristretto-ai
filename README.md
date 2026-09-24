@@ -142,7 +142,11 @@ credentials in `ristretto.yaml` are rejected.
 
 ## 🪽 Install Hermes assets
 
-After installing and authenticating Hermes Agent:
+After installing and authenticating Hermes Agent — it is
+[`hermes-agent`](https://github.com/NousResearch/hermes-agent) by Nous
+Research, MIT, third-party, and Ris is developed against 0.18.x
+([how to install it](docs/getting-started.md#where-hermes-agent-comes-from)):
+
 
 ```bash
 make install-hermes

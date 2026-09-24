@@ -442,9 +442,12 @@ task creation kept as defence in depth.
 
 ### The cost of keeping it
 
-A stranger must install a third-party agent platform before any of this runs,
-and this repository does not say where to get it — no URL, no package name, no
-version, anywhere. That is the cheapest thing on this list to fix.
+A stranger must install a third-party agent platform before any of this runs.
+The repository used to be silent on where to get it — no URL, no package name,
+no version, anywhere. Fixed 2026-09-24: `hermes-agent` by Nous Research, MIT,
+on PyPI and GitHub, developed against 0.18.x, with the install route in
+`docs/getting-started.md` and in the message `install-hermes.sh` prints when
+the binary is missing.
 
 Beyond it: there is no version gate and no contract test over the board JSON
 this project parses, so an engine upgrade can break the fleet view silently; and

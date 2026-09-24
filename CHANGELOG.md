@@ -56,6 +56,16 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   content rather than line position, so a wrong assumption fails instead of
   silently deleting.
 
+- The docs say where Hermes Agent comes from. It is a hard requirement with no
+  URL, package name or version anywhere in the repository, so the one step a
+  stranger cannot skip was the one step unwritten: `hermes-agent` by Nous
+  Research, MIT, on PyPI and GitHub, developed against 0.18.x. Recorded in
+  `docs/getting-started.md`, in the README, and in the message
+  `install-hermes.sh` prints when the binary is missing — the place it is
+  actually hit. Two stale rows in the same requirements table went with it:
+  Claude Code is no longer optional, since every flow runs on it, and the
+  default flow is `full`, not `classic`.
+
 ### Fixed
 
 - `make update` no longer runs over work in flight. It restarted the gateway
