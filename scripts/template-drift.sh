@@ -7,7 +7,7 @@
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-hermes_home="${CUZAM_HERMES_HOME:-${HERMES_HOME:-$HOME/.hermes}}"
+hermes_home="${CUZAM_HERMES_HOME:-${RISTRETTO_HERMES_HOME:-${HERMES_HOME:-$HOME/.hermes}}}"
 seeds="$hermes_home/.template-seeds"
 templates="SOUL.md config.yaml"
 

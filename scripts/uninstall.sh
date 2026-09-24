@@ -4,8 +4,8 @@
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-config_dir="${CUZAM_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/cuzam}"
-bin_dir="${CUZAM_BIN_DIR:-$HOME/.local/bin}"
+config_dir="${CUZAM_CONFIG_DIR:-${RISTRETTO_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/cuzam}}"
+bin_dir="${CUZAM_BIN_DIR:-${RISTRETTO_BIN_DIR:-$HOME/.local/bin}}"
 link="$bin_dir/cuzam"
 target="$repo/.venv/bin/cuzam"
 

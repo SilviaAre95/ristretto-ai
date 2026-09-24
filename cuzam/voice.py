@@ -15,11 +15,12 @@ MLX build uses the GPU the machine already has.
 
 from __future__ import annotations
 
-import os
 import tempfile
 import time
 from pathlib import Path
 from typing import Any, Mapping, NamedTuple
+
+from .env import get as env_value
 
 # Small and fast. Speech to a desk assistant is short, close-mic and in one
 # language; a larger model buys accuracy this does not need and pays for it
@@ -79,8 +80,7 @@ def prompt(environ: Mapping[str, str] | None = None) -> str:
 
 
 def model_name(environ: Mapping[str, str] | None = None) -> str:
-    env = os.environ if environ is None else environ
-    return env.get("CUZAM_WHISPER_MODEL", DEFAULT_MODEL)
+    return env_value("CUZAM_WHISPER_MODEL", DEFAULT_MODEL, environ) or DEFAULT_MODEL
 
 
 def transcribe(audio: bytes, suffix: str = ".wav", environ: Mapping[str, str] | None = None) -> Heard:

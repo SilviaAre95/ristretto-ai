@@ -41,7 +41,14 @@ live="$(printf '%s\n' "$listing" | awk '
   $2 ~ /loop-runner\/scripts\/run-loop\.sh$/ || $3 ~ /loop-runner\/scripts\/run-loop\.sh$/ { print; next }
 
   # Staged: a shell that merely mentions the runner is not running it.
-  index($0, "-m cuzam.runner") && index($0, "--task-id") {
+  #
+  # Both module names, for one release. A flow started before the rename is
+  # executing `-m ristretto.runner` and keeps that command line for its whole
+  # hour; matching only the new name would let `make update` restart the
+  # gateway over it, which is exactly the hole the guard closed in #66. Drop
+  # the old name in 0.3.0, once no run can predate the rename.
+  (index($0, "-m cuzam.runner") || index($0, "-m ristretto.runner")) \
+  && index($0, "--task-id") {
     exe = $2
     sub(/.*\//, "", exe)
     if (exe == "sh" || exe == "bash" || exe == "zsh") next

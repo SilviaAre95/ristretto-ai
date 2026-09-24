@@ -36,8 +36,13 @@ def parse_args() -> argparse.Namespace:
 
 
 def configured_team() -> str:
-    if os.environ.get("CUZAM_LINEAR_TEAM"):
-        return os.environ["CUZAM_LINEAR_TEAM"]
+    # The fallback is spelled out rather than imported from cuzam.env: this
+    # script is copied into ~/.hermes/scripts and runs under whatever
+    # interpreter Hermes' cron has, so it imports nothing but the standard
+    # library. Drop the old name in 0.3.0.
+    for name in ("CUZAM_LINEAR_TEAM", "RISTRETTO_LINEAR_TEAM"):
+        if os.environ.get(name):
+            return os.environ[name]
     result = subprocess.run(
         ["cuzam", "instance", "get", "linear_team"],
         text=True,

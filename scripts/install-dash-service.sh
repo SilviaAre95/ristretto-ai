@@ -15,7 +15,7 @@ set -euo pipefail
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 label="com.cuzam.dash"
 plist="$HOME/Library/LaunchAgents/$label.plist"
-port="${CUZAM_DASH_PORT:-8787}"
+port="${CUZAM_DASH_PORT:-${RISTRETTO_DASH_PORT:-8787}}"
 logs="$HOME/Library/Logs"
 
 python_bin="$repo/.venv/bin/python3"

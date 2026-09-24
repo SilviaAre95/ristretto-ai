@@ -157,8 +157,18 @@ zam_python() {
   local candidate
   # An explicit choice wins outright — no import probe, because overriding
   # is how you pin an interpreter the probe would reject.
-  if [ -n "${ZAM_PYTHON:-}" ] && [ -x "${ZAM_PYTHON}" ]; then
-    printf '%s' "$ZAM_PYTHON"
+  #
+  # RIS_PYTHON is still read, for one release. Nothing in this repository
+  # sets it — checked, because the rename handoff said launch.py did and it
+  # does not; `flow_interpreter` returns an argv prefix, never this variable.
+  # It is an operator's override, which means it lives in a shell profile, a
+  # launchd plist or a cron entry that no installer can reach, and dropping
+  # it on the release would silently stop honouring a pin someone chose.
+  # Resolved once into a local, because `set -u` makes testing an unset
+  # variable directly an error. Drop in 0.3.0.
+  local chosen="${ZAM_PYTHON:-${RIS_PYTHON:-}}"
+  if [ -n "$chosen" ] && [ -x "$chosen" ]; then
+    printf '%s' "$chosen"
     return 0
   fi
   for candidate in \

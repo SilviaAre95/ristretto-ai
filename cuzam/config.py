@@ -15,6 +15,8 @@ from typing import Any, Callable, Mapping
 
 import yaml
 
+from .env import get as env_value
+
 
 SCHEMA_VERSION = 1
 RUNNERS = {"claude-code", "codex"}
@@ -47,8 +49,9 @@ def repo_root() -> Path:
 
 def default_config_path(environ: Mapping[str, str] | None = None) -> Path:
     env = os.environ if environ is None else environ
-    if env.get("CUZAM_CONFIG"):
-        return Path(env["CUZAM_CONFIG"]).expanduser()
+    configured = env_value("CUZAM_CONFIG", None, environ)
+    if configured:
+        return Path(configured).expanduser()
     xdg = Path(env.get("XDG_CONFIG_HOME", Path.home() / ".config"))
     installed = xdg / "cuzam" / "config.yaml"
     if installed.exists():
@@ -61,8 +64,9 @@ def default_config_path(environ: Mapping[str, str] | None = None) -> Path:
 
 def user_config_path(environ: Mapping[str, str] | None = None) -> Path:
     env = os.environ if environ is None else environ
-    if env.get("CUZAM_CONFIG"):
-        return Path(env["CUZAM_CONFIG"]).expanduser()
+    configured = env_value("CUZAM_CONFIG", None, environ)
+    if configured:
+        return Path(configured).expanduser()
     xdg = Path(env.get("XDG_CONFIG_HOME", Path.home() / ".config"))
     return xdg / "cuzam" / "config.yaml"
 

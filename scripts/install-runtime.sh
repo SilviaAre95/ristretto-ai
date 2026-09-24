@@ -15,7 +15,7 @@ repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # eval so a configured ~ expands the way events.state_home() expands it with
 # .expanduser(); without it the script builds ./~/... while every launch looks
 # under $HOME and reports itself unpinned forever.
-eval runtime="${CUZAM_STATE_HOME:-$HOME/.cuzam}/runtime"
+eval runtime="${CUZAM_STATE_HOME:-${RISTRETTO_STATE_HOME:-$HOME/.cuzam}}/runtime"
 base="${1:-main}"
 
 origin="$(git -C "$repo" remote get-url origin 2>/dev/null || true)"

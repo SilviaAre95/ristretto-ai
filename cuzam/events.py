@@ -14,12 +14,13 @@ raises immediately.
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
 import sys
 import time
 from pathlib import Path
 from typing import Any, Iterable, Mapping
+
+from .env import get as env_value
 
 # Closed vocabulary. The fleet view can only render states it was designed
 # for, so a new kind is a deliberate change here and in the reader.
@@ -66,8 +67,8 @@ class UnknownEventKind(ValueError):
 
 
 def state_home(environ: Mapping[str, str] | None = None) -> Path:
-    env = os.environ if environ is None else environ
-    return Path(env.get("CUZAM_STATE_HOME", Path.home() / ".cuzam")).expanduser()
+    configured = env_value("CUZAM_STATE_HOME", None, environ)
+    return Path(configured or Path.home() / ".cuzam").expanduser()
 
 
 def store_path(environ: Mapping[str, str] | None = None) -> Path:

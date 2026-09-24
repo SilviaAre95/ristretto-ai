@@ -38,7 +38,7 @@ elif [ "$("$venv/bin/python" -c 'import sys; print(f"{sys.version_info.major}.{s
   exit 1
 fi
 
-if [ "${CUZAM_UPGRADE_PIP:-0}" = "1" ]; then
+if [ "${CUZAM_UPGRADE_PIP:-${RISTRETTO_UPGRADE_PIP:-0}}" = "1" ]; then
   "$venv/bin/python" -m pip install --upgrade pip
 fi
 

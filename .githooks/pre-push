@@ -2,7 +2,7 @@
 # Refuse to push any ref descended from Cuzam's private-history root.
 set -euo pipefail
 
-private_root="${CUZAM_PRIVATE_ROOT_COMMIT:-4ebdb7a3919a48cba84bf39ccd424fcdd9221210}"
+private_root="${CUZAM_PRIVATE_ROOT_COMMIT:-${RISTRETTO_PRIVATE_ROOT_COMMIT:-4ebdb7a3919a48cba84bf39ccd424fcdd9221210}}"
 zero=0000000000000000000000000000000000000000
 
 # The sentinel is deliberately absent from a history-free public export.

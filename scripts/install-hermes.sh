@@ -4,7 +4,7 @@
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-hermes_home="${CUZAM_HERMES_HOME:-${HERMES_HOME:-$HOME/.hermes}}"
+hermes_home="${CUZAM_HERMES_HOME:-${RISTRETTO_HERMES_HOME:-${HERMES_HOME:-$HOME/.hermes}}}"
 install_service=0
 
 if [ "${1:-}" = "--service" ]; then
@@ -184,10 +184,16 @@ path = Path(sys.argv[1])
 text = path.read_text() if path.exists() else ""
 begin, end = "# zam:flow-guard begin", "# zam:flow-guard end"
 
-if begin in text and end in text:
-    head, _, rest = text.partition(begin)
-    _, _, tail = rest.partition(end)
-    text = head.rstrip("\n") + "\n" + tail.lstrip("\n")
+# The pre-rename marker is stripped as well, for one release. The hooks keys
+# below are dropped whatever they are called, so leaving this out would not
+# disarm anything — it would leave two orphaned comment lines wrapped around
+# nothing, which is the kind of litter that gets read as a second block by
+# the next person to edit this file. Drop in 0.3.0.
+for first, last in ((begin, end), ("# ris:flow-guard begin", "# ris:flow-guard end")):
+    if first in text and last in text:
+        head, _, rest = text.partition(first)
+        _, _, tail = rest.partition(last)
+        text = head.rstrip("\n") + "\n" + tail.lstrip("\n")
 
 # Drop any earlier hooks mapping, children included. Removing only the
 # top-level keys orphans their indented entries and leaves YAML that will

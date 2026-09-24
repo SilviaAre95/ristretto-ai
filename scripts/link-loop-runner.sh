@@ -21,10 +21,10 @@
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-hermes_home="${CUZAM_HERMES_HOME:-${HERMES_HOME:-$HOME/.hermes}}"
+hermes_home="${CUZAM_HERMES_HOME:-${RISTRETTO_HERMES_HOME:-${HERMES_HOME:-$HOME/.hermes}}}"
 # eval so a configured ~ expands the way events.state_home() expands it, the
 # same reason install-runtime.sh does it.
-eval runtime="${CUZAM_STATE_HOME:-$HOME/.cuzam}/runtime"
+eval runtime="${CUZAM_STATE_HOME:-${RISTRETTO_STATE_HOME:-$HOME/.cuzam}}/runtime"
 
 destination="$hermes_home/skills/software-development/loop-runner"
 repo_source="$repo/hermes/skills/loop-runner"

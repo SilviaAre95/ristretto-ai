@@ -25,8 +25,15 @@ from typing import Any, Mapping, NamedTuple
 # than silently reintroducing the pile-up this command exists to prevent.
 TASK_WORKTREE = re.compile(r"^t_[0-9A-Za-z]{6,}$")
 TERMINAL_STATES = frozenset({"done", "archived"})
-# Run artifacts and editor noise are not work worth preserving.
-IGNORED_DIRT = ("\\.cuzam/", "\\.DS_Store", "\\.cc-zam-session")
+# Run artifacts and editor noise are not work worth preserving. The
+# pre-rename spellings are listed too, for one release: a worktree cut before
+# the release still holds `.ristretto/` and a `.cc-ris-session`, and treating
+# those as real work would make `gc` refuse to reclaim it forever — a leak
+# that looks exactly like the guard working. Drop both in 0.3.0.
+IGNORED_DIRT = (
+    "\\.cuzam/", "\\.DS_Store", "\\.cc-zam-session",
+    "\\.ristretto/", "\\.cc-ris-session",
+)
 
 
 class Candidate(NamedTuple):

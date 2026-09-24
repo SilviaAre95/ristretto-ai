@@ -69,6 +69,19 @@ out="$(bash "$repo/scripts/live-runs.sh")"
 assert "a live staged runner is reported" grep -q "cuzam.runner --task-id" <<<"$out"
 stop "$staged"
 
+# A run that predates the rename. Its command line says `ristretto.runner`
+# for the whole hour it lives, and it must still block an update — matching
+# only the new name would reopen the hole #66 closed, one release later and
+# with nothing to say so. Delete with the old name in 0.3.0.
+bash -c "exec -a 'python3 -m ristretto.runner --task-id t_old123 --flow full' sleep 30" &
+legacy=$!
+started="$started $legacy"
+sleep 0.4
+out="$(bash "$repo/scripts/live-runs.sh")"
+assert "a run started under the old module name is still reported" \
+  grep -q "ristretto.runner --task-id" <<<"$out"
+stop "$legacy"
+
 # A shell that merely names the runner is not running it. This is the case
 # `pgrep -f` got wrong: it matches the command line of whatever runs the
 # search, so a monitor watching for a flow reported itself as one. Verified

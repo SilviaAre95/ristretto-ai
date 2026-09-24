@@ -1,4 +1,4 @@
-.PHONY: setup install install-runtime install-hermes install-push-guard install-dash-service update test check public-check doctor
+.PHONY: setup install install-runtime install-hermes install-push-guard install-dash-service migrate update test check public-check doctor
 
 setup:
 	bash scripts/setup-dev.sh
@@ -15,6 +15,10 @@ install-hermes: install
 install-push-guard:
 	bash scripts/install-private-push-guard.sh
 
+# One-time, for the 0.2.0 -> Cuzam rename. Idempotent; see CHANGELOG.md.
+migrate:
+	bash scripts/migrate-cuzam.sh
+
 update:
 	bash scripts/update.sh
 
@@ -30,6 +34,7 @@ test:
 	bash hermes/tests/link-loop-runner.test.sh
 	bash hermes/tests/template-drift.test.sh
 	bash hermes/tests/live-runs.test.sh
+	bash hermes/tests/migrate-cuzam.test.sh
 
 check:
 	bash scripts/check.sh

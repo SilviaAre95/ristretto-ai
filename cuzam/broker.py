@@ -23,11 +23,11 @@ It decides nothing. Policy lives with the person being asked.
 from __future__ import annotations
 
 import json
-import os
 import uuid
 from typing import Any, Mapping
 
 from . import approvals
+from .env import get as env_value
 
 # The tool name Claude Code is pointed at. Changing it means changing the
 # --permission-prompt-tool flag the runner passes.
@@ -45,9 +45,8 @@ def permission_result(
 
 def decide(payload: Mapping[str, Any], *, environ: Mapping[str, str] | None = None) -> dict[str, Any]:
     """Record the question, wait for a human, and map the answer to a result."""
-    env = os.environ if environ is None else environ
     request_id = str(payload.get("tool_use_id") or uuid.uuid4().hex)
-    task_id = env.get("CUZAM_TASK_ID", "")
+    task_id = env_value("CUZAM_TASK_ID", "", environ) or ""
     if not task_id:
         # Without a task there is no card to show and no way to answer, so
         # blocking would hang the stage until it timed out anyway. Say why.
@@ -56,14 +55,14 @@ def decide(payload: Mapping[str, Any], *, environ: Mapping[str, str] | None = No
             message="no owning task: the flow did not stamp CUZAM_TASK_ID",
         )
 
-    timeout = _timeout(env)
+    timeout = _timeout(environ)
     approvals.request(
         request_id,
         task_id,
         str(payload.get("tool_name") or "unknown tool"),
         payload.get("input") if isinstance(payload.get("input"), Mapping) else {},
-        issue_key=env.get("CUZAM_ISSUE_KEY") or None,
-        stage=env.get("CUZAM_STAGE") or None,
+        issue_key=env_value("CUZAM_ISSUE_KEY", None, environ) or None,
+        stage=env_value("CUZAM_STAGE", None, environ) or None,
         timeout_seconds=timeout,
     )
     decision, reason = approvals.await_decision(request_id, timeout_seconds=timeout)
@@ -72,8 +71,8 @@ def decide(payload: Mapping[str, Any], *, environ: Mapping[str, str] | None = No
     return permission_result(approvals.DENY, message=reason or "Denied.")
 
 
-def _timeout(env: Mapping[str, str]) -> int:
-    raw = str(env.get("CUZAM_APPROVAL_TIMEOUT", "")).strip()
+def _timeout(environ: Mapping[str, str] | None = None) -> int:
+    raw = str(env_value("CUZAM_APPROVAL_TIMEOUT", "", environ) or "").strip()
     if raw.isdigit() and int(raw) > 0:
         return int(raw)
     return approvals.DEFAULT_TIMEOUT_SECONDS
