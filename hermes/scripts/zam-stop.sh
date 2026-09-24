@@ -14,6 +14,13 @@ fi
 TASK_PATTERN="${TASK_ID//./\\.}"
 export PATH="$HOME/.local/bin:$PATH"
 
+# The same resolution install-hermes.sh uses to decide where it put these. Both
+# the reap script and the liveness guard below were reached through a hardcoded
+# ~/.hermes, which is wrong on any install that sets one of these — and the
+# liveness guard failing that way is silent, which is the failure it exists to
+# prevent.
+HERMES_DIR="${CUZAM_HERMES_HOME:-${RISTRETTO_HERMES_HOME:-${HERMES_HOME:-$HOME/.hermes}}}"
+
 # 1. Release the claim so the dispatcher does NOT re-dispatch while we stop it.
 hermes kanban reclaim "$TASK_ID" --reason "manual stop (zam-stop.sh)" || true
 hermes kanban block "$TASK_ID" 2>/dev/null || true
@@ -52,7 +59,7 @@ for SIGNATURE in "${SIGNATURES[@]}"; do
 done
 
 # 3. Verified-kill the Claude Code grandchild (Guard 4 — mismatches are never killed).
-bash "$HOME/.hermes/skills/software-development/loop-runner/scripts/reap.sh" "$TASK_ID"
+bash "$HERMES_DIR/skills/software-development/loop-runner/scripts/reap.sh" "$TASK_ID"
 
 # 4. Verification pass — catches the race where the worker promotes the task
 #    between stage 1 and stage 3, causing silent false-green in old versions.
@@ -83,11 +90,16 @@ WORKER_PIDS=$( for SIGNATURE in "${SIGNATURES[@]}"; do
 #
 # Absent — an install predating it — leaves the verification as it was rather
 # than failing the stop, because refusing to report on a kill that may well have
-# worked is its own kind of wrong answer.
-LIVE_RUNS="$HOME/.hermes/scripts/live-runs.sh"
+# worked is its own kind of wrong answer. It says so on stderr rather than
+# degrading quietly: a check that silently stops checking is how the false green
+# came back the first time.
+LIVE_RUNS="$HERMES_DIR/scripts/live-runs.sh"
 STILL_LIVE=""
 if [ -f "$LIVE_RUNS" ]; then
   STILL_LIVE="$(bash "$LIVE_RUNS" 2>/dev/null | grep -F -- "$TASK_ID" || true)"
+else
+  echo "zam-stop: $LIVE_RUNS is missing — verifying by kill signature only;" \
+       "run make update to install it" >&2
 fi
 
 case "$TASK_STATE" in
@@ -99,6 +111,11 @@ if [ -n "$STILL_LIVE" ]; then
   echo "zam-stop: a process for $TASK_ID is still live and matched no kill signature:" >&2
   printf '%s\n' "$STILL_LIVE" >&2
   STATE_OK=0
+  # Folded into the pid list, not only reported above. The summary line is what a
+  # human skims and what the dashboard surfaces verbatim, and left alone it read
+  # "worker pids=none" — "nothing was running" — while stderr said the opposite.
+  LIVE_PIDS="$(printf '%s\n' "$STILL_LIVE" | awk '{printf "%s%s", sep, $1; sep=","}')"
+  WORKER_PIDS="${WORKER_PIDS:+$WORKER_PIDS,}$LIVE_PIDS (unmatched)"
 fi
 
 if [ "$STATE_OK" = "1" ] && [ -z "$WORKER_PIDS" ]; then

@@ -146,7 +146,35 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   itself rather than passing.
 - **A flow removed from `cuzam.yaml` left a relaunch claimed and dead.** The
   flow is resolved before the task is claimed, so an unknown one is refused
-  with the board untouched.
+  with the board untouched. So is the loop script: `bash` exists whatever
+  happens, so spawning it at a script that is not there returned a pid and
+  reported success. Nothing may be claimed that cannot be started.
+- **A builtin classic flow under any other name was started and then refused.**
+  The launcher decides the shape on the `builtin` key and `run-loop.sh` decides
+  it on the flow *name* it is handed, because it is bash and cannot read the
+  config. An alias split the two: the loop was spawned, took its staged branch,
+  and the multi-stage runner refused the flow. Configuration now requires a
+  builtin classic flow to be named `classic`, which makes the two statements
+  one.
+- **A classic run's output was lost when it was stopped**, and its temporary
+  file leaked, because the output is written out when the run ends and the
+  default signal action skips the exit trap. TERM and INT are trapped, which is
+  what `zam-stop.sh` sending TERM before KILL was always for.
+- **`relaunch` read the task header, not the task body.** `kanban show` prints a
+  header in the same `key: value` shape, including a `model:` line for a task
+  with `model_override` set — a provider model id, which the launcher would
+  refuse, making an otherwise restartable run unrelaunchable. Only the body is
+  read now.
+- **`relaunch` refused on any pull request for the branch.** The branch is
+  deterministic per issue, so a second run on the same issue inherited the
+  first run's still-open PR and could never be restarted — with advice to
+  complete a task that had done no work. Only a pull request newer than the run
+  counts as the run's own.
+- **`zam-stop.sh` assumed `~/.hermes`.** The installer honours
+  `CUZAM_HERMES_HOME`, so on any install that sets it both the verified reap and
+  the new liveness verification silently fell back — the second reintroducing
+  the false green it was added to close. It resolves the configured home now,
+  and says so when the guard is genuinely absent.
 
 ### Upgrade notes
 

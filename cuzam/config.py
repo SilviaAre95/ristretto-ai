@@ -397,6 +397,26 @@ def validate_config(config: Mapping[str, Any]) -> None:
                 raise ConfigError(
                     f"flows.{flow_name}: builtin must be classic and cannot define stages"
                 )
+            # And it must be called `classic`, because two programs decide what
+            # the classic loop is and only one of them can read this file. The
+            # launcher keys on this `builtin` value; `run-loop.sh` keys on the
+            # flow *name* it is handed, because it is bash and reaching config
+            # from there is what pinning the runtime exists to avoid. An alias
+            # split the two: `launch` spawned the loop for a builtin-classic
+            # flow named anything else, the script took its staged branch, and
+            # the multi-stage runner refused the flow and exited 2 — a task
+            # claimed and `running` with nothing running it, reported as started.
+            #
+            # Requiring the name makes "builtin is classic" and "named classic"
+            # the same statement, so the two programs cannot disagree. An alias
+            # bought nothing: there is one builtin and this is its name.
+            if flow_name != "classic":
+                raise ConfigError(
+                    f"flows.{flow_name}: a builtin classic flow must be named "
+                    "'classic' — run-loop.sh selects the loop by the flow name "
+                    "it is given, so an alias would be run as a staged flow and "
+                    "refused"
+                )
             continue
         stages = flow.get("stages")
         if not isinstance(stages, list) or not stages:

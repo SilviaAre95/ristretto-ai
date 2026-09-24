@@ -109,8 +109,15 @@ shown only when the file exists, and inventing the path it would have had is
 the kind of derivation this rule exists to forbid. A classic run now has one:
 the launcher opens `flow.out` before spawning the loop, so the harness's own
 output is captured for classic exactly as for a staged flow. Claude's own
-output still goes to a temporary file and is appended when the run ends, so
-`flow.out` is complete only once the loop exits.
+output still goes to a temporary file and is written out when the run ends, so
+`flow.out` is complete only once the loop exits — including when a stop ends it,
+which the loop traps so that what Claude had said is not lost with it.
+
+Streaming that output live was tried and reverted. Process substitution forks a
+shell that does not exec, so it carries the loop's own argv and task id, and
+both liveness implementations counted one run as two — with the fork outliving
+the loop, so a stopped run read as live indefinitely. A run is one process, and
+a test asserts that count rather than trusting it.
 
 ### Controls
 

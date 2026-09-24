@@ -30,9 +30,11 @@ from __future__ import annotations
 
 import os
 import re
+import json
 import subprocess
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping, NamedTuple
 
@@ -380,6 +382,10 @@ def start_flow(
 
 TASK_ID = re.compile(r"^t_[0-9a-f]{6,}$")
 
+# The contract lines `launch` writes into a task body, and the only lines
+# `_task_body` reads back out of it.
+BODY_KEY = re.compile(r"^\s*(issue|repo|branch|flow|model):\s*(\S+)\s*$")
+
 
 def flow_is_running(task_id: str) -> bool:
     """Whether a flow process for this task is actually alive.
@@ -438,33 +444,75 @@ def stalled_runs() -> list[dict[str, str]]:
     return stalled
 
 
-def open_pull_request(repo: str, branch: str) -> str:
-    """The pull request this branch already has, or "".
+def run_started_at(repo: str, task_id: str) -> int | None:
+    """When this run began, from the marker it wrote itself, or None.
+
+    `run-loop.sh` writes `loop.json` before anything else and the staged runner
+    writes `flow.json` beside it, both under `runs.run_dir`. Read here to date a
+    run against a pull request, which is the only way to tell a PR this run
+    opened from one that was already on the branch.
+    """
+    from .. import runs
+
+    directory = runs.run_dir(Path(repo) / WORKTREE_DIR / task_id, task_id)
+    marker = directory / "loop.json"
+    if not marker.is_file():
+        return None
+    try:
+        started = json.loads(marker.read_text(encoding="utf-8")).get("started")
+    except (OSError, ValueError):
+        return None
+    return int(started) if isinstance(started, (int, float)) else None
+
+
+def open_pull_request(repo: str, branch: str, since: int | None = None) -> str:
+    """A pull request this run opened, or "".
 
     Inherited from the retired loop-runner skill, whose step 2 checked this
     before running anything: the loop opens its pull request as its final act, so
-    an open PR means the work finished and the run died before reporting it.
+    a PR it opened means the work finished and the run died before reporting it.
     Restarting then pays for the whole flow again and lets a fresh `finish` stage
     push over work that is already up. The agent made this check; after the agent
     went away nothing did.
 
-    Best effort in one direction only. `gh` missing, unauthenticated or offline
-    returns "" and the relaunch proceeds, because refusing to restart on an
-    unanswered question is the worse of the two failures.
+    `since` is what stops it over-reaching, and it matters because `branch_for`
+    is deterministic per issue and `pin_branch_to_base` leaves an existing branch
+    alone. A second run on the same issue therefore inherits the first run's
+    branch — and its still-open pull request, since pull requests here are merged
+    by hand and stay open for a while. Keyed on the branch alone, that second run
+    could never be relaunched, and the refusal would tell the operator to
+    complete a task that had done no work. So only a pull request newer than this
+    run counts as this run's.
+
+    Best effort in one direction only, and that is deliberate on both counts:
+    `gh` missing, unauthenticated or offline returns "", and so does a run with
+    no recorded start. Refusing to restart on an unanswered question is the worse
+    of the two failures.
     """
-    if not branch:
+    if not branch or since is None:
         return ""
     try:
         found = subprocess.run(
-            ["gh", "pr", "list", "--head", branch, "--json", "url", "--jq", ".[0].url"],
+            ["gh", "pr", "list", "--head", branch, "--state", "all",
+             "--json", "url,createdAt", "--jq", ".[0].url + \" \" + .[0].createdAt"],
             cwd=repo, capture_output=True, text=True, check=False, timeout=60,
         )
     except (OSError, subprocess.SubprocessError):
         return ""
     if found.returncode != 0:
         return ""
-    url = (found.stdout or "").strip()
-    return url if url.startswith("http") else ""
+    parts = (found.stdout or "").strip().split(" ", 1)
+    if len(parts) != 2 or not parts[0].startswith("http"):
+        return ""
+    url, created = parts
+    try:
+        # `gh` prints RFC 3339 in UTC; fromisoformat handles the Z from 3.11.
+        opened = int(
+            datetime.fromisoformat(created.replace("Z", "+00:00")).timestamp()
+        )
+    except ValueError:
+        return ""
+    return url if opened >= since else ""
 
 
 def relaunch(target: str = "", config_path: Path | None = None) -> Outcome:
@@ -527,7 +575,7 @@ def relaunch(target: str = "", config_path: Path | None = None) -> Outcome:
     if not (repo and issue and flow and branch):
         return Outcome(False, f"{task_id}: the task body does not say what to run", task_id)
 
-    already = open_pull_request(repo, branch)
+    already = open_pull_request(repo, branch, run_started_at(repo, task_id))
     if already:
         return Outcome(
             False,
@@ -566,14 +614,34 @@ def _task_body(task_id: str) -> dict[str, str]:
     `model` is read as well as the four locators, so a relaunch of a classic run
     keeps the tier the first attempt used. Without it a run queued as `sonnet`
     came back on the Claude default and nothing said so.
+
+    Scoped to what follows `Body:`, which is not fussiness. `kanban show` prints
+    a header block first, in the same `key: value` shape, and it has a `branch:`
+    line of its own — harmless only because it carries the same value. It also
+    has a `model:` line for a task with `model_override` set, and that value is a
+    provider model id rather than one of our tiers, so reading the header would
+    hand `start_flow` something it refuses and make an otherwise restartable run
+    unrelaunchable. No CLI flag writes `model_override` today, so this is a trap
+    rather than a live bug — but the function claimed to read the body and did
+    not, and the next key added to either side would decide which.
     """
     shown = subprocess.run(
         ["hermes", "kanban", "show", task_id],
         capture_output=True, text=True, check=False, timeout=120,
     )
     found: dict[str, str] = {}
+    in_body = False
     for line in (shown.stdout or "").splitlines():
-        match = re.match(r"^\s*(issue|repo|branch|flow|model):\s*(\S+)\s*$", line)
+        if not in_body:
+            # The body runs from `Body:` to the next section heading.
+            in_body = line.strip() == "Body:"
+            continue
+        # A section heading ends the body: unindented and ending in a colon.
+        # Our own keys are excluded, so a contract line written with an empty
+        # value reads as a missing value rather than as the end of the body.
+        if re.match(r"^\S.*:\s*$", line) and not BODY_KEY.match(line):
+            break
+        match = BODY_KEY.match(line)
         if match:
             found.setdefault(match.group(1), match.group(2))
     return found

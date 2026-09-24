@@ -219,8 +219,29 @@ if [ "$FLOW" != "classic" ]; then
 fi
 
 mkdir -p "$PID_DIR"
+# Claude's output is buffered here and written to stdout when the run ends. The
+# launcher points that stdout at the run's `flow.out`, so a classic run's log
+# fills in two parts: this script's own commentary as it goes, and Claude's in
+# one block at the end.
+#
+# Streaming it instead — `> >(tee "$OUT")` — was tried on 2026-09-24 and reverted
+# the same day. Process substitution forks a shell that does NOT exec, so `ps`
+# shows it carrying THIS script's argv, task id and all. Both `cuzam/runs.py` and
+# `scripts/live-runs.sh` identify a classic run by exactly that, so every run
+# would have been counted twice, and the fork outlives the loop (tee holds on
+# until its stdin closes) — leaving a phantom that reads as live after a stop,
+# refuses `make update`, and makes zam-stop.sh report NOT STOPPED forever. A
+# `| tee` is worse still: `$!` becomes tee's pid and Guard 4 loses the child.
+# If this is worth revisiting, the shape has to be one that execs.
 OUT="$(mktemp)"
+# TERM and INT are trapped rather than left to the default, which does not run
+# the EXIT trap: a stopped run used to lose everything Claude had said and leak
+# its temporary file. `zam-stop.sh` sends TERM before KILL precisely so the run
+# can do this.
+flush() { cat "$OUT" 2>/dev/null; }
 trap 'rm -f "$OUT"' EXIT
+trap 'flush; rm -f "$OUT"; exit 143' TERM
+trap 'flush; rm -f "$OUT"; exit 130' INT
 
 new_session_id() {
   uuidgen | tr '[:upper:]' '[:lower:]'
@@ -258,6 +279,9 @@ run_once() {  # $1 = fresh|resume — sets RC + RUN_ELAPSED
   # a permission-bypass flag to this invocation.
   # Namespaced form required: bare /loop-dev only resolves in interactive mode.
   local started_at=$SECONDS
+  # A simple command with a redirection, so `$!` is Claude's own pid — the reap
+  # record and every liveness surface depend on that, and both a pipeline and a
+  # process substitution break it in different ways. See the note by $OUT.
   claude "${args[@]}" >"$OUT" 2>&1 &
   CLAUDE_PID=$!
   LSTART="$(ps -p "$CLAUDE_PID" -o lstart= | sed 's/^ *//;s/ *$//')"
@@ -273,7 +297,7 @@ run_once() {  # $1 = fresh|resume — sets RC + RUN_ELAPSED
     echo "run-loop: child gone before record (pid=$CLAUDE_PID)" >&2
     wait "$CLAUDE_PID"; RC=$?
     RUN_ELAPSED=$((SECONDS - started_at))
-    cat "$OUT"
+    flush
     return 0
   fi
 
@@ -283,7 +307,7 @@ run_once() {  # $1 = fresh|resume — sets RC + RUN_ELAPSED
   wait "$CLAUDE_PID"; RC=$?
   RUN_ELAPSED=$((SECONDS - started_at))
   rm -f "$REC"
-  cat "$OUT"
+  flush
 }
 
 # Pipeline telemetry. Never allowed to fail the loop it is describing: the

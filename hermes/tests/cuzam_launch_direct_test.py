@@ -541,23 +541,6 @@ class RelaunchTest(unittest.TestCase):
             self.assertNotIn("reclaim", call.args[0])
             self.assertNotIn("unblock", call.args[0])
 
-    def test_an_unanswerable_pr_check_lets_the_relaunch_proceed(self) -> None:
-        # One-directional on purpose. `gh` missing, unauthenticated or offline
-        # must not block a restart: refusing to relaunch on an unanswered
-        # question is the worse of the two failures.
-        with mock.patch.object(launch.subprocess, "run", side_effect=OSError("no gh")):
-            self.assertEqual(launch.open_pull_request("/tmp/r", "xariprojects/xari-9"), "")
-
-    def test_a_pr_check_that_prints_nothing_is_not_a_url(self) -> None:
-        # `--jq '.[0].url'` prints an empty line when there are no pull
-        # requests, and "null" when the field is absent. Neither is a PR, and
-        # treating either as one would make every relaunch refuse.
-        for output in ("", "\n", "null\n", "  \n"):
-            with self.subTest(output=output), \
-                 mock.patch.object(launch.subprocess, "run") as gh:
-                gh.return_value = subprocess.CompletedProcess([], 0, output, "")
-                self.assertEqual(launch.open_pull_request("/tmp/r", "b"), "")
-
     def test_an_unreadable_task_body_is_not_guessed_at(self) -> None:
         with self.stalled(task_id="t_aaa111", issue="XARI-9", status="running"), \
              mock.patch.object(launch, "_task_body", return_value={"issue": "XARI-9"}), \
@@ -567,6 +550,87 @@ class RelaunchTest(unittest.TestCase):
         self.assertFalse(outcome.ok)
         self.assertIn("does not say what to run", outcome.message)
         started.assert_not_called()
+
+
+class OpenPullRequestTest(unittest.TestCase):
+    """The PR-first check itself, called for real.
+
+    A class of its own because `RelaunchTest` patches `open_pull_request` — it
+    has to, or every test in it would shell out to `gh`. Three of these tests
+    lived there first and were asserting the mock's return value rather than the
+    function's: they passed because the mock returned "" and "" was what they
+    expected. The same shape as a test that describes its intent and verifies
+    nothing.
+    """
+
+    def test_an_unanswerable_pr_check_lets_the_relaunch_proceed(self) -> None:
+        # One-directional on purpose. `gh` missing, unauthenticated or offline
+        # must not block a restart: refusing to relaunch on an unanswered
+        # question is the worse of the two failures.
+        with mock.patch.object(launch.subprocess, "run", side_effect=OSError("no gh")):
+            self.assertEqual(launch.open_pull_request("/tmp/r", "b", since=1), "")
+
+    def test_a_pr_check_that_prints_nothing_is_not_a_url(self) -> None:
+        # `--jq` prints an empty line when there are no pull requests, and
+        # "null" when a field is absent. None of these is a PR, and treating one
+        # as one would make every relaunch refuse.
+        for output in ("", "\n", "null null\n", "  \n", "https://x/1\n"):
+            with self.subTest(output=output), \
+                 mock.patch.object(launch.subprocess, "run") as gh:
+                gh.return_value = subprocess.CompletedProcess([], 0, output, "")
+                self.assertEqual(launch.open_pull_request("/tmp/r", "b", since=1), "")
+
+    def test_a_pull_request_older_than_the_run_is_not_this_run_s(self) -> None:
+        # `branch_for` is deterministic per issue and `pin_branch_to_base` leaves
+        # an existing branch alone, so a second run on the same issue inherits
+        # the first run's branch — and its pull request, which is still open
+        # because pull requests here are merged by hand. Keyed on the branch
+        # alone, that second run could never be relaunched, and the refusal told
+        # the operator to complete a task that had done no work.
+        cases = {
+            "opened before this run started": ("2026-09-20T10:00:00Z", ""),
+            "opened after this run started": (
+                "2026-09-24T10:00:00Z", "https://github.com/o/r/pull/7"),
+        }
+        since = int(
+            launch.datetime.fromisoformat("2026-09-24T09:00:00+00:00").timestamp()
+        )
+        for label, (created, expected) in cases.items():
+            with self.subTest(label), mock.patch.object(launch.subprocess, "run") as gh:
+                gh.return_value = subprocess.CompletedProcess(
+                    [], 0, f"https://github.com/o/r/pull/7 {created}\n", ""
+                )
+                self.assertEqual(
+                    launch.open_pull_request("/tmp/r", "b", since=since), expected
+                )
+
+    def test_a_run_with_no_recorded_start_is_allowed_to_relaunch(self) -> None:
+        # A run that never wrote its marker cannot be dated against a pull
+        # request, and an undatable question must not block a restart.
+        with mock.patch.object(launch.subprocess, "run") as gh:
+            self.assertEqual(launch.open_pull_request("/tmp/r", "b", since=None), "")
+            gh.assert_not_called()
+
+    def test_the_start_time_comes_from_the_marker_the_run_wrote(self) -> None:
+        # run-loop.sh writes loop.json before it does anything else, which is why
+        # the completion guard trusts it: telemetry being unavailable must never
+        # look like a loop that never ran.
+        from cuzam import runs
+
+        holder = tempfile.TemporaryDirectory()
+        self.addCleanup(holder.cleanup)
+        repo = Path(holder.name)
+        directory = runs.run_dir(repo / launch.WORKTREE_DIR / "t_abc", "t_abc")
+        directory.mkdir(parents=True)
+
+        self.assertIsNone(launch.run_started_at(str(repo), "t_abc"),
+                          "no marker means no answer, not a guess")
+
+        (directory / "loop.json").write_text('{"started": 1758700000}', encoding="utf-8")
+        self.assertEqual(launch.run_started_at(str(repo), "t_abc"), 1758700000)
+
+        (directory / "loop.json").write_text("not json at all", encoding="utf-8")
+        self.assertIsNone(launch.run_started_at(str(repo), "t_abc"))
 
 
 class ClippedDescriptionTest(unittest.TestCase):

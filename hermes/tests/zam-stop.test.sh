@@ -6,11 +6,15 @@ set -u
 PASS=0; FAIL=0
 t() { if eval "$2"; then echo "ok  - $1"; PASS=$((PASS+1)); else echo "FAIL - $1"; FAIL=$((FAIL+1)); fi; }
 
-SCRIPT="$(cd "$(dirname "$0")/.." && pwd)/scripts/zam-stop.sh"
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+SCRIPT="$REPO_ROOT/hermes/scripts/zam-stop.sh"
 
-# 1. The reap.sh path hardcoded in the script must resolve on this machine
-#    (catches drift between the script and the ~/.hermes symlink layout).
-REAP_REF="$(sed -n 's/.*bash "\(\$HOME[^"]*reap\.sh\)".*/\1/p' "$SCRIPT")"
+# 1. The reap.sh path the script builds must resolve on this machine (catches
+#    drift between the script and the ~/.hermes symlink layout). Both paths hang
+#    off $HERMES_DIR, which the script resolves the way install-hermes.sh does;
+#    the test resolves it the same way so it cannot drift from either.
+HERMES_DIR="${CUZAM_HERMES_HOME:-${RISTRETTO_HERMES_HOME:-${HERMES_HOME:-$HOME/.hermes}}}"
+REAP_REF="$(sed -n 's/.*bash "\(\$HERMES_DIR[^"]*reap\.sh\)".*/\1/p' "$SCRIPT")"
 t "script references a reap.sh path" "[ -n '$REAP_REF' ]"
 if [ -f "$(eval echo "$REAP_REF")" ]; then
   t "referenced reap.sh exists under real HOME" "true"
@@ -26,7 +30,9 @@ export HOME="$(mktemp -d)"
 FAKEBIN="$(mktemp -d)"
 export PATH="$FAKEBIN:$PATH"
 
-REAP_STUB="$HOME${REAP_REF#\$HOME}"
+# HOME is now the sandbox, so re-resolve and re-expand against it.
+HERMES_DIR="$HOME/.hermes"
+REAP_STUB="$(eval echo "$REAP_REF")"
 mkdir -p "$(dirname "$REAP_STUB")"
 printf '#!/usr/bin/env bash\necho "$1" > "%s/reap-called"\n' "$HOME" > "$REAP_STUB"
 
@@ -134,11 +140,11 @@ wait "$CLASSIC_PID" "$STAGED_PID" 2>/dev/null
 #    carries no `-m` and therefore matches none of zam-stop's three patterns.
 # Path taken from the script rather than written out here, the same way the
 # reap.sh stub is, so the test cannot drift from what zam-stop.sh actually reads.
-LIVE_REF="$(sed -n 's/^LIVE_RUNS="\(\$HOME[^"]*\)"$/\1/p' "$SCRIPT")"
+LIVE_REF="$(sed -n 's/^LIVE_RUNS="\(\$HERMES_DIR[^"]*\)"$/\1/p' "$SCRIPT")"
 t "script references a live-runs.sh path" "[ -n '$LIVE_REF' ]"
-LIVE_STUB="$HOME${LIVE_REF#\$HOME}"
+LIVE_STUB="$(eval echo "$LIVE_REF")"
 mkdir -p "$(dirname "$LIVE_STUB")"
-install -m 0755 "$(cd "$(dirname "$0")/../.." && pwd)/scripts/live-runs.sh" "$LIVE_STUB"
+install -m 0755 "$REPO_ROOT/scripts/live-runs.sh" "$LIVE_STUB"
 
 UNKNOWN_TID="t_unknown$$"
 bash -c "exec -a 'cuzam-run-flow --task-id $UNKNOWN_TID --issue XARI-1 --flow full' \
@@ -156,6 +162,34 @@ t "a live run no signature matches is NOT reported as stopped" \
   "[ $UNKNOWN_RC -ne 0 ] && grep -q 'NOT STOPPED' '$HOME/out-unknown'"
 t "and it says which process it could not kill" \
   "grep -q 'still live and matched no kill signature' '$HOME/out-unknown'"
+# The summary line is what a human skims and what the dashboard surfaces
+# verbatim. Left alone it said "worker pids=none" — "nothing was running" —
+# while stderr said the opposite one line up.
+t "the summary line names the pid rather than saying none" \
+  "grep 'NOT STOPPED' '$HOME/out-unknown' | grep -q \"$UNKNOWN_PID\""
+t "and marks it as one no signature matched" \
+  "grep -q 'unmatched' '$HOME/out-unknown'"
+
+# Finding 4: the guard has to look where the installer actually put it. A
+# hardcoded ~/.hermes made this silently fall back to signature-only checking on
+# any install that configures a different Hermes home — the very false green the
+# check exists to close.
+ELSEWHERE="$(mktemp -d)"
+mkdir -p "$ELSEWHERE/scripts" "$ELSEWHERE/skills/software-development/loop-runner/scripts"
+install -m 0755 "$REPO_ROOT/scripts/live-runs.sh" "$ELSEWHERE/scripts/live-runs.sh"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$ELSEWHERE/skills/software-development/loop-runner/scripts/reap.sh"
+chmod +x "$ELSEWHERE/skills/software-development/loop-runner/scripts/reap.sh"
+mv "$LIVE_STUB" "$LIVE_STUB.hidden"
+
+CUZAM_HERMES_HOME="$ELSEWHERE" bash "$SCRIPT" "$UNKNOWN_TID" > "$HOME/out-elsewhere" 2>&1
+ELSEWHERE_RC=$?
+t "a configured Hermes home is honoured, not assumed" \
+  "[ $ELSEWHERE_RC -ne 0 ] && grep -q 'still live and matched no kill signature' '$HOME/out-elsewhere'"
+t "and it never claims the guard was missing" \
+  "! grep -q 'verifying by kill signature only' '$HOME/out-elsewhere'"
+
+mv "$LIVE_STUB.hidden" "$LIVE_STUB"
+rm -rf "$ELSEWHERE"
 
 kill -KILL "$UNKNOWN_PID" 2>/dev/null
 wait "$UNKNOWN_PID" 2>/dev/null
