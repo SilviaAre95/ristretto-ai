@@ -29,9 +29,9 @@ def fleet_status() -> dict[str, Any]:
     the context window is a tool nobody can afford to call.
     """
     try:
-        from ..dash import data
+        from .. import runs as fleet_data
 
-        runs = data.fleet()
+        runs = fleet_data.fleet()
     except Exception as exc:  # noqa: BLE001 - a tool must answer, not raise
         return {"error": f"could not read the fleet: {exc}", "runs": []}
 

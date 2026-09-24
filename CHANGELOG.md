@@ -10,7 +10,48 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`cuzam runs`** — every run with the paths to reach it: worktree, branch,
+  the log to tail, the runner's pid, and for a classic loop the pid of the
+  Claude process it is waiting on. `cuzam runs <issue>` narrows to one and
+  `--json` is the machine-readable form. A path is shown only when there is
+  something at the end of it.
+- **A run that died says so.** A run the board still calls `running` with no
+  process behind it is reported as `dead` by both the fleet view and the CLI,
+  immediately, instead of reading healthy for fifteen minutes and then
+  becoming the guess `stalled`. Nothing acts on it: the board is not touched
+  and no process is signalled. `cuzam relaunch` stays the deliberate way back.
+
 ### Changed
+
+- **One answer to "what is a live run".** There were three and they disagreed,
+  and none of them could see a `classic` loop at all — so a healthy
+  `run-loop.sh` read as dead from every Python surface. `cuzam/runs.py` now
+  answers it for the fleet view, the CLI, the assistant and the relaunch
+  guard; `scripts/live-runs.sh` stays a standalone bash implementation on
+  purpose, because `install-runtime.sh` consults it while rebuilding the
+  Python environment, and a new contract test pins the two against each other
+  across all three flows by name.
+- Liveness keys on process shape rather than flow name, so `classic`, `full`
+  and `short` are two cases instead of three and a fourth flow cannot fall
+  outside both implementations unnoticed.
+- Both implementations stopped counting a process that merely *mentions* the
+  runner — a `python -c` whose source text names the module carries
+  `-m cuzam.runner --task-id` on its command line. This is the `pgrep -f`
+  failure in another costume; the interpreter must now genuinely have been
+  handed the module.
+- `cuzam/dash/data.py` moved to `cuzam/runs.py`. The dashboard is one renderer
+  over it, `cuzam runs` is another, and nothing in the module assumes a web
+  framework — which is what keeps a third surface a rendering job.
+- The `.cuzam/runs/<task>` path is built in one place. Three copies had
+  drifted, including one in the runner beside its own unused constant.
+- `stalled_runs` takes one process snapshot for the whole fleet instead of one
+  per task on the board.
+- The installer no longer says the loop flow guard "needs re-approval" after
+  an update that changes it. The guard is still armed — Hermes matches an
+  approved hook on event and command, never on the script's timestamp — so
+  the message now says that and offers the command to clear the notice.
 
 - **Ristretto is now Cuzam, and Nemo/Ris is now Zam.** The system took the
   name `cuzam`, the assistant took `zam`: `ris-*` became `zam-*` (plugins

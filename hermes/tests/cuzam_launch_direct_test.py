@@ -234,13 +234,17 @@ class FlowIsRunningTest(unittest.TestCase):
     def listing(self, text: str):
         """A fake process list, plus a record of how it was asked for.
 
+        Lines carry a pid, because the snapshot does: `ps -eo pid=,command=`.
+        The pid is what the contract test compares the two implementations on,
+        and what a surface shows so a run can be found without one.
+
         Both halves matter. `pgrep -f` matches the command line of whatever
         runs the search, so the search reports itself — which is why the
         calls are recorded and asserted on, not just their result: an
         implementation that went back to pgrep would return "no match" here
         and quietly pass every assertion below.
         """
-        from cuzam.dash import data
+        from cuzam import runs
 
         calls: list[list[str]] = []
 
@@ -248,7 +252,7 @@ class FlowIsRunningTest(unittest.TestCase):
             calls.append(list(argv))
             return subprocess.CompletedProcess(argv, 0, text, "")
 
-        with mock.patch.object(data.subprocess, "run", side_effect=fake):
+        with mock.patch.object(runs.subprocess, "run", side_effect=fake):
             yield calls
 
     def test_a_shell_mentioning_the_task_is_not_a_live_flow(self) -> None:
@@ -257,15 +261,15 @@ class FlowIsRunningTest(unittest.TestCase):
         # `stalled_runs` then found nothing stalled and `relaunch` refused to
         # restart a run that had already died.
         with self.listing(
-            "/bin/zsh -c pgrep -f 'cuzam.runner --task-id t_aaa111'\n"
+            "  101 /bin/zsh -c pgrep -f 'cuzam.runner --task-id t_aaa111'\n"
         ) as calls:
             self.assertFalse(launch.flow_is_running("t_aaa111"))
 
-        self.assertEqual(calls, [["ps", "-eo", "command="]])
+        self.assertEqual(calls, [["ps", "-eo", "pid=,command="]])
 
     def test_a_real_runner_is_a_live_flow(self) -> None:
         with self.listing(
-            "/x/.venv/bin/python3 -m cuzam.runner --task-id t_aaa111 "
+            "  102 /x/.venv/bin/python3 -m cuzam.runner --task-id t_aaa111 "
             "--issue XARI-1 --flow full\n"
         ) as calls:
             self.assertTrue(launch.flow_is_running("t_aaa111"))

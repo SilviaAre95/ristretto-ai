@@ -157,7 +157,27 @@ Artifacts land in `.cuzam/runs/<task-id>/`: `plan.md`, `build.md`,
 input. When a run produces something strange, read `plan.md` first — a bad plan
 looks exactly like a model failure three stages later.
 
+`cuzam runs` prints every run with the paths to reach it — worktree, branch,
+the log to tail, the runner's pid and, for a classic loop, the pid of the
+Claude process it is waiting on. It shows the same facts as the fleet view and
+reads from the same module; the command exists so the paths can be pasted
+straight into a terminal. `cuzam runs <issue>` narrows to one,
+`cuzam runs --json` is the machine-readable form.
+
+A path appears only when there is something at the end of it. A classic loop
+keeps Claude's output in a temporary file, so it has no log to tail and none
+is offered; a worktree `cuzam gc` has reclaimed is still named, marked as
+gone.
+
 ## When it goes wrong
+
+**A dead run says so.** `cuzam runs` and the fleet view both report a run the
+board still calls `running` with no process behind it as `dead` — a fact from
+the process table, unlike `stalled`, which is a guess from silence. Neither
+surface does anything about it: the board is not touched and no process is
+signalled, because on 2026-09-10 a surface that could not tell alive from dead
+restarted three healthy runs. `cuzam relaunch <issue>` is the deliberate way
+back, and it starts again from `plan`.
 
 **Interrupting is safe.** Ctrl-C commits whatever a mutating stage has written
 as a `wip(<stage>)` commit on the run's branch, with a `Cuzam-Preserved`

@@ -3,12 +3,18 @@ id: fleet-view
 title: Fleet View
 status: in-progress  # proposed | in-progress | implemented | deprecated
 created_at: 2026-08-25
-last_modified: 2026-09-23
+last_modified: 2026-09-24
 owner: project
 depends_on: [event-spine]
 acceptance_criteria:
   - Every run across every project is visible from a phone on the tailnet
+  - A classic run is as visible as a staged one
   - A run that has gone quiet is shown as stalled, not as healthy
+  - A run the board calls running with no process behind it is shown as dead
+  - Every locator needed to reach a run is shown - worktree, branch, log,
+    runner pid, and for classic the Claude child pid
+  - The same facts are available without a browser, from a command
+  - Every surface renders one module and computes nothing of its own
   - The view never claims a signal it did not receive
   - Stopping and unblocking are possible from a phone
   - A mutating request that did not come from this page is refused
@@ -18,6 +24,8 @@ non_goals:
   - NOT binding to a public interface
   - NOT a second assistant with its own tools or memory
   - NOT implying a heartbeat Hermes does not expose
+  - NOT acting on a dead run - showing the truth never touches the board
+  - NOT a second definition of what a live run is
 ---
 
 # Fleet View
@@ -27,7 +35,14 @@ non_goals:
 `cuzam dash` serves a read-only view of every run across every project,
 joining Hermes' task board to Cuzam's pipeline event log on task id. It
 binds to this machine's Tailscale address, so a phone or iPad on the tailnet
-can reach it and nothing else can.
+can reach it and nothing else can. `cuzam runs` prints the same facts to a
+terminal, so a worktree can be `cd`'d into and a log tailed without copying
+paths out of a browser.
+
+Both are renderers. What a run *is* — alive or dead, which shape, where its
+worktree, branch and log are, which pids — is answered in one place,
+`cuzam/runs.py`, which knows nothing about web frameworks, requests,
+templates or sessions.
 
 ## Behavior
 
@@ -52,6 +67,38 @@ that is active with no signal for fifteen minutes is shown as stalled.
 A finished task with no recorded completion time reports its duration as
 unknown rather than counting from its start, which would grow forever and read
 as though the work were still in flight.
+
+#### Dead, which is not stalled
+
+`stalled` is a guess from silence; `dead` is a fact from the process table. A
+run the board still calls `running` with no process behind it is shown as
+dead, immediately, rather than reading healthy for fifteen minutes and then
+reading as a guess.
+
+**Nothing is done about it.** The board is not reclaimed, the card is not
+moved, no process is signalled. On 2026-09-10 a surface that could not tell
+alive from dead restarted a healthy run; a surface that can tell must still
+not be the thing that acts.
+
+Liveness keys on process shape, not on the flow's name: a foreground
+`run-loop.sh` and a detached `cuzam.runner` are two shapes covering three
+flows, so `classic` is visible for the first time and a fourth flow cannot
+fall outside it silently. `scripts/live-runs.sh` stays a standalone bash
+implementation on purpose — `install-runtime.sh` consults it while rebuilding
+the Python environment, and a guard that imports the package to decide whether
+it may replace the package is the circularity it exists to prevent. A contract
+test pins the two against each other and names all three flows.
+
+#### Locators come from truth
+
+The worktree and branch are read from the board, which recorded them when the
+run was created; the flow from the live process's own argv, or failing that
+from what `launch` wrote into the task body; the runner pid from one `ps`
+snapshot; the Claude child pid from the record `reap.sh` already maintains,
+verified by pid, start time and command before it is shown. A log path is
+shown only when the file exists — a classic run keeps its Claude output in a
+temporary file and has none, and inventing the path it would have had is the
+kind of derivation this rule exists to forbid.
 
 ### Controls
 
