@@ -22,7 +22,7 @@ Run this yourself with your Linear tools and file access — do NOT delegate it 
 
 2. **Resolution comment.** Add a comment on the Linear issue: 1–3 lines on what shipped, the bare PR URL, and any decision worth recording. Done when: the comment is created.
 
-3. **Project Changelog (always).** Resolve the vault root with `vault="$(ristretto instance get knowledge_vault)"` and append one dated line to `$vault/02-Projects/<project>.md` under its `## Changelog` heading, matching the existing line style:
+3. **Project Changelog (always).** Resolve the vault root with `vault="$(cuzam instance get knowledge_vault)"` and append one dated line to `$vault/02-Projects/<project>.md` under its `## Changelog` heading, matching the existing line style:
    `- <YYYY-MM-DD> — <ISSUE-KEY>: <one-line summary> (PR #N)`
    If the note has no `## Changelog` section, add one at the end. If you can't map the issue to a project note, ask the user rather than guess. Done when: the line is appended.
 

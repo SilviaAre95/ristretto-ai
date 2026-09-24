@@ -1,4 +1,4 @@
-# ☕ Ristretto AI
+# ☕ Cuzam AI
 
 [![CI](https://github.com/SilviaAre95/ristretto-ai/actions/workflows/ci.yml/badge.svg)](https://github.com/SilviaAre95/ristretto-ai/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -6,8 +6,8 @@
 [![Status](https://img.shields.io/badge/status-pre--release_0.1.0-orange)](docs/project-status.md)
 [![Platform](https://img.shields.io/badge/platform-macOS-lightgrey?logo=apple)](docs/development.md)
 
-**Ristretto ("Ris") is a configurable, always-on personal operations
-assistant** built on the open-source Hermes Agent runtime. Nemo talks in Slack,
+**Cuzam ("Zam") is a configurable, always-on personal operations
+assistant** built on the open-source Hermes Agent runtime. Zam talks in Slack,
 tracks configured work in Linear, runs supervised coding tasks in durable
 workers, and requests approval before risky actions.
 
@@ -50,13 +50,13 @@ is already running.*
 ```mermaid
 flowchart TB
     subgraph REPO["this repository"]
-        PL[plugins<br/>ris-approvals · ris-launch · ris-chat]
+        PL[plugins<br/>zam-approvals · zam-launch · zam-chat]
         SK[skills<br/>durable-dev · issue-closeout]
-        SC[cron scripts + agent hook<br/>morning-brief-precheck · ris-stop · ris-event]
+        SC[cron scripts + agent hook<br/>morning-brief-precheck · zam-stop · zam-event]
         LR[loop-runner skill<br/>run-loop.sh]
-        PKG[the ristretto package]
+        PKG[the cuzam package]
     end
-    PIN["~/.ristretto/runtime<br/>detached clone of origin/main"]
+    PIN["~/.cuzam/runtime<br/>detached clone of origin/main"]
     HH["~/.hermes"]
 
     PL -->|symlink| HH
@@ -71,7 +71,7 @@ flowchart TB
 |---|---|---|
 | **symlink** | plugins, `durable-dev`, `issue-closeout` | live on purpose. These are read inside a turn you are watching, and the danger is a plugin disagreeing with the CLI about what "approve" means — not staleness. |
 | **copy** | cron scripts, the agent hook | Hermes requires scripts inside `~/.hermes/scripts`, and it fingerprints an approved hook — a symlink would let the content change underneath the approval. Refreshed by `make update`, never edited in place. |
-| **pin** | the `ristretto` package **and the `loop-runner` skill** | a flow runs unattended for an hour. It must not execute whichever branch you happen to have checked out, or an edit you were halfway through. `make install-runtime` moves both together. |
+| **pin** | the `cuzam` package **and the `loop-runner` skill** | a flow runs unattended for an hour. It must not execute whichever branch you happen to have checked out, or an edit you were halfway through. `make install-runtime` moves both together. |
 
 The third row is the one that is easy to get wrong. `run-loop.sh` is filed as
 a skill but behaves as a runtime — it *is* the classic loop. Pinning the
@@ -85,8 +85,8 @@ which it chose.
 
 | Path | Purpose |
 |---|---|
-| `ristretto.yaml` | Public instance, provider, repository, and flow schema. |
-| `ristretto/` | Configuration, CLI, doctor, and multi-stage flow runner. |
+| `cuzam.yaml` | Public instance, provider, repository, and flow schema. |
+| `cuzam/` | Configuration, CLI, doctor, and multi-stage flow runner. |
 | `hermes/` | Public Hermes baseline, skills, scripts, tests, and cron example. |
 | `scripts/` | Installers, the runtime pin, and the loop-runner link. |
 | `slack/` | Generic Slack application manifest. |
@@ -112,13 +112,13 @@ make public-check
 
 ```bash
 make install
-ristretto validate
-ristretto flow list
-ristretto flow show balanced
-ristretto doctor
+cuzam validate
+cuzam flow list
+cuzam flow show balanced
+cuzam doctor
 ```
 
-The installer creates `~/.config/ristretto/config.yaml` (or the equivalent
+The installer creates `~/.config/cuzam/config.yaml` (or the equivalent
 under `$XDG_CONFIG_HOME`) and a managed CLI symlink. It does not touch Hermes,
 credentials, or services. `scripts/uninstall.sh` removes the CLI link and
 preserves configuration unless `--purge-config` is explicitly supplied.
@@ -126,7 +126,7 @@ preserves configuration unless `--purge-config` is explicitly supplied.
 ## ⚙️ Configure an instance
 
 ```bash
-ristretto configure \
+cuzam configure \
   --linear-team PROJ \
   --slack-home-channel YOUR_HOME_CHANNEL_ID \
   --slack-prs-channel YOUR_PRS_CHANNEL_ID \
@@ -138,13 +138,13 @@ ristretto configure \
 These values are non-secret and live only in the user configuration. Provider
 tokens and `SLACK_ALLOWED_USERS` belong in `~/.hermes/.env`, never here.
 Custom cloud providers must reference tokens through `auth_token_env`; literal
-credentials in `ristretto.yaml` are rejected.
+credentials in `cuzam.yaml` are rejected.
 
 ## 🪽 Install Hermes assets
 
 After installing and authenticating Hermes Agent — it is
 [`hermes-agent`](https://github.com/NousResearch/hermes-agent) by Nous
-Research, MIT, third-party, and Ris is developed against 0.18.x
+Research, MIT, third-party, and Zam is developed against 0.18.x
 ([how to install it](docs/getting-started.md#where-hermes-agent-comes-from)):
 
 
@@ -153,7 +153,7 @@ make install-hermes
 ```
 
 This preserves existing Hermes config, persona, credentials, jobs, and
-unrelated skills. It adds Ristretto's skills/scripts, creates the isolated
+unrelated skills. It adds Cuzam's skills/scripts, creates the isolated
 worker profile when missing, and creates the morning brief only when no job
 with that name exists. The gateway service remains unchanged. To explicitly
 install and start the service:

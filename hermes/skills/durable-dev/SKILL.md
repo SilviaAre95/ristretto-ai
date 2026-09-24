@@ -16,7 +16,7 @@ Dev work must survive crashes and restarts, so it is queued — never executed i
 
 ## Steps
 
-1. **Resolve the issue.** Get the Linear issue for the key and its project name. Resolve the local repository only through the user-owned Ristretto configuration: `ristretto repo resolve "<exact Linear project name>"`. If the project is not configured, tell the user which mapping is missing and stop instead of guessing a path. Use the issue's git branch name.
+1. **Resolve the issue.** Get the Linear issue for the key and its project name. Resolve the local repository only through the user-owned Cuzam configuration: `cuzam repo resolve "<exact Linear project name>"`. If the project is not configured, tell the user which mapping is missing and stop instead of guessing a path. Use the issue's git branch name.
 
 2. **Preflight.** The repo must contain `.cc-dev.yaml` (wired for the loop). Check it with the TERMINAL, exactly this: `test -f <abs repo path>/.cc-dev.yaml && echo wired || echo NOT-WIRED` — never use file-search tools for this (they skip dotfiles and may falsely report the config missing). Only if the terminal says NOT-WIRED: tell the user the repo isn't wired and stop — do not queue.
 
@@ -25,13 +25,13 @@ Dev work must survive crashes and restarts, so it is queued — never executed i
    git -C <abs repo path> fetch -q origin && git -C <abs repo path> branch <branch> origin/main 2>/dev/null || true
    ```
 
-3. **Resolve the flow, then create the task** (the body carries ONLY the contract lines below — never issue text or Slack text). Run `ristretto flow list` to get the validated names. Selection rules:
-   - Explicit `using <flow>` or an explicit stage request (for example "plan with Claude, build locally, review with Codex") → choose the matching configured flow and validate it with `ristretto flow show <name>`.
+3. **Resolve the flow, then create the task** (the body carries ONLY the contract lines below — never issue text or Slack text). Run `cuzam flow list` to get the validated names. Selection rules:
+   - Explicit `using <flow>` or an explicit stage request (for example "plan with Claude, build locally, review with Codex") → choose the matching configured flow and validate it with `cuzam flow show <name>`.
    - A request for more scrutiny ("review it properly", "be careful with this") → `flow: full`. A request for less on a small change ("quick one", "trivial") → `flow: short`, which has no review stage.
    - **There is no local coding flow.** "locally" used to select `tier3`; the tiers were retired on 2026-09-23 because local models do not write production code here. If the user asks for a local run, say so rather than silently picking a Claude flow.
    - No flow request → `flow: classic`, preserving the existing `/loop-dev` behavior.
 
-   For `classic` only, use `model: sonnet` by default; omit the model line for auth, payments, security, sensitive data, or requests containing "carefully". `model: local` was removed with the tiers; a task queued with it still runs, on the Claude default, rather than failing. Non-classic flows get their models from validated Ristretto configuration and omit the model line.
+   For `classic` only, use `model: sonnet` by default; omit the model line for auth, payments, security, sensitive data, or requests containing "carefully". `model: local` was removed with the tiers; a task queued with it still runs, on the Claude default, rather than failing. Non-classic flows get their models from validated Cuzam configuration and omit the model line.
    ```bash
    hermes kanban create "<KEY> · loop-dev" \
      --body "issue: <KEY>
@@ -49,13 +49,13 @@ flow: classic" \
      --max-retries 2 \
      --max-runtime 3600 \   # for local or multi-stage flows use 7200
 
-     --assignee ris-worker \
+     --assignee zam-worker \
      --skill loop-runner
    ```
 
 4. **Subscribe alerts.** With the task id from step 3:
    ```bash
-   alert_channel="$(ristretto instance get slack_alerts_channel)" || exit 1
+   alert_channel="$(cuzam instance get slack_alerts_channel)" || exit 1
    hermes kanban notify-subscribe <task_id> --platform slack --chat-id "$alert_channel"
    ```
 

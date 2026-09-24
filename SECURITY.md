@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Ristretto has not published its first stable release. Security fixes currently
+Cuzam has not published its first stable release. Security fixes currently
 target the latest commit on `main`.
 
 ## Reporting a vulnerability

@@ -25,7 +25,7 @@ non_goals:
 
 ## Summary
 
-Ristretto can run a coding task with a named, validated sequence of model
+Cuzam can run a coding task with a named, validated sequence of model
 stages. Two included flows trade **scrutiny** for speed. `full` is plan, build,
 review, repair, deterministic verify, PR — Opus plans and reviews, Sonnet
 builds and repairs, Haiku opens the PR, and the reviewer is never the model
@@ -43,7 +43,7 @@ the tiers are removed; the axis they measured no longer exists.
 
 ## Behavior
 
-The public contract lives in `ristretto.yaml`. A flow is an ordered list of
+The public contract lives in `cuzam.yaml`. A flow is an ordered list of
 stages with a stable id, role, provider, mutation permission, input artifacts,
 output artifact, and optional timeout. Configuration validation rejects
 unknown providers, unsafe names, missing artifacts, mutating plan/review stages,
@@ -52,13 +52,13 @@ and a PR stage anywhere except the end.
 Each model stage runs as a separate process. Plans and reviews use read-only
 runner permissions. Build, repair, and PR stages may write only when their
 stage explicitly sets `mutates: true`. Stage outputs and logs are stored under
-`.ristretto/runs/<task-id>/`; credentials are resolved from environment
+`.cuzam/runs/<task-id>/`; credentials are resolved from environment
 variables and are never written into the resolved flow output.
 
 Task requests may select a flow explicitly, for example "do PROJ-123 on
 short." Without one, there are two entry points and they differ deliberately:
 
-- `ristretto launch`, the Slack `!ris-start` command and the launch form send
+- `cuzam launch`, the Slack `!zam-start` command and the launch form send
   no flow, so the configured `default_flow` applies — `full` as shipped.
 - A conversational request handled by the `durable-dev` skill writes
   `flow: classic` into the task body explicitly, preserving the proven
@@ -107,11 +107,11 @@ flows:
         output: finish.md
 ```
 
-Run `ristretto validate` and `ristretto flow show my-flow` before queueing it.
+Run `cuzam validate` and `cuzam flow show my-flow` before queueing it.
 The deterministic verification command comes from the repository-owned
 `.cc-verify` file, not from user or issue text. Its SHA-256 digest is pinned
 before the first stage starts; if a build or repair stage changes the file,
-Ristretto refuses to execute it.
+Cuzam refuses to execute it.
 
 Provider secrets must be referenced through `auth_token_env`. Literal tokens
 are rejected; the sole literal exception is the non-secret `ollama` placeholder

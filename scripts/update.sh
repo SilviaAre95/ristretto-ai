@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-command update for a running Ristretto install: pull the release,
+# One-command update for a running Cuzam install: pull the release,
 # refresh managed assets (idempotent installers — user-owned persona, config,
 # credentials, and jobs are never overwritten), surface template drift, and
 # restart the gateway so the running service picks the release up.
@@ -42,4 +42,4 @@ if command -v hermes >/dev/null 2>&1; then
   fi
 fi
 
-echo "update: done — Ristretto $(tr -d '[:space:]' < VERSION 2>/dev/null || echo unknown)"
+echo "update: done — Cuzam $(tr -d '[:space:]' < VERSION 2>/dev/null || echo unknown)"

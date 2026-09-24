@@ -23,7 +23,7 @@ A 6pm cron will summarize shipped work, PRs, and blockers in the configured chan
 
 ## Behavior
 
-At 18:00, Ris will post a summary to the configured Slack channel. Linear states may change only when backed by a real event; the report does not speculate or repeat the morning brief.
+At 18:00, Zam will post a summary to the configured Slack channel. Linear states may change only when backed by a real event; the report does not speculate or repeat the morning brief.
 
 ## Out of scope
 

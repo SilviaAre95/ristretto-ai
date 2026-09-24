@@ -12,7 +12,7 @@ STATE="$TMP/state"
 DEST="$HH/skills/software-development/loop-runner"
 mkdir -p "$HH/skills/software-development"
 
-run() { RISTRETTO_HERMES_HOME="$HH" RISTRETTO_STATE_HOME="$STATE" bash "$SCRIPT" "$@"; }
+run() { CUZAM_HERMES_HOME="$HH" CUZAM_STATE_HOME="$STATE" bash "$SCRIPT" "$@"; }
 
 # No runtime yet: a fresh install must still work, and must say it is unpinned.
 OUT="$(run 2>&1)"; RC=$?

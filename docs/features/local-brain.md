@@ -21,7 +21,7 @@ non_goals:
 
 ## Summary
 
-Orchestrator reasoning defaults to local `qwen3.6:35b-mlx` through Ollama, keeping chat, briefs, and tool decisions on the user's machine. **Coding runs on Claude.** The dividing line is bounded transformation — summarise, extract, classify, rank, reformat, where the output shape is known and a wrong answer is cheap and visible — against unbounded judgement, where subtle wrongness compounds silently. `RIS_LOCAL_BRAIN_MODEL` overrides the brain.
+Orchestrator reasoning defaults to local `qwen3.6:35b-mlx` through Ollama, keeping chat, briefs, and tool decisions on the user's machine. **Coding runs on Claude.** The dividing line is bounded transformation — summarise, extract, classify, rank, reformat, where the output shape is known and a wrong answer is cheap and visible — against unbounded judgement, where subtle wrongness compounds silently. `ZAM_LOCAL_BRAIN_MODEL` overrides the brain.
 
 ## Behavior
 
@@ -48,7 +48,7 @@ Suggested model roles:
 | Model | Role |
 |---|---|
 | `qwen3.6:35b-mlx` | Default always-on orchestrator and the `local-brain` flow provider: MoE, fast, 256k context |
-| `$RIS_LOCAL_BRAIN_MODEL` | Machine-local override |
+| `$ZAM_LOCAL_BRAIN_MODEL` | Machine-local override |
 
 The hardware floor followed from the retired premise. With coding on Claude and
 utility work on a small local model, the large-memory requirement drops a long

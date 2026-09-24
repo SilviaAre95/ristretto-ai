@@ -5,7 +5,7 @@
 # Asks the operating system, not the board. The board is precisely what is
 # unreliable here: a run whose process died stays `running` and claimed, and
 # reads as healthy from every surface — the reasoning is in `flow_is_running`
-# in ristretto/dash/launch.py. Process truth means a stalled run does not
+# in cuzam/dash/launch.py. Process truth means a stalled run does not
 # block an install or an update, which is the behaviour we want.
 #
 # Two shapes count, and they are exposed to different things:
@@ -29,7 +29,7 @@ set -uo pipefail
 
 # Snapshot first, filter second, and never `pgrep -f`. A pattern search matches
 # the command line of whatever runs the search, so the filter reports itself as
-# a live run — `running_flows` in ristretto/dash/data.py documents this and
+# a live run — `running_flows` in cuzam/dash/data.py documents this and
 # avoids pgrep for the same reason. Capturing `ps` before the filter process
 # exists is what keeps the filter out of its own results.
 listing="$(ps -eo pid=,command= 2>/dev/null || true)"
@@ -41,7 +41,7 @@ live="$(printf '%s\n' "$listing" | awk '
   $2 ~ /loop-runner\/scripts\/run-loop\.sh$/ || $3 ~ /loop-runner\/scripts\/run-loop\.sh$/ { print; next }
 
   # Staged: a shell that merely mentions the runner is not running it.
-  index($0, "-m ristretto.runner") && index($0, "--task-id") {
+  index($0, "-m cuzam.runner") && index($0, "--task-id") {
     exe = $2
     sub(/.*\//, "", exe)
     if (exe == "sh" || exe == "bash" || exe == "zsh") next

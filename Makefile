@@ -19,11 +19,11 @@ update:
 	bash scripts/update.sh
 
 test:
-	.venv/bin/python -m unittest hermes/tests/ristretto_config_test.py
+	.venv/bin/python -m unittest hermes/tests/cuzam_config_test.py
 	.venv/bin/python -m unittest discover -s tests
 	bash hermes/tests/install.test.sh
 	bash hermes/tests/reap.test.sh
-	bash hermes/tests/ris-stop.test.sh
+	bash hermes/tests/zam-stop.test.sh
 	bash hermes/tests/run-loop.test.sh
 	bash hermes/tests/morning-brief-precheck.test.sh
 	bash hermes/tests/push-guard.test.sh

@@ -11,10 +11,10 @@
 # that no longer appears anywhere.
 set -euo pipefail
 
-logs="${RISTRETTO_LOG_DIR:-$HOME/.hermes/logs}"
+logs="${CUZAM_LOG_DIR:-$HOME/.hermes/logs}"
 # Past this, a log is no longer something a person reads.
-max_bytes="${RISTRETTO_LOG_MAX_BYTES:-20971520}"   # 20 MiB
-keep_lines="${RISTRETTO_LOG_KEEP_LINES:-5000}"
+max_bytes="${CUZAM_LOG_MAX_BYTES:-20971520}"   # 20 MiB
+keep_lines="${CUZAM_LOG_KEEP_LINES:-5000}"
 
 [ -d "$logs" ] || { echo "trim-logs: no log directory at $logs" >&2; exit 0; }
 

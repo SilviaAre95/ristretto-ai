@@ -1,0 +1,4 @@
+name: zam-chat
+version: 1.0.0
+description: "Talk to Zam from Slack — its agent loop, with tools and memory, on the go."
+author: "Silvia Arellano"

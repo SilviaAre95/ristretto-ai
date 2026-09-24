@@ -1,0 +1,4 @@
+name: zam-approvals
+version: 1.0.0
+description: "Answer a Cuzam flow that is blocked waiting on you, from any chat surface Hermes reaches."
+author: "Silvia Arellano"

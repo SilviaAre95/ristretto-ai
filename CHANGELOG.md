@@ -1,11 +1,32 @@
 # Changelog
 
-All notable changes to Ristretto will be documented here.
+All notable changes to Cuzam will be documented here. Entries written
+before 2026-09-24 name the project Ristretto and the assistant Nemo or
+Ris; they are left as written, because what happened, happened under
+those names.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+### Changed
+
+- **Ristretto is now Cuzam, and Nemo/Ris is now Zam.** The system took the
+  name `cuzam`, the assistant took `zam`: `ris-*` became `zam-*` (plugins
+  `zam-approvals`, `zam-launch`, `zam-chat`; `!zam-approve`), `RIS_*` became
+  `ZAM_*`, and `RISTRETTO_*` became `CUZAM_*`. The old `RISTRETTO_*` and
+  `RIS_*` names are still read as a fallback for one release, so an
+  environment set before the rename keeps working; they are removed in 0.3.0.
+  The Python package moved `ristretto/` -> `cuzam/`, the state home
+  `~/.ristretto` -> `~/.cuzam`, the user config `~/.config/ristretto` ->
+  `~/.config/cuzam`, and run artifacts `.ristretto/` -> `.cuzam/` inside a
+  worktree.
+
+  Deliberately **not** renamed: the checkout directory and the GitHub
+  repository, which stay `ristretto-ai`; `.cc-verify`, `.cc-dev.yaml` and
+  `.cc-deploy.yaml`, which are a contract with wayworks rather than names
+  this project owns; and the CHANGELOG entries above.
 
 ### Added
 

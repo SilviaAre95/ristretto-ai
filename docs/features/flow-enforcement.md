@@ -41,7 +41,7 @@ request; this is the enforcement.
 
 ## Behavior
 
-`run-loop.sh` writes `<worktree>/.ristretto/runs/<task-id>/loop.json` before it
+`run-loop.sh` writes `<worktree>/.cuzam/runs/<task-id>/loop.json` before it
 does anything else, and the multi-stage runner writes `flow.json` beside it.
 The marker is written directly rather than through the event emitter, because
 telemetry is best effort by design and must never be load-bearing: an
@@ -53,7 +53,7 @@ refuse, the message names the flow that was skipped, gives the exact command to
 run, and tells the worker to revert its own edits first — output that has had no
 plan, no review and no verification must not reach a pull request.
 
-Hooks are per profile, and the worker runs under `ris-worker`. Declaring the
+Hooks are per profile, and the worker runs under `zam-worker`. Declaring the
 guard only in the top-level config would leave the one process it exists to
 gate entirely ungated, so the installer sets it on the worker profile, with
 `hooks_auto_accept` because a detached worker has no TTY to consent at.

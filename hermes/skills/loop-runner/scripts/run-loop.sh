@@ -109,7 +109,7 @@ else
   [[ "$MODEL" =~ ^(sonnet|haiku|opus)$ ]] || MODEL=""
 fi
 # `classic` preserves the existing whole /loop-dev behavior. Other names are
-# resolved and validated by the public Ristretto flow configuration.
+# resolved and validated by the public Cuzam flow configuration.
 [[ "$FLOW" =~ ^[a-z][a-z0-9-]*$ ]] || {
   echo "run-loop: invalid flow name: $FLOW" >&2
   exit 2
@@ -129,10 +129,10 @@ REC="$PID_DIR/$TASK_ID.json"
 # -P resolves the skill symlink. The installed skill lives at
 # ~/.hermes/skills/software-development/loop-runner but is a link into this
 # repository, and `cd ..` without -P walks the *logical* path, landing in
-# ~/.hermes instead of the repo — where the ristretto package is not.
+# ~/.hermes instead of the repo — where the cuzam package is not.
 SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-SESSION_FILE="$PWD/.cc-ris-session"
-RESUME_FAILURE_WINDOW="${RIS_RESUME_FAILURE_WINDOW:-30}"
+SESSION_FILE="$PWD/.cc-zam-session"
+RESUME_FAILURE_WINDOW="${ZAM_RESUME_FAILURE_WINDOW:-30}"
 [[ "$RESUME_FAILURE_WINDOW" =~ ^[0-9]+$ ]] || RESUME_FAILURE_WINDOW=30
 
 # Guard 4: reap a verified orphan from a previous run (no-op otherwise).
@@ -142,32 +142,32 @@ bash "$SCRIPT_DIR/reap.sh" "$TASK_ID"
 # best-effort event emitter: the completion guard reads this to tell a real
 # loop from a worker that decided to do the work itself, and telemetry being
 # unavailable must never look like a loop that never ran.
-RUN_MARKER="$PWD/.ristretto/runs/$TASK_ID"
+RUN_MARKER="$PWD/.cuzam/runs/$TASK_ID"
 mkdir -p "$RUN_MARKER" 2>/dev/null && printf '{"task":"%s","issue":"%s","flow":"%s","started":%s}\n' \
   "$TASK_ID" "$ISSUE_KEY" "$FLOW" "$(date +%s)" > "$RUN_MARKER/loop.json" 2>/dev/null || true
 
-RISTRETTO_ROOT="$(cd -P "$SCRIPT_DIR/../../../.." && pwd -P)"
-export PYTHONPATH="$RISTRETTO_ROOT${PYTHONPATH:+:$PYTHONPATH}"
+CUZAM_ROOT="$(cd -P "$SCRIPT_DIR/../../../.." && pwd -P)"
+export PYTHONPATH="$CUZAM_ROOT${PYTHONPATH:+:$PYTHONPATH}"
 
-# Pick an interpreter that can actually import ristretto rather than trusting
+# Pick an interpreter that can actually import cuzam rather than trusting
 # whatever `python3` resolves to. A detached worker's PATH is not a developer
 # shell's: it finds /usr/bin/python3, which has no PyYAML, so the import fails
 # for a missing *dependency* while the package itself is perfectly reachable.
-ris_python() {
+zam_python() {
   local candidate
   # An explicit choice wins outright — no import probe, because overriding
   # is how you pin an interpreter the probe would reject.
-  if [ -n "${RIS_PYTHON:-}" ] && [ -x "${RIS_PYTHON}" ]; then
-    printf '%s' "$RIS_PYTHON"
+  if [ -n "${ZAM_PYTHON:-}" ] && [ -x "${ZAM_PYTHON}" ]; then
+    printf '%s' "$ZAM_PYTHON"
     return 0
   fi
   for candidate in \
-    "$RISTRETTO_ROOT/.venv/bin/python3" \
-    "$(command -v ristretto >/dev/null 2>&1 && head -1 "$(command -v ristretto)" | sed 's/^#!//')" \
+    "$CUZAM_ROOT/.venv/bin/python3" \
+    "$(command -v cuzam >/dev/null 2>&1 && head -1 "$(command -v cuzam)" | sed 's/^#!//')" \
     "$(command -v python3 || true)"
   do
     [ -n "$candidate" ] && [ -x "$candidate" ] || continue
-    if "$candidate" -c "import ristretto.runner" >/dev/null 2>&1; then
+    if "$candidate" -c "import cuzam.runner" >/dev/null 2>&1; then
       printf '%s' "$candidate"
       return 0
     fi
@@ -179,17 +179,17 @@ if [ "$FLOW" != "classic" ]; then
   # Fail with the cause rather than a Python traceback: a wrong root or a
   # dependency-less interpreter means every non-classic flow dies before its
   # first stage, and the traceback names the module, not what was wrong.
-  RIS_PY="$(ris_python)" || {
-    echo "run-loop: no python3 can import ristretto from $RISTRETTO_ROOT — flow $FLOW cannot start" >&2
-    echo "run-loop: tried the repo venv, the ristretto CLI's interpreter, and python3 on PATH" >&2
+  ZAM_PY="$(zam_python)" || {
+    echo "run-loop: no python3 can import cuzam from $CUZAM_ROOT — flow $FLOW cannot start" >&2
+    echo "run-loop: tried the repo venv, the cuzam CLI's interpreter, and python3 on PATH" >&2
     exit 2
   }
   # Keep a copy of the runner's own output. The per-stage logs record what
   # each model said; this records what the harness did around them, which is
   # where the last several failures actually lived.
-  LOOP_LOG="$PWD/.ristretto/runs/$TASK_ID/loop.log"
+  LOOP_LOG="$PWD/.cuzam/runs/$TASK_ID/loop.log"
   mkdir -p "$(dirname "$LOOP_LOG")" 2>/dev/null || true
-  "$RIS_PY" -m ristretto.runner \
+  "$ZAM_PY" -m cuzam.runner \
     --task-id "$TASK_ID" --issue "$ISSUE_KEY" --flow "$FLOW" 2>&1 \
     | tee -a "$LOOP_LOG"
   # tee's exit status is not the runner's, and reporting a failed flow as a
@@ -209,8 +209,8 @@ ignore_session_file() {
   local exclude_file
   exclude_file="$(git rev-parse --git-path info/exclude 2>/dev/null)" || return 0
   [ -f "$exclude_file" ] || return 0
-  grep -qxF '.cc-ris-session' "$exclude_file" 2>/dev/null || \
-    printf '\n# Ristretto resumable Claude session (local runtime state)\n.cc-ris-session\n' >> "$exclude_file"
+  grep -qxF '.cc-zam-session' "$exclude_file" 2>/dev/null || \
+    printf '\n# Cuzam resumable Claude session (local runtime state)\n.cc-zam-session\n' >> "$exclude_file"
 }
 
 run_once() {  # $1 = fresh|resume — sets RC + RUN_ELAPSED
@@ -269,22 +269,22 @@ run_once() {  # $1 = fresh|resume — sets RC + RUN_ELAPSED
 # emitter always exits 0, and `|| true` covers a missing interpreter too.
 # The installed copy first, the repo copy second: both exist on a normal
 # install and either is fine, but neither may break the loop.
-RIS_EVENT="$HOME/.hermes/scripts/ris-event.py"
-[ -f "$RIS_EVENT" ] || RIS_EVENT="$SCRIPT_DIR/../../../scripts/ris-event.py"
-ris_event() {
-  [ -f "$RIS_EVENT" ] || return 0
+ZAM_EVENT="$HOME/.hermes/scripts/zam-event.py"
+[ -f "$ZAM_EVENT" ] || ZAM_EVENT="$SCRIPT_DIR/../../../scripts/zam-event.py"
+zam_event() {
+  [ -f "$ZAM_EVENT" ] || return 0
   # Same interpreter problem as the runner, but silent here: the emitter
-  # imports ristretto, and `|| true` would hide a dependency-less python3
+  # imports cuzam, and `|| true` would hide a dependency-less python3
   # as an event that simply never appeared.
-  [ -n "${RIS_PY:-}" ] || RIS_PY="$(ris_python || command -v python3)"
-  "$RIS_PY" "$RIS_EVENT" "$TASK_ID" "$1" \
+  [ -n "${ZAM_PY:-}" ] || ZAM_PY="$(zam_python || command -v python3)"
+  "$ZAM_PY" "$ZAM_EVENT" "$TASK_ID" "$1" \
     --issue "$ISSUE_KEY" --project "$(basename "$PWD")" "${@:2}" >/dev/null 2>&1 || true
 }
 
-ris_event run.started --payload "{\"flow\":\"classic\",\"model\":\"${MODEL:-default}\"}"
+zam_event run.started --payload "{\"flow\":\"classic\",\"model\":\"${MODEL:-default}\"}"
 
 finish() {  # $1 = outcome
-  ris_event run.ended --payload "{\"outcome\":\"$1\",\"runtime\":\"$2\"}"
+  zam_event run.ended --payload "{\"outcome\":\"$1\",\"runtime\":\"$2\"}"
 }
 
 ignore_session_file
@@ -309,7 +309,7 @@ RUNTIME=cloud
 if [ "$RC" -ne 0 ] && \
    grep -qiE "session limit|oauth|failed to authenticate|credit balance" "$OUT"; then
   echo "run-loop: claude unavailable (rc=$RC) — the run failed; relaunch when it is back" >&2
-  ris_event stage.failed --stage cloud \
+  zam_event stage.failed --stage cloud \
     --payload "{\"reason\":\"claude unavailable (rc=$RC)\"}"
 fi
 [ "$RC" -eq 0 ] && rm -f "$SESSION_FILE"
@@ -324,7 +324,7 @@ PR_URL="$(gh pr list --head "$(git branch --show-current 2>/dev/null)" \
 if [ "$RC" -eq 0 ] && [ -n "$PR_URL" ] && [ "$PR_URL" != "null" ]; then
   hermes kanban complete "$TASK_ID" --result "$ISSUE_KEY: PR ready" \
     --metadata "{\"pr\": \"$PR_URL\"}" >/dev/null 2>&1 || true
-  ris_event pr.opened --payload "{\"url\":\"$PR_URL\"}"
+  zam_event pr.opened --payload "{\"url\":\"$PR_URL\"}"
 elif [ "$RC" -eq 0 ]; then
   hermes kanban block "$TASK_ID" \
     "$ISSUE_KEY: loop exited 0 but opened no pull request" >/dev/null 2>&1 || true

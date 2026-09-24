@@ -6,7 +6,7 @@ something is known to be broken it says so rather than describing the intent.
 
 ## Two ways to run, and why you probably want the second one
 
-**Dispatched.** `ristretto launch <project> <issue>` creates a Hermes task,
+**Dispatched.** `cuzam launch <project> <issue>` creates a Hermes task,
 claims it, cuts a worktree at `origin/<base>`, and starts the flow as a
 detached process. No worker agent is involved: the board keeps the card and
 the lease, and the runner heartbeats and reports its own outcome.
@@ -22,7 +22,7 @@ putting deterministic work inside an agent turn.
 **Standalone.** You run the flow yourself, in a directory you chose:
 
 ```bash
-.venv/bin/python -m ristretto.runner \
+.venv/bin/python -m cuzam.runner \
   --task-id t_anything --issue XARI-123 --flow full
 ```
 
@@ -40,9 +40,9 @@ nothing is watching it but you.
 It also works in repositories that are not configured projects, because there
 is no project name to resolve — including this one.
 
-## Which copy of Ristretto runs
+## Which copy of Cuzam runs
 
-A dispatched flow runs from `~/.ristretto/runtime` — a detached checkout of
+A dispatched flow runs from `~/.cuzam/runtime` — a detached checkout of
 `origin/<base>` that nobody edits — not from your working tree. Build or
 update it deliberately:
 
@@ -63,7 +63,7 @@ and the `control.launch` event both record which commit was chosen, and whether
 that checkout was clean.
 
 With no runtime installed a launch still works, runs from the development
-checkout, and says so. Standalone runs (`python -m ristretto.runner`) are
+checkout, and says so. Standalone runs (`python -m cuzam.runner`) are
 unaffected: you chose the interpreter, so you already know which copy it is.
 
 ## The flows
@@ -102,8 +102,8 @@ issue often raises zero approvals. XARI-129 raised none.
 Answering, from anywhere:
 
 ```bash
-ristretto approvals pending
-ristretto approvals allow <id>     # or deny <id>
+cuzam approvals pending
+cuzam approvals allow <id>     # or deny <id>
 ```
 
 An unanswered request expires after 30 minutes and is treated as a deny.
@@ -152,7 +152,7 @@ normal state and the time is not being charged to the budget. **If the ticks
 are arriving, the flow is alive** — that is the liveness signal, not the
 absence of other output.
 
-Artifacts land in `.ristretto/runs/<task-id>/`: `plan.md`, `build.md`,
+Artifacts land in `.cuzam/runs/<task-id>/`: `plan.md`, `build.md`,
 `review.md`, and a `.log` per stage. Each stage's output is the next stage's
 input. When a run produces something strange, read `plan.md` first — a bad plan
 looks exactly like a model failure three stages later.
@@ -160,7 +160,7 @@ looks exactly like a model failure three stages later.
 ## When it goes wrong
 
 **Interrupting is safe.** Ctrl-C commits whatever a mutating stage has written
-as a `wip(<stage>)` commit on the run's branch, with a `Ristretto-Preserved`
+as a `wip(<stage>)` commit on the run's branch, with a `Cuzam-Preserved`
 trailer, rather than leaving it to be reclaimed with the worktree. The same
 happens if the stage hits its deadline.
 
@@ -176,7 +176,7 @@ setup rather than on the code. Warm the worktree first, or declare a larger
 `stage_timeout` in the repository's `.cc-dev.yaml` so setup does not eat the
 budget.
 
-**Branch from `origin/<base>` after fetching.** `ristretto launch` now pins
+**Branch from `origin/<base>` after fetching.** `cuzam launch` now pins
 this itself, but if you create a worktree by hand, `git worktree add` cuts from
 whatever the checkout has selected. A repository parked on a feature branch
 silently bases the run on unrelated work, and the resulting pull request looks

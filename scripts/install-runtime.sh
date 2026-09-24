@@ -15,7 +15,7 @@ repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # eval so a configured ~ expands the way events.state_home() expands it with
 # .expanduser(); without it the script builds ./~/... while every launch looks
 # under $HOME and reports itself unpinned forever.
-eval runtime="${RISTRETTO_STATE_HOME:-$HOME/.ristretto}/runtime"
+eval runtime="${CUZAM_STATE_HOME:-$HOME/.cuzam}/runtime"
 base="${1:-main}"
 
 origin="$(git -C "$repo" remote get-url origin 2>/dev/null || true)"
@@ -30,7 +30,7 @@ fi
 # and several imports are lazy. That is the exact failure this feature exists
 # to remove, relocated one directory over.
 # Covers the classic loop as well as the staged runner; this guard used to
-# match only `ristretto.runner`, and `run-loop.sh` is pinned here too.
+# match only `cuzam.runner`, and `run-loop.sh` is pinned here too.
 if live="$(bash "$repo/scripts/live-runs.sh")"; then
   echo "install-runtime: refusing while a run is live" >&2
   printf '  %s\n' "$live" >&2
@@ -89,12 +89,12 @@ fi
 # install never landed would pass and print "pinned". Verified 2026-09-20.
 ( cd / && env -u PYTHONPATH -u PYTHONHOME -u VIRTUAL_ENV \
     "$venv/bin/python" -P -c "
-import ristretto.runner, pathlib, sys
-here = pathlib.Path(ristretto.runner.__file__).resolve()
+import cuzam.runner, pathlib, sys
+here = pathlib.Path(cuzam.runner.__file__).resolve()
 want = pathlib.Path('$runtime').resolve()
 sys.exit(0 if want in here.parents else 1)
 " ) || {
-  echo "install-runtime: the runtime venv does not import ristretto from $runtime" >&2
+  echo "install-runtime: the runtime venv does not import cuzam from $runtime" >&2
   rm -rf "$venv"
   echo "  removed the incomplete venv so launches stay honestly unpinned" >&2
   exit 1

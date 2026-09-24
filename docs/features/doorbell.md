@@ -44,7 +44,7 @@ detail is truncated: a build log belongs on the task page the link points at,
 not in the channel. A pull request links to the pull request; a preflight
 failure links nowhere, because it is not a run and `/task/<id>` would be dead.
 
-A cursor in `${RISTRETTO_STATE_HOME:-~/.ristretto}/doorbell.cursor` records
+A cursor in `${CUZAM_STATE_HOME:-~/.cuzam}/doorbell.cursor` records
 the last delivered event. A failed send stops the pass without advancing it,
 so an undelivered milestone is announced late rather than lost — the one
 failure a notifier must not have.

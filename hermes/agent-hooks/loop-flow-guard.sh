@@ -8,7 +8,7 @@
 # ran, and Hermes recorded the task as done. Instructions alone do not hold, so
 # completion is gated on evidence instead.
 #
-# Evidence is the run marker run-loop.sh and ristretto.runner write into the
+# Evidence is the run marker run-loop.sh and cuzam.runner write into the
 # worktree before doing anything else. It is written directly, not through the
 # best-effort event emitter, so telemetry failing cannot block a real run.
 #
@@ -20,15 +20,15 @@ payload="$(cat -)"
 
 allow() { printf '{}\n'; exit 0; }
 block() {
-  RIS_MSG="$1" python3 -c 'import json,os; print(json.dumps({"action":"block","message":os.environ["RIS_MSG"]}))'
+  ZAM_MSG="$1" python3 -c 'import json,os; print(json.dumps({"action":"block","message":os.environ["ZAM_MSG"]}))'
   exit 0
 }
 
 field() {
-  RIS_PAYLOAD="$payload" python3 - "$1" <<'PY' 2>/dev/null || true
+  ZAM_PAYLOAD="$payload" python3 - "$1" <<'PY' 2>/dev/null || true
 import json, os, sys
 try:
-    data = json.loads(os.environ["RIS_PAYLOAD"])
+    data = json.loads(os.environ["ZAM_PAYLOAD"])
 except Exception:
     sys.exit(0)
 node = data
@@ -60,7 +60,7 @@ flow="$(printf '%s' "$body" | sed -n 's/^flow:[[:space:]]*//p' | head -1)"
 
 cwd="$(field cwd)"
 [ -n "$cwd" ] || cwd="$PWD"
-marker="$cwd/.ristretto/runs/$task"
+marker="$cwd/.cuzam/runs/$task"
 
 if [ -d "$marker" ]; then
   allow

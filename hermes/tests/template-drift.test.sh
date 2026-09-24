@@ -2,10 +2,10 @@
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-tmp="$(mktemp -d "${TMPDIR:-/tmp}/ristretto-drift-test.XXXXXX")"
+tmp="$(mktemp -d "${TMPDIR:-/tmp}/cuzam-drift-test.XXXXXX")"
 trap 'rm -rf "$tmp"' EXIT
 
-export RISTRETTO_HERMES_HOME="$tmp/hermes"
+export CUZAM_HERMES_HOME="$tmp/hermes"
 mkdir -p "$tmp/hermes"
 seeds="$tmp/hermes/.template-seeds"
 
