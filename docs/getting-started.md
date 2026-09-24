@@ -24,11 +24,10 @@ orchestration — chat, morning briefs, tool decisions — runs through a local
 Ollama model with no cloud calls, so day-to-day operation has zero marginal
 model cost (see [`features/local-brain.md`](features/local-brain.md)). The
 suggested brain is `qwen3.6:35b-mlx`, which runs on Ollama's MLX engine and
-wants an Apple Silicon Mac with more than 32 GB of memory (64 GB+ to keep the
-brain and the coder resident together). Coding is a separate axis: the default
-`classic` flow uses Claude Code with your own account, so the local coder model
-is only needed for `tier1` through `tier3` or the automatic fallback when
-Claude is unavailable.
+wants an Apple Silicon Mac with more than 32 GB of memory. Coding is a
+separate axis and it runs on Claude Code with your own account: no local model
+writes, repairs or reviews code, so nothing here needs a large local coder.
+That requirement was dropped on 2026-09-23 along with the premise behind it.
 
 ## 1. Clone and bootstrap
 
@@ -57,10 +56,9 @@ symlink. It never touches Hermes, credentials, or services.
 
 ```bash
 ollama pull qwen3.6:35b-mlx             # orchestrator brain (required)
-ollama pull qwen3.6:27b-coding-nvfp4    # local coding model (optional)
 ```
 
-Override the coding model with `RIS_LOCAL_LOOP_MODEL` in `~/.hermes/.env`.
+Override the brain with `RIS_LOCAL_BRAIN_MODEL` in `~/.hermes/.env`.
 
 ## 4. Create your Slack app
 

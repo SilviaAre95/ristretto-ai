@@ -27,10 +27,11 @@ Dev work must survive crashes and restarts, so it is queued — never executed i
 
 3. **Resolve the flow, then create the task** (the body carries ONLY the contract lines below — never issue text or Slack text). Run `ristretto flow list` to get the validated names. Selection rules:
    - Explicit `using <flow>` or an explicit stage request (for example "plan with Claude, build locally, review with Codex") → choose the matching configured flow and validate it with `ristretto flow show <name>`.
-   - The literal word **"locally"** with no explicit flow → `flow: tier3`. "tier 0" through "tier 3" → `flow: tier0` … `flow: tier3`.
+   - A request for more scrutiny ("review it properly", "be careful with this") → `flow: full`. A request for less on a small change ("quick one", "trivial") → `flow: short`, which has no review stage.
+   - **There is no local coding flow.** "locally" used to select `tier3`; the tiers were retired on 2026-09-23 because local models do not write production code here. If the user asks for a local run, say so rather than silently picking a Claude flow.
    - No flow request → `flow: classic`, preserving the existing `/loop-dev` behavior.
 
-   For `classic` only, use `model: sonnet` by default; omit the model line for auth, payments, security, sensitive data, or requests containing "carefully"; use `model: local` only when the user explicitly requests the classic loop locally. Non-classic flows get models and fallbacks from validated Ristretto configuration and omit the model line.
+   For `classic` only, use `model: sonnet` by default; omit the model line for auth, payments, security, sensitive data, or requests containing "carefully". `model: local` was removed with the tiers; a task queued with it still runs, on the Claude default, rather than failing. Non-classic flows get their models from validated Ristretto configuration and omit the model line.
    ```bash
    hermes kanban create "<KEY> · loop-dev" \
      --body "issue: <KEY>
@@ -41,7 +42,7 @@ flow: classic" \
    # For non-classic flows omit model and set flow to the validated name.
    # The model line is part of the classic DEFAULT body. Remove it ONLY when escalating
    # to the strongest model (auth / payments / security / sensitive data /
-   # "carefully"), or replace with "model: local" when the user says "locally".
+   # "carefully"). There is no local option.
      --workspace "worktree:<abs repo path>" \
      --branch "<issue git branch name>" \
      --idempotency-key "<KEY>" \

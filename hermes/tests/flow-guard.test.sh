@@ -43,11 +43,11 @@ run_guard() {  # $1 = task id, $2 = cwd
 blocked() { printf '%s' "$1" | grep -q '"action": *"block"'; }
 
 # --- a loop task with no marker is refused -----------------------------------
-loop_body tier0
+loop_body full
 WT="$(mktemp -d)"
 OUT="$(run_guard t_known "$WT")"
 t "no run marker: completion is refused"      "blocked '$OUT'"
-t "no run marker: names the flow that skipped" "printf '%s' '$OUT' | grep -q tier0"
+t "no run marker: names the flow that skipped" "printf '%s' '$OUT' | grep -q full"
 t "no run marker: tells the worker what to run" "printf '%s' '$OUT' | grep -q run-loop.sh"
 t "no run marker: says to revert its own edits" "printf '%s' '$OUT' | grep -q revert"
 
@@ -75,7 +75,7 @@ OUT="$(run_guard t_known "$WT3")"
 t "non-loop task is not gated"                 "! blocked '$OUT'"
 
 # --- fail open, always -------------------------------------------------------
-loop_body tier3
+loop_body short
 OUT="$(run_guard t_unknown "$WT3")"
 t "unreadable board fails open"                "! blocked '$OUT'"
 OUT="$(printf '{"tool_name":"kanban_complete","tool_input":{},"extra":{}}' | bash "$GUARD")"
@@ -90,7 +90,7 @@ t "hostile task id has no side effect"         "[ ! -e '$CANARY' ]"
 t "hostile task id fails open"                 "! blocked '$OUT'"
 
 # --- the guard always emits valid JSON ---------------------------------------
-loop_body tier0
+loop_body full
 OUT="$(run_guard t_known "$(mktemp -d)")"
 t "block output is valid JSON"                 "printf '%s' '$OUT' | python3 -m json.tool >/dev/null"
 

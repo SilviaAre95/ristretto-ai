@@ -137,7 +137,7 @@ class StartFlowTest(unittest.TestCase):
                                return_value=([sys.executable, "-P"], {"PATH": "/usr/bin"}, "")), \
              mock.patch.object(launch.subprocess, "run", side_effect=fake_run), \
              mock.patch.object(launch.subprocess, "Popen", side_effect=fake_popen):
-            problem = launch.start_flow(str(self.repo), "feat/x", "t_abc", "XARI-1", "tier1")
+            problem = launch.start_flow(str(self.repo), "feat/x", "t_abc", "XARI-1", "full")
         return problem, calls, spawned
 
     def test_it_claims_before_starting_anything(self) -> None:
@@ -216,7 +216,7 @@ class ClaimReleaseTest(unittest.TestCase):
 
         with mock.patch.object(launch.subprocess, "run", side_effect=fake_run), \
              mock.patch.object(launch.subprocess, "Popen") as popen:
-            problem = launch.start_flow(str(self.repo), "feat/x", "t_abc", "XARI-1", "tier1")
+            problem = launch.start_flow(str(self.repo), "feat/x", "t_abc", "XARI-1", "full")
 
         self.assertIn("could not create the worktree", problem)
         popen.assert_not_called()
@@ -269,7 +269,7 @@ class RelaunchTest(unittest.TestCase):
         with self.stalled(task_id="t_aaa111", issue="XARI-123", status="running"), \
              mock.patch.object(launch, "_task_body", return_value={
                  "repo": "/tmp/r", "issue": "XARI-123",
-                 "flow": "tier1", "branch": "xariprojects/xari-123"}), \
+                 "flow": "full", "branch": "xariprojects/xari-123"}), \
              mock.patch.object(launch, "start_flow", return_value="") as started, \
              mock.patch.object(launch.subprocess, "run") as board, \
              mock.patch.object(launch.events, "emit"):
@@ -286,7 +286,7 @@ class RelaunchTest(unittest.TestCase):
         with self.stalled(task_id="t_aaa111", issue="XARI-9", status="running"), \
              mock.patch.object(launch, "_task_body", return_value={
                  "repo": "/tmp/r", "issue": "XARI-9",
-                 "flow": "tier1", "branch": "xariprojects/xari-9"}), \
+                 "flow": "full", "branch": "xariprojects/xari-9"}), \
              mock.patch.object(launch, "start_flow", return_value="") as started, \
              mock.patch.object(launch.subprocess, "run") as board, \
              mock.patch.object(launch.events, "emit"):

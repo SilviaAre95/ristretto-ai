@@ -30,7 +30,7 @@ from fastapi.responses import (
 from fastapi.templating import Jinja2Templates
 
 from .. import actions, approvals, events, voice
-from . import chat, control, data, launch as launcher
+from . import control, data, launch as launcher
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 TEMPLATES.env.filters["duration"] = data.humanise

@@ -95,6 +95,92 @@ class LinearTest(unittest.TestCase):
             self.assertIsNone(context.linear_issue("XARI-9", environ={"LINEAR_API_KEY": "tok"}))
 
 
+class LinearBoardTest(unittest.TestCase):
+    """The board snapshot the morning brief runs on.
+
+    Every case here was found by a review of the first version, or measured
+    against the real API on 2026-09-24.
+    """
+
+    def _api(self, payload: dict, captured: dict | None = None):
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self): return json.dumps(payload).encode()
+
+        def fake_urlopen(request, timeout=None):
+            if captured is not None:
+                captured["body"] = json.loads(request.data.decode())
+            return Response()
+
+        return mock.patch.object(
+            context.urllib.request, "urlopen", side_effect=fake_urlopen
+        )
+
+    def test_an_unknown_team_raises_rather_than_looking_empty(self) -> None:
+        # Measured: Linear answers an unknown key with zero nodes and NO
+        # errors. Returning empty would tell the brief every issue closed
+        # overnight, and the precheck would then overwrite its snapshot with
+        # nothing and re-add the whole board the next morning.
+        payload = {"data": {"teams": {"nodes": []},
+                            "issues": {"pageInfo": {"hasNextPage": False}, "nodes": []}}}
+        with self._api(payload):
+            with self.assertRaisesRegex(RuntimeError, "no team with key"):
+                context.linear_issues("NOSUCHTEAM", environ={"LINEAR_API_KEY": "tok"})
+
+    def test_a_real_team_with_nothing_open_is_not_an_error(self) -> None:
+        payload = {"data": {"teams": {"nodes": [{"key": "XARI"}]},
+                            "issues": {"pageInfo": {"hasNextPage": False}, "nodes": []}}}
+        with self._api(payload):
+            self.assertEqual(
+                context.linear_issues("XARI", environ={"LINEAR_API_KEY": "tok"}),
+                {"issues": []},
+            )
+
+    def test_closed_states_are_filtered_server_side(self) -> None:
+        # The page budget is 250. Unfiltered it covers the team's whole
+        # history: 146 issues on the real board, of which 67 were open. The
+        # cap would have been spent on issues nobody wanted in the brief.
+        captured: dict = {}
+        payload = {"data": {"teams": {"nodes": [{"key": "XARI"}]},
+                            "issues": {"pageInfo": {"hasNextPage": False}, "nodes": []}}}
+        with self._api(payload, captured):
+            context.linear_issues("XARI", environ={"LINEAR_API_KEY": "tok"})
+        query = captured["body"]["query"]
+        for state in context.CLOSED_STATE_TYPES:
+            self.assertIn(state, query, state)
+        self.assertIn("nin", query)
+
+    def test_a_second_page_is_refused_not_silently_truncated(self) -> None:
+        payload = {"data": {"teams": {"nodes": [{"key": "XARI"}]},
+                            "issues": {"pageInfo": {"hasNextPage": True}, "nodes": []}}}
+        with self._api(payload):
+            with self.assertRaisesRegex(RuntimeError, "snapshot limit"):
+                context.linear_issues("XARI", environ={"LINEAR_API_KEY": "tok"})
+
+    def test_it_flattens_into_the_shape_the_precheck_consumes(self) -> None:
+        payload = {"data": {"teams": {"nodes": [{"key": "XARI"}]}, "issues": {
+            "pageInfo": {"hasNextPage": False},
+            "nodes": [{"identifier": "XARI-1", "title": "T", "updatedAt": "2026-09-24",
+                       "archivedAt": None, "priority": 2, "priorityLabel": "High",
+                       "state": {"name": "In Progress", "type": "started"},
+                       "project": {"name": "Kaffecard"}}]}}}
+        with self._api(payload):
+            found = context.linear_issues("XARI", environ={"LINEAR_API_KEY": "tok"})
+        self.assertEqual(found["issues"][0], {
+            "identifier": "XARI-1", "title": "T", "project": "Kaffecard",
+            "status": "In Progress", "statusType": "started",
+            "priority": {"value": 2, "name": "High"},
+            "updatedAt": "2026-09-24", "archivedAt": None,
+        })
+
+    def test_no_token_is_an_error_not_a_quiet_morning(self) -> None:
+        with mock.patch.object(context.urllib.request, "urlopen") as opened:
+            with self.assertRaisesRegex(RuntimeError, "LINEAR_API_KEY"):
+                context.linear_issues("XARI", environ={})
+        opened.assert_not_called()
+
+
 class AssembleTest(unittest.TestCase):
     def setUp(self) -> None:
         self.artifacts = Path(tempfile.mkdtemp())

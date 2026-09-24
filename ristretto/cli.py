@@ -21,6 +21,7 @@ from .config import (
     user_config_path,
     write_user_config,
 )
+from . import context
 
 
 def parser() -> argparse.ArgumentParser:
@@ -115,7 +116,12 @@ def parser() -> argparse.ArgumentParser:
 
     launch_command.add_argument("project", help="configured project name")
     launch_command.add_argument("issue", help="issue key, e.g. ABC-42")
-    launch_command.add_argument("--flow", default="tier1", help="coding flow (default: tier1)")
+    # No default here. The configured default_flow is the one source of
+    # truth, and hardcoding a second one is how the launch form and the CLI
+    # came to disagree in the first place.
+    launch_command.add_argument(
+        "--flow", default="", help="coding flow (default: the configured default_flow)"
+    )
     launch_command.add_argument("--actor", default="cli", help="who is launching")
     launch_command.add_argument(
         "--allow-busy",
@@ -149,6 +155,13 @@ def parser() -> argparse.ArgumentParser:
     instance_commands = instance.add_subparsers(dest="instance_command", required=True)
     instance_get = instance_commands.add_parser("get", help="print one resolved setting")
     instance_get.add_argument("key")
+
+    issues_command = commands.add_parser(
+        "issues", help="print the configured team's open issues as JSON"
+    )
+    issues_command.add_argument(
+        "--team", default="", help="Linear team key; defaults to the configured one"
+    )
 
     repo = commands.add_parser("repo", help="resolve configured project repositories")
     repo_commands = repo.add_subparsers(dest="repo_command", required=True)
@@ -456,6 +469,20 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "instance":
             print(instance_value(config, args.key))
+            return 0
+        if args.command == "issues":
+            # A board snapshot over a process boundary. The morning brief's
+            # precheck runs under Hermes' interpreter, where this package is
+            # not importable, so it shells this command the same way it
+            # already shells `instance get` — which is what let it stop
+            # importing `tools.registry` into a Hermes process.
+            team = args.team.strip() or instance_value(config, "linear_team")
+            try:
+                snapshot = context.linear_issues(team)
+            except RuntimeError as exc:
+                print(json.dumps({"error": str(exc)}))
+                return 1
+            print(json.dumps(snapshot, indent=2, sort_keys=True))
             return 0
         if args.command == "repo":
             if args.repo_command == "list":

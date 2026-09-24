@@ -26,6 +26,7 @@ bash hermes/tests/flow-guard.test.sh
 bash hermes/tests/morning-brief-precheck.test.sh
 bash hermes/tests/push-guard.test.sh
 bash hermes/tests/trim-logs.test.sh
+bash hermes/tests/link-loop-runner.test.sh
 bash hermes/tests/template-drift.test.sh
 
 "$python_bin" -m ristretto.cli --config "$repo/ristretto.yaml" validate

@@ -14,7 +14,12 @@ from pathlib import Path
 from typing import Any
 
 
-DONE_TYPES = {"completed", "canceled", "cancelled"}
+# Terminal state types, as Linear reports them in `state.type`. `duplicate`
+# was missing, so a duplicate issue counted as open and rode the brief every
+# morning — the feature says the precheck snapshots the *open* board, and a
+# duplicate is closed. Both spellings of cancelled are kept: the API returns
+# one, and it costs nothing to accept the other.
+DONE_TYPES = {"completed", "canceled", "cancelled", "duplicate"}
 
 
 def parse_args() -> argparse.Namespace:
@@ -28,21 +33,6 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--fixture", type=Path, help=argparse.SUPPRESS)
     return parser.parse_args()
-
-
-def unwrap_mcp_result(raw: str) -> dict[str, Any]:
-    data: Any = json.loads(raw)
-    if isinstance(data, dict) and "error" in data:
-        raise RuntimeError(str(data["error"]))
-    if isinstance(data, dict) and "result" in data:
-        data = data["result"]
-    if isinstance(data, str):
-        data = json.loads(data)
-    if not isinstance(data, dict):
-        raise RuntimeError("Linear list_issues returned an unexpected response")
-    if "error" in data:
-        raise RuntimeError(str(data["error"]))
-    return data
 
 
 def configured_team() -> str:
@@ -63,29 +53,43 @@ def configured_team() -> str:
 
 
 def fetch_issues() -> list[dict[str, Any]]:
-    # Imported lazily so fixture tests do not need the Hermes runtime.
-    from tools.mcp_tool import discover_mcp_tools
-    from tools.registry import registry
+    """The board, over the CLI.
 
-    discover_mcp_tools()
-    entry = registry.get_entry("mcp_linear_list_issues")
-    if entry is None:
-        raise RuntimeError("Linear list_issues tool is unavailable")
-    data = unwrap_mcp_result(
-        entry.handler(
-            {
-                "team": configured_team(),
-                "limit": 250,
-                "orderBy": "updatedAt",
-                "includeArchived": False,
-            }
-        )
+    This used to call Hermes' Linear MCP tool by importing `tools.registry`
+    inside the Hermes process — the only import of Hermes internals anywhere
+    in this project. A registry entry is a private interface: nothing warns
+    when an engine upgrade renames or removes one, and there is no
+    `hermes mcp call` to reach it as an interface instead. So the brief now
+    shells the same CLI it already uses for the team key, and that command
+    runs the GraphQL query in `ristretto/context.py`. One Linear client, one
+    process boundary, no internals.
+    """
+    result = subprocess.run(
+        ["ristretto", "issues", "--team", configured_team()],
+        text=True,
+        capture_output=True,
+        check=False,
     )
-    if data.get("hasNextPage"):
-        raise RuntimeError("Linear board exceeds the 250-issue snapshot limit")
+    stdout = (result.stdout or "").strip()
+    stderr = (result.stderr or "").strip()
+    # Exit status first. Parsing first would turn any non-JSON failure output
+    # into a bare JSONDecodeError and throw away the stderr that says why.
+    if result.returncode != 0:
+        detail = stdout or stderr or "no output"
+        raise RuntimeError(f"ristretto issues failed (rc={result.returncode}): {detail}")
+    if not stdout:
+        raise RuntimeError(f"ristretto issues produced nothing: {stderr}")
+    try:
+        data: Any = json.loads(stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"ristretto issues did not return JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise RuntimeError("ristretto issues returned an unexpected response")
+    if data.get("error"):
+        raise RuntimeError(str(data["error"]))
     issues = data.get("issues")
     if not isinstance(issues, list):
-        raise RuntimeError("Linear list_issues response has no issues list")
+        raise RuntimeError("ristretto issues response has no issues list")
     return [item for item in issues if isinstance(item, dict)]
 
 

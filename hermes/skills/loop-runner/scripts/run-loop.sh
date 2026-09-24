@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 # run-loop.sh <task_id> <issue_key> [--model tier] [--flow name]
 # Legacy positional [model] [flow] arguments remain accepted for queued tasks.
-# Owns Guard 4 (via reap.sh), the S-3 permission pin, and the local-model
-# fallback: when Claude itself is unavailable (session limit / OAuth), the
-# loop re-runs ONCE on the local Ollama coder model instead of failing.
+# Owns Guard 4 (via reap.sh) and the S-3 permission pin.
+#
+# There was a local-model fallback here: when Claude was unavailable (session
+# limit / OAuth), the loop re-ran ONCE on the local Ollama coder instead of
+# failing. Removed 2026-09-23 with the premise behind it. A degraded run is
+# worse than no run when the degradation is a local model writing production
+# code unattended, and "unattended" is the whole point of this path. Claude
+# being unavailable now fails the task, visibly, and it can be relaunched.
 # Run from the task's worktree (the dispatcher sets cwd to the workspace).
 set -u
 
@@ -61,9 +66,14 @@ unset _dir
 TASK_ID="${1:?usage: run-loop.sh <task_id> <issue_key> [--model tier] [--flow name]}"
 ISSUE_KEY="${2:?usage: run-loop.sh <task_id> <issue_key> [--model tier] [--flow name]}"
 shift 2
-# Optional model tier (S-sized tasks run on a cheaper tier; `local` runs the
-# whole loop on Ollama). Strict allowlist — anything else is silently
-# dropped from legacy positional calls and rejected from explicit flags.
+# Optional model tier (S-sized tasks run on a cheaper tier). Strict allowlist
+# — anything else is silently dropped from legacy positional calls and
+# rejected from explicit flags. `local` was a member and is not any more: it
+# is accepted and DROPPED, on both paths, so the run continues on the Claude
+# default. Rejecting it would be worse than useless — a task queued before
+# 2026-09-23 still carries `model: local` in its body, SKILL.md passes that
+# through as --model, and exiting 2 would block the task rather than run it
+# on Claude, which is the entire point of retiring the local coder.
 MODEL=""
 FLOW="classic"
 if [ "${1:-}" = "--model" ] || [ "${1:-}" = "--flow" ]; then
@@ -85,14 +95,18 @@ if [ "${1:-}" = "--model" ] || [ "${1:-}" = "--flow" ]; then
         ;;
     esac
   done
-  [[ "$MODEL" =~ ^(sonnet|haiku|opus|local)?$ ]] || {
+  if [ "$MODEL" = "local" ]; then
+    echo "run-loop: the local tier was retired; running on the Claude default" >&2
+    MODEL=""
+  fi
+  [[ "$MODEL" =~ ^(sonnet|haiku|opus)?$ ]] || {
     echo "run-loop: invalid model tier: $MODEL" >&2
     exit 2
   }
 else
   MODEL="${1:-}"
   FLOW="${2:-classic}"
-  [[ "$MODEL" =~ ^(sonnet|haiku|opus|local)$ ]] || MODEL=""
+  [[ "$MODEL" =~ ^(sonnet|haiku|opus)$ ]] || MODEL=""
 fi
 # `classic` preserves the existing whole /loop-dev behavior. Other names are
 # resolved and validated by the public Ristretto flow configuration.
@@ -100,15 +114,6 @@ fi
   echo "run-loop: invalid flow name: $FLOW" >&2
   exit 2
 }
-
-# Local brain: which Ollama model runs the loop for `model: local` AND for
-# the claude-unavailable fallback. Configure per machine in ~/.hermes/.env
-# (RIS_LOCAL_LOOP_MODEL). Requires Ollama >= 0.14 (Anthropic-compatible API)
-# and a >= 64k context window.
-LOCAL_MODEL="${RIS_LOCAL_LOOP_MODEL:-qwen3.6:27b-coding-nvfp4}"
-# Auto-fallback to the local model on Claude auth/limit failures (default
-# on). RIS_LOCAL_FALLBACK=0 disables — the task then just fails and blocks.
-FALLBACK="${RIS_LOCAL_FALLBACK:-1}"
 
 BOARD="${HERMES_KANBAN_BOARD:-default}"
 if [[ ! "$TASK_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
@@ -208,17 +213,12 @@ ignore_session_file() {
     printf '\n# Ristretto resumable Claude session (local runtime state)\n.cc-ris-session\n' >> "$exclude_file"
 }
 
-run_once() {  # $1 = cloud|local, $2 = fresh|resume — sets RC + RUN_ELAPSED
-  local runtime="$1"
-  local session_mode="${2:-fresh}"
+run_once() {  # $1 = fresh|resume — sets RC + RUN_ELAPSED
+  local session_mode="${1:-fresh}"
   local flag="$MODEL"
   local -a args=(-p)
 
-  if [ "$runtime" = "local" ]; then
-    export ANTHROPIC_BASE_URL="http://localhost:11434"
-    export ANTHROPIC_AUTH_TOKEN="ollama"
-    flag="$LOCAL_MODEL"
-  elif [ "$session_mode" = "resume" ]; then
+  if [ "$session_mode" = "resume" ]; then
     args+=(--resume "$SID")
   else
     args+=(--session-id "$SID")
@@ -287,38 +287,30 @@ finish() {  # $1 = outcome
   ris_event run.ended --payload "{\"outcome\":\"$1\",\"runtime\":\"$2\"}"
 }
 
-if [ "$MODEL" = "local" ]; then
-  MODEL=""  # run_once local supplies LOCAL_MODEL as the flag
-  run_once local fresh
-  [ "$RC" -eq 0 ] && rm -f "$SESSION_FILE"
-  [ "$RC" -eq 0 ] && finish completed local || finish failed local
-  exit "$RC"
-fi
-
 ignore_session_file
 if [ -s "$SESSION_FILE" ]; then
   SID="$(tr -d '[:space:]' < "$SESSION_FILE")"
-  run_once cloud resume
+  run_once resume
   if [ "$RC" -ne 0 ] && [ "$RUN_ELAPSED" -le "$RESUME_FAILURE_WINDOW" ]; then
     echo "run-loop: resume failed quickly (rc=$RC, ${RUN_ELAPSED}s) — starting a fresh cloud session" >&2
     SID="$(new_session_id)"
     printf '%s\n' "$SID" > "$SESSION_FILE"
-    run_once cloud fresh
+    run_once fresh
   fi
 else
   SID="$(new_session_id)"
   printf '%s\n' "$SID" > "$SESSION_FILE"
-  run_once cloud fresh
+  run_once fresh
 fi
 
 RUNTIME=cloud
-if [ "$RC" -ne 0 ] && [ "$FALLBACK" = "1" ] && \
+# Claude being unavailable is reported as what it is. It used to re-run on a
+# local coder here; see the header.
+if [ "$RC" -ne 0 ] && \
    grep -qiE "session limit|oauth|failed to authenticate|credit balance" "$OUT"; then
-  echo "run-loop: claude unavailable (rc=$RC) — falling back to local model $LOCAL_MODEL" >&2
+  echo "run-loop: claude unavailable (rc=$RC) — the run failed; relaunch when it is back" >&2
   ris_event stage.failed --stage cloud \
-    --payload "{\"reason\":\"claude unavailable (rc=$RC)\",\"fallback\":\"$LOCAL_MODEL\"}"
-  RUNTIME=local-fallback
-  run_once local fresh
+    --payload "{\"reason\":\"claude unavailable (rc=$RC)\"}"
 fi
 [ "$RC" -eq 0 ] && rm -f "$SESSION_FILE"
 [ "$RC" -eq 0 ] && finish completed "$RUNTIME" || finish failed "$RUNTIME"

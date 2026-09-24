@@ -13,7 +13,8 @@ FIXTURE="$TMP/issues.json"
 cat > "$FIXTURE" <<'EOF'
 {"issues":[
   {"id":"1","url":"https://linear.app/demo/issue/PROJ-1/first","title":"First issue","project":"Example App","status":"Todo","statusType":"unstarted","priority":{"value":2,"name":"High"},"updatedAt":"2026-07-17T10:00:00Z"},
-  {"id":"2","url":"https://linear.app/demo/issue/PROJ-2/second","title":"Second issue","project":"Example App","status":"Done","statusType":"completed","priority":{"value":1,"name":"Urgent"},"updatedAt":"2026-07-17T10:00:00Z"}
+  {"id":"2","url":"https://linear.app/demo/issue/PROJ-2/second","title":"Second issue","project":"Example App","status":"Done","statusType":"completed","priority":{"value":1,"name":"Urgent"},"updatedAt":"2026-07-17T10:00:00Z"},
+  {"id":"3","url":"https://linear.app/demo/issue/PROJ-3/third","title":"Third issue","project":"Example App","status":"Duplicate","statusType":"duplicate","priority":{"value":1,"name":"Urgent"},"updatedAt":"2026-07-17T10:00:00Z"}
 ]}
 EOF
 
@@ -21,6 +22,9 @@ FIRST="$TMP/first.txt"
 "$PYTHON" "$SCRIPT" --fixture "$FIXTURE" --state-file "$STATE" > "$FIRST"
 t "first run reports initial snapshot" "grep -q 'Initial snapshot: 1 open issues' '$FIRST'"
 t "closed issues are excluded"         "! grep -q 'PROJ-2' '$FIRST'"
+# A duplicate is closed. It used to ride the brief every morning as an open
+# Urgent issue, which is the loudest possible place for that mistake.
+t "duplicates are excluded"            "! grep -q 'PROJ-3' '$FIRST'"
 t "signal includes high issue"         "grep -q 'PROJ-1 | Example App | High' '$FIRST'"
 t "state file is persisted"            "[ -s '$STATE' ]"
 

@@ -27,6 +27,7 @@ test:
 	bash hermes/tests/run-loop.test.sh
 	bash hermes/tests/morning-brief-precheck.test.sh
 	bash hermes/tests/push-guard.test.sh
+	bash hermes/tests/link-loop-runner.test.sh
 	bash hermes/tests/template-drift.test.sh
 
 check:

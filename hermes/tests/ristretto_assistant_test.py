@@ -220,7 +220,7 @@ class LaunchToolTest(unittest.TestCase):
         from ristretto.dash import launch as launcher
         with mock.patch.object(launcher, "launch",
                                return_value=launcher.Outcome(True, "started", "t_x")) as spawned:
-            r = tools.launch_run(project="Kaffecard", issue="xari-26", flow="tier1")
+            r = tools.launch_run(project="Kaffecard", issue="xari-26", flow="full")
         self.assertTrue(r["ok"])
         self.assertEqual(r["task_id"], "t_x")
         kwargs = spawned.call_args

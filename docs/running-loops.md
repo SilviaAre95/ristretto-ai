@@ -23,7 +23,7 @@ putting deterministic work inside an agent turn.
 
 ```bash
 .venv/bin/python -m ristretto.runner \
-  --task-id t_anything --issue XARI-123 --flow tier1
+  --task-id t_anything --issue XARI-123 --flow full
 ```
 
 `--task-id` is only a label. It names the artifact directory and keys your
@@ -68,17 +68,25 @@ unaffected: you chose the interpreter, so you already know which copy it is.
 
 ## The flows
 
-The tier number is how much Claude you are buying.
+A flow is how much scrutiny a change gets. All coding runs on Claude.
 
 | flow | plan | build | review | repair | finish |
 |---|---|---|---|---|---|
-| tier0 | opus | claude | opus | claude | haiku |
-| tier1 | opus | **local coder** | claude | claude | **local brain** |
-| tier2 | **local brain** | **local coder** | claude | **local coder** | **local brain** |
-| tier3 | **local brain** | **local coder** | **local brain** | **local coder** | **local brain** |
+| full | opus | sonnet | opus | sonnet | haiku |
+| short | opus | sonnet | — | — | haiku |
 
-Every flow also has a `verify` stage between `repair` and `finish`, which runs
-the repository's `.cc-verify` and nothing else.
+Both have a `verify` stage before `finish`, which runs the repository's
+`.cc-verify` and nothing else. In `full` it sits between `repair` and
+`finish`; in `short` it is the only thing between the build and the branch,
+which is why `full` is the default and `short` is something you ask for.
+
+`short` plans on Opus rather than Sonnet because it has no review stage: the
+plan is the only judgement in the flow, and plan is the cheapest stage to
+spend a stronger model on — it reads little and runs once.
+
+There used to be a `tier0`–`tier3` ladder here, graded by how much Claude a
+run used, with the build on a locally served coder. That was retired on
+2026-09-23 after every local build died in the build stage.
 
 `--dry-run` prints the exact command each stage will execute without spending
 anything. Do this before trusting a flow you have not run.
@@ -179,12 +187,9 @@ legitimate.
 - On the board, `blocked` means "failed and gave up", not "waiting for your
   approval", and `unblock` restarts the run from the beginning — it has
   discarded completed stage work.
-- `--bare` disables hooks, and it is applied to locally served providers. In
-  tier1 that means the `build` and `finish` stages run without hook
-  enforcement, and `finish` is the stage that pushes. A narrower fix probably
+- `--bare` disables hooks, and it is applied to locally served providers. No
+  shipped flow gives a local provider a mutating stage any more, so nothing
+  currently pushes without hook enforcement — but the mechanism is still
+  there for a custom flow that names `local-brain`. A narrower fix probably
   exists: the hang `--bare` was introduced to fix was MCP discovery, which
   `--strict-mcp-config` alone may address.
-- Nothing assembles issue context. The highest-value change available is to
-  gather the issue body and any matching vault notes into an artifact and list
-  it as a `plan` input — which would also give the local brain a job it is
-  good at, instead of its current one (`finish`, the stage that pushes).

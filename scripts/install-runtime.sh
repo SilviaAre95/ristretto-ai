@@ -98,5 +98,15 @@ sys.exit(0 if want in here.parents else 1)
   exit 1
 }
 
+# Re-point the loop-runner skill now that a runtime exists. Without this the
+# classic path keeps running from the working checkout, and the pin would
+# cover the staged flows only — which is the half-pinned state this script's
+# own docstring describes as the problem.
+bash "$repo/scripts/link-loop-runner.sh" || {
+  echo "install-runtime: runtime is pinned but the loop-runner link was not updated" >&2
+  echo "  classic runs will keep using $repo until that is resolved" >&2
+  exit 1
+}
+
 echo "runtime pinned at origin/$base ($commit)"
 echo "flows now run from $runtime, not from $repo"

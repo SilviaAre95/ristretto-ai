@@ -315,8 +315,8 @@ configuration keys. The issue-key shape is already assumed in the launch
 surface, the voice vocabulary and branch naming; each further place is cheap
 now and tedious later.
 
-**A model.** Ollama for local, or an API key for hosted. The tiers already
-express this choice for coding flows; the assistant loop needs the same
+**A model.** Ollama for local, or an API key for hosted. The flows already
+express this choice per stage for coding; the assistant loop needs the same
 switch.
 
 ### What that costs us today
@@ -517,7 +517,9 @@ rare case; Slack covers notifications and premade actions, which is most of it.
 
 ## What exists already
 
-Built and proven, and carried forward unchanged: the coding flows and tiers,
-the event spine, approvals across two surfaces, the launch surface, the
-doorbell, the fleet data layer, the desktop face and local speech. The
+Built and proven, and carried forward: the coding flows (the `tier0`–`tier3`
+ladder was replaced on 2026-09-23 by `full` and `short`, graded by scrutiny
+rather than by how much Claude a run used), the event spine, approvals across
+two surfaces, the launch surface, the doorbell, the fleet data layer, the
+desktop face and local speech. The
 workshop is in good shape. What is missing is the assistant that directs it.

@@ -3,7 +3,7 @@ id: fleet-view
 title: Fleet View
 status: in-progress  # proposed | in-progress | implemented | deprecated
 created_at: 2026-08-25
-last_modified: 2026-08-30
+last_modified: 2026-09-23
 owner: project
 depends_on: [event-spine]
 acceptance_criteria:
@@ -13,10 +13,10 @@ acceptance_criteria:
   - Stopping and unblocking are possible from a phone
   - A mutating request that did not come from this page is refused
   - Every control action is recorded in the timeline
-  - Ris answers questions about the fleet from the dashboard
+  - The dashboard reaches the assistant through its own loop, not a second agent
 non_goals:
   - NOT binding to a public interface
-  - NOT launching work from the dashboard
+  - NOT a second assistant with its own tools or memory
   - NOT implying a heartbeat Hermes does not expose
 ---
 
@@ -70,32 +70,28 @@ only with `Sec-Fetch-Site: same-origin`, falling back to an `Origin` that
 matches the host when the header is absent; `cross-site`, `same-site`,
 `none`, a mismatched origin, and no headers at all are all refused.
 
-**Starting work is deliberately absent.** Stopping a run costs a restart;
-launching one spends tokens and writes code to a branch, and it deserves its
-own design rather than a third button added by analogy to the other two.
+**Starting work arrived with its own design.** Stopping a run costs a restart;
+launching one spends tokens and writes code to a branch, so it was not added
+by analogy to the other two — it has a validated form, an idempotency key, and
+a preflight warning when the verify gate has not been proven.
 
 ### Asking Ris
 
-The same agent that answers on Slack answers here, narrowed twice.
+`POST /chat` reaches the assistant's own loop — conversation state, its own
+memory and its own tool boundary — and the dashboard is one surface onto it
+rather than a separate agent.
 
-Its tools are restricted to a minimal set. Ris normally has terminal, file,
-code execution and delegation; exposed unmodified on a page with no login,
-a chat box is remote code execution over HTTP for anyone on the tailnet —
-asked to run a shell command, the unrestricted agent runs it and reports the
-output. Verified: invoked with the restricted toolset it answers *"there's no
-bash tool available in this environment"*. Widening this is a one-line change
-and should be a deliberate one.
+The reason this is not a thin proxy is a security one and it still holds. An
+agent with terminal, file, code execution and delegation, exposed unmodified on
+a page with no login, is remote code execution over HTTP for anyone on the
+tailnet: asked to run a shell command, it runs it and reports the output. The
+assistant's tool boundary is explicit and small, which is the property that
+makes the chat box safe. Widening it is a deliberate act, not a default.
 
-Context is injected rather than fetched. The dashboard already knows the
-fleet, so it hands Ris a summary instead of granting the tools to go looking.
-Fewer capabilities and better answers, and "why did XARI-33 stall" works
-without naming a task id.
-
-Replies are not streamed. `hermes -z` emits its whole answer at the end —
-measured under a tty as well as a pipe, so it is the agent's behaviour and
-not output buffering. Streaming would need `hermes serve`, a second daemon
-running a JSON-RPC/WebSocket gateway; that earns itself when Ris is fully
-capable here, not for read-only questions that land in under fifteen seconds.
+The route is same-origin like the mutating ones. It changes nothing, but it
+spends a model turn, and an endpoint anyone can drive is one anyone can drain.
+The client returns the previous turn's session id, so the conversation
+continues across requests instead of restarting each time.
 
 ### Why there is no separate dashboard user
 
@@ -120,9 +116,9 @@ one absent-minded flag.
 ## Out of scope
 
 - NOT public ingress: there is no auth layer, because there is no exposure.
-- NOT mutating: this phase has no POST, PUT, PATCH, or DELETE route at all,
-  which a test pins. Stop, unblock, and launch arrive with the privilege split
-  that should accompany them.
+- NOT a second assistant: the dashboard holds no agent of its own. It renders a
+  surface onto the assistant loop, so memory and tools are defined in one place
+  and cannot drift between Slack and the browser.
 - NOT implying a heartbeat: see above.
 
 ## Open questions

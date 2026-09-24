@@ -77,11 +77,16 @@ link_skill() {
   ln -s "$source" "$destination"
 }
 
-for skill in durable-dev issue-closeout loop-runner; do
+for skill in durable-dev issue-closeout; do
   link_skill \
     "$repo/hermes/skills/$skill" \
     "$hermes_home/skills/software-development/$skill"
 done
+
+# loop-runner is handled separately: it is the only skill that executes
+# unattended for an hour, so it follows the pinned runtime rather than the
+# checkout you are editing. See scripts/link-loop-runner.sh.
+bash "$repo/scripts/link-loop-runner.sh"
 
 # Linked, not copied, so the answering path cannot drift from the store it
 # writes to. A plugin that disagrees with the CLI about what "approve" means

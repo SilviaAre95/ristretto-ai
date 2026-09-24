@@ -128,7 +128,7 @@ def _repo_slug(repo_path) -> str:
         return ""
 
 
-def launch_run(project: str = "", issue: str = "", flow: str = "tier1", unattended: bool = False) -> dict[str, Any]:
+def launch_run(project: str = "", issue: str = "", flow: str = "", unattended: bool = False) -> dict[str, Any]:
     """Start a supervised coding run — dev work, so it runs without a gate.
 
     Kicking off a run is dev work, not a dangerous action: it produces a pull
@@ -186,7 +186,7 @@ TOOLS: dict[str, tuple[str, Any, dict]] = {
         {
             "project": {"type": "string", "description": "the configured project name, e.g. Kaffecard"},
             "issue": {"type": "string", "description": "the issue key, e.g. XARI-26"},
-            "flow": {"type": "string", "description": "tier0-3 or classic; default tier1"},
+            "flow": {"type": "string", "description": "full, short or classic; omit for the configured default"},
             "unattended": {"type": "boolean", "description": "true for a run nobody will watch"},
         },
     ),

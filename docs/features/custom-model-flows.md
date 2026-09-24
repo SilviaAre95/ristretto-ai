@@ -3,7 +3,7 @@ id: custom-model-flows
 title: Custom Model Flows
 status: in-progress  # proposed | in-progress | implemented | deprecated
 created_at: 2026-07-18
-last_modified: 2026-08-31
+last_modified: 2026-09-23
 owner: project
 depends_on: [autonomous-coding]
 acceptance_criteria:
@@ -13,10 +13,12 @@ acceptance_criteria:
   - Verification must pass before the final PR stage
   - Users can add a valid flow in YAML without changing runner code
   - Existing classic tasks remain backward compatible
+  - No shipped flow routes a mutating stage to a local model
 non_goals:
   - NOT allowing arbitrary unvalidated runner commands
   - NOT storing provider credentials in the repository or UI
   - NOT merging pull requests automatically
+  - NOT trading cloud spend for local compute
 ---
 
 # Custom Model Flows
@@ -24,16 +26,20 @@ non_goals:
 ## Summary
 
 Ristretto can run a coding task with a named, validated sequence of model
-stages. Four included tiers trade cloud spend for local compute while keeping
-one shape: plan, build, review, repair, deterministic verify, PR. `tier0` is
-all Claude (Opus plans and reviews, Sonnet builds and repairs, Haiku opens the
-PR). `tier1` lets the local coder do the token-heavy build while Claude plans,
-reviews, and repairs — planning on Opus rather than Sonnet, because the
-weaker the builder the more the plan has to carry, and plan is the cheapest
-stage to spend a stronger model on. `tier2` is mainly local with a single Claude call spent on
-review. `tier3` is fully local. In every tier the reviewer is a different model
-from the builder. The existing Claude `/loop-dev` behavior remains available
-as `classic`.
+stages. Two included flows trade **scrutiny** for speed. `full` is plan, build,
+review, repair, deterministic verify, PR — Opus plans and reviews, Sonnet
+builds and repairs, Haiku opens the PR, and the reviewer is never the model
+that wrote the code. `short` is plan, build, verify, PR for low-risk changes:
+Opus plans, Sonnet builds, Haiku opens the PR. `short` has no review stage, so
+the deterministic `.cc-verify` gate is the only thing between generated output
+and the branch — which is why `full` is the default and `short` is opt-in.
+Opus plans both, because in `short` the plan is the only judgement stage.
+Model choice per stage is ordinary cost-fitting inside Claude. The existing
+Claude `/loop-dev` behavior remains available as `classic`.
+
+The earlier `tier0`–`tier3` ladder graded how much Claude a run used, with the
+token-heavy build on a local coder. That premise was retired on 2026-09-23 and
+the tiers are removed; the axis they measured no longer exists.
 
 ## Behavior
 
@@ -50,8 +56,17 @@ stage explicitly sets `mutates: true`. Stage outputs and logs are stored under
 variables and are never written into the resolved flow output.
 
 Task requests may select a flow explicitly, for example "do PROJ-123 on
-tier1." Saying "locally" selects `tier3`. Requests without a flow keep using
-`classic`, preserving the proven production path.
+short." Without one, there are two entry points and they differ deliberately:
+
+- `ristretto launch`, the Slack `!ris-start` command and the launch form send
+  no flow, so the configured `default_flow` applies — `full` as shipped.
+- A conversational request handled by the `durable-dev` skill writes
+  `flow: classic` into the task body explicitly, preserving the proven
+  `/loop-dev` path for work that arrives as chat rather than as a launch.
+
+There is no longer a way to ask for a local coding run: `local-brain` is the
+only local provider a flow can name, and no shipped flow gives it a mutating
+stage.
 
 ## Custom flow example
 
@@ -69,7 +84,7 @@ flows:
         output: plan.md
       - id: build
         role: build
-        provider: local-coder
+        provider: claude
         mutates: true
         inputs: [plan.md]
         output: build.md
@@ -108,6 +123,8 @@ used by the local compatibility API.
 - NOT putting credentials in configuration, task artifacts, or the future UI.
 - NOT auto-merging: the terminal stage can open or update a feature-branch PR,
   but the user remains the merge authority.
+- NOT trading cloud spend for local compute: flows are graded by scrutiny, not
+  by how much of the run avoids Claude.
 
 ## Open questions
 

@@ -3,7 +3,7 @@ id: doorbell
 title: Doorbell
 status: implemented  # proposed | in-progress | implemented | deprecated
 created_at: 2026-08-30
-last_modified: 2026-08-30
+last_modified: 2026-09-23
 owner: project
 depends_on: [event-spine, fleet-view]
 acceptance_criteria:
@@ -35,7 +35,7 @@ a reason to go to it, delivered somewhere already read.
 Only outcomes and trouble ring: `run.started`, `run.ended`, `stage.failed`,
 `verify.red`, `grader.failed`, `pr.opened`, `awaiting.approval`,
 `preflight.failed`, `control.stop`. Stage starts and passes stay in the log.
-A tier run emits six of each, and a channel that pings twelve times per task
+A full run emits six of each, and a channel that pings twelve times per task
 is a channel nobody reads — so notifying on progress would cost more than
 sending nothing.
 
