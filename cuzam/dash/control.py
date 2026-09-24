@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from .. import events
-from .data import SAFE_TASK_ID
+from ..runs import SAFE_TASK_ID
 
 STOP_SCRIPT = Path.home() / ".hermes" / "scripts" / "zam-stop.sh"
 

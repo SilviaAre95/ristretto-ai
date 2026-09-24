@@ -88,6 +88,19 @@ def parser() -> argparse.ArgumentParser:
     doorbell_command.add_argument("--interval", type=int, default=20)
     doorbell_command.add_argument("--base-url", help="dashboard URL used in links")
 
+    runs_command = commands.add_parser(
+        "runs", help="what is running right now, and where to find it"
+    )
+    runs_command.add_argument(
+        "target", nargs="?", default="",
+        help="task id or issue key; omit for everything",
+    )
+    runs_command.add_argument(
+        "--all", action="store_true",
+        help="include finished runs, not only the live and the dead",
+    )
+    runs_command.add_argument("--json", action="store_true", help="print raw JSON")
+
     events_command = commands.add_parser("events", help="read the pipeline event log")
     events_command.add_argument("task_id", nargs="?", help="limit to one task")
     events_command.add_argument("--limit", type=int, default=50)
@@ -185,6 +198,123 @@ def parser() -> argparse.ArgumentParser:
     )
 
     return root
+
+
+def _locators(run: Any, indent: str = "    ") -> list[str]:
+    """Where to go to look at a run, one `key  value` line each.
+
+    Printed rather than summarised because the whole reason this command
+    exists is that a path in a browser has to be retyped. These are meant to
+    be copied.
+    """
+    lines = []
+    if run.worktree:
+        # Where it was is still the useful answer after `cuzam gc` has
+        # reclaimed it — as long as nothing pretends it is still there.
+        gone = "  (reclaimed — no longer on disk)" if run.worktree_gone else ""
+        lines.append(f"{indent}worktree  {run.worktree}{gone}")
+    if run.branch:
+        lines.append(f"{indent}branch    {run.branch}")
+    if run.log:
+        lines.append(f"{indent}log       tail -f {run.log}")
+    elif run.artifact_dir:
+        # Said, not guessed. A classic run keeps Claude's output in a mktemp
+        # file, so there is no log to tail and printing a path to one would
+        # send someone after a file that was never written.
+        lines.append(f"{indent}artifacts {run.artifact_dir}  (no log file written)")
+    if run.runner_pid:
+        pids = f"{indent}runner    pid {run.runner_pid}"
+        if run.claude_pid:
+            pids += f", claude pid {run.claude_pid}"
+        lines.append(pids)
+    return lines
+
+
+def _headline(run: Any, humanise: Any) -> str:
+    """One line: which issue, which flow, how long, which stage."""
+    parts = [run.issue_key or run.task_id]
+    if run.flow:
+        parts.append(run.flow)
+    if run.stage:
+        parts.append(run.stage)
+    parts.append(humanise(run.elapsed))
+    return f"{' · '.join(parts)}  [{run.task_id}]"
+
+
+def _print_runs(run_data: Any, args: Any) -> int:
+    """Render `cuzam runs`. A renderer and nothing else.
+
+    Every fact here comes back from `cuzam.runs`; if this function ever has to
+    work something out for itself, the module is missing a field and the fleet
+    view will be missing it too.
+    """
+    fleet = run_data.fleet()
+    if fleet and not fleet[0].liveness_known:
+        # Said, not swallowed. Without this the command silently degrades to
+        # the old signal-age guess and reads exactly like a healthy fleet.
+        print(
+            "could not read the process table — liveness below is guessed from "
+            "signal age, and no run is called dead\n",
+            file=sys.stderr,
+        )
+
+    if args.target:
+        one = run_data.find(args.target, fleet)
+        if not one:
+            print(f"no run matching {args.target}", file=sys.stderr)
+            return 1
+        if args.json:
+            print(json.dumps(one.as_dict(), indent=2, sort_keys=True))
+            return 0
+        print(f"{_headline(one, run_data.humanise)}  {one.health}")
+        for line in _locators(one):
+            print(line)
+        if one.health == "dead":
+            print("    no process. The board still calls this running.")
+        print(f"    signal    {run_data.ago(one.last_signal_at)} (from the run's {one.signal_source})")
+        if one.failure:
+            print(f"    failure   {one.failure}")
+        return 0
+
+    live = [run for run in fleet if run.flow_alive]
+    dead = [run for run in fleet if run.health == "dead"]
+    shown = {run.task_id for run in live} | {run.task_id for run in dead}
+    # --all means the whole board in both renderings. It used to widen the
+    # JSON to the full fleet while the text path still showed only what
+    # `recent` had kept, so the same flag answered two different questions.
+    rest = fleet if args.all else run_data.recent(fleet)[0]
+    rest = [run for run in rest if run.task_id not in shown]
+
+    if args.json:
+        print(json.dumps([run.as_dict() for run in live + dead + rest], indent=2, sort_keys=True))
+        return 0
+
+    if not live:
+        print("nothing running")
+    else:
+        print("live")
+    for run in live:
+        print(f"  {_headline(run, run_data.humanise)}")
+        for line in _locators(run, "    "):
+            print(line)
+
+    if dead:
+        # Named rather than fixed. A surface that could not tell alive from
+        # dead restarted a healthy run on 2026-09-10; this one can tell, and
+        # still does not touch anything.
+        print("\ndead — the board still calls these running. Nothing here changes that.")
+        for run in dead:
+            print(f"  {_headline(run, run_data.humanise)}")
+            for line in _locators(run, "    "):
+                print(line)
+        print("\n  `cuzam relaunch <issue>` restarts one, from its plan stage.")
+
+    if args.all:
+        for run in rest:
+            print(f"\n  {_headline(run, run_data.humanise)}  {run.health}")
+    elif rest:
+        print(f"\n{len(rest)} other recent run(s) — `cuzam runs --all`")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -454,6 +584,10 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{target}: {message}" if won else f"{target}: not applied — {message}")
             return 0 if won else 1
 
+        if args.command == "runs":
+            from . import runs as run_data
+
+            return _print_runs(run_data, args)
         if args.command == "events":
             from . import events as event_log
 

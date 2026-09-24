@@ -3,6 +3,13 @@
 
 Kept separate from the config suite because they need the optional dashboard
 dependencies, and skip cleanly when those are absent.
+
+What a run *is* — alive or dead, where its worktree and log are — is not
+tested here any more. It moved to `cuzam_runs_test.py` with the code, because
+it stopped being the dashboard's question: the page is a renderer over
+`cuzam.runs`, and so is `cuzam runs`. What is left here is what is genuinely
+the web surface's own: where it binds, which routes exist, who is allowed to
+post to them, and the two controls.
 """
 
 from __future__ import annotations
@@ -15,8 +22,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from cuzam import approvals, events
-from cuzam.dash import control, data, launch, serve
+from cuzam import approvals, events, runs
+from cuzam.dash import control, launch, serve
 from cuzam.dash.serve import BindRefused, resolve_host
 
 try:
@@ -77,103 +84,6 @@ class BindTests(unittest.TestCase):
         self.assertEqual(host, "127.0.0.1")
 
 
-class RunTests(unittest.TestCase):
-    def test_active_run_with_recent_signal_is_running(self) -> None:
-        run = data.build_run(task(), [event("stage.started", age=30, stage="build")])
-        self.assertEqual(run.health, "running")
-        self.assertEqual(run.stage, "build")
-
-    def test_active_run_gone_quiet_is_stalled(self) -> None:
-        run = data.build_run(task(), [event("stage.started", age=3600, stage="build")])
-        self.assertEqual(run.health, "stalled")
-
-    def test_a_quiet_run_with_a_live_flow_is_not_stalled(self) -> None:
-        # A build stage emits nothing between its start and its finish and
-        # legitimately runs for the better part of an hour. Judging on event
-        # age alone reported healthy builds as stalled.
-        run = data.build_run(task(), [event("stage.started", age=3600, stage="build")])
-        self.assertEqual(run.health, "stalled")
-        run.flow_alive = True
-        self.assertEqual(run.health, "running")
-
-    def test_silence_with_nothing_running_is_still_a_stall(self) -> None:
-        run = data.build_run(task(), [event("stage.started", age=3600, stage="build")])
-        run.flow_alive = False
-        self.assertEqual(run.health, "stalled")
-
-    def test_a_shell_mentioning_the_runner_is_not_a_live_flow(self) -> None:
-        # A pattern search matches the command line of whatever runs the
-        # search, so a monitor watching for a runner reported itself as one.
-        listing = (
-            "/bin/zsh -c pgrep -f 'cuzam.runner --task-id t_faker'\n"
-            "/x/.venv/bin/python3 -m cuzam.runner --task-id t_real --issue A --flow full\n"
-        )
-        with mock.patch.object(
-            data.subprocess, "run",
-            return_value=subprocess.CompletedProcess([], 0, listing, ""),
-        ):
-            self.assertEqual(data.running_flows(), {"t_real"})
-
-    def test_blocked_beats_signal_age(self) -> None:
-        run = data.build_run(task(status="blocked"), [event("stage.started", age=5)])
-        self.assertEqual(run.health, "blocked")
-
-    def test_finished_run_with_a_failure_reads_as_failed(self) -> None:
-        run = data.build_run(
-            task(status="done", completed_at=NOW),
-            [event("stage.failed", age=60, stage="plan", reason="model reported failure")],
-        )
-        self.assertEqual(run.health, "failed")
-        self.assertEqual(run.failure, "model reported failure")
-
-    def test_finished_run_without_completion_time_has_unknown_elapsed(self) -> None:
-        # Counting from the start would show a number that grows forever and
-        # reads as though the work were still in flight.
-        run = data.build_run(task(status="archived", started_at=NOW - 2_500_000), [])
-        self.assertIsNone(run.elapsed)
-        self.assertEqual(data.humanise(run.elapsed), "—")
-
-    def test_running_run_elapsed_counts_from_start(self) -> None:
-        run = data.build_run(task(started_at=NOW - 300), [])
-        self.assertGreaterEqual(run.elapsed or 0, 300)
-
-    def test_signal_source_is_reported_honestly(self) -> None:
-        # Hermes exposes no heartbeat, so the view must not imply one.
-        self.assertEqual(data.build_run(task(), []).signal_source, "start")
-        self.assertEqual(data.build_run(task(), [event("run.started")]).signal_source, "event")
-        self.assertEqual(data.build_run(task(started_at=None), []).signal_source, "none")
-
-    def test_project_comes_from_the_worktree_path(self) -> None:
-        self.assertEqual(data.build_run(task(), []).project, "kaffecard")
-        self.assertEqual(data.build_run(task(workspace_path=None), []).project, "unassigned")
-
-    def test_issue_key_comes_from_the_title(self) -> None:
-        self.assertEqual(data.build_run(task(), []).issue_key, "XARI-33")
-
-    def test_history_is_hidden_but_live_work_never_is(self) -> None:
-        # A fleet view showing every task ever finished is a graveyard: what
-        # needs attention gets buried under months of identical archived rows.
-        fresh = data.build_run(task(id="t_fresh", status="archived", started_at=NOW - 60), [])
-        old = data.build_run(task(id="t_old", status="archived", started_at=NOW - 40 * 86400), [])
-        quiet_but_live = data.build_run(
-            task(id="t_live", status="running", started_at=NOW - 40 * 86400), []
-        )
-        keep, hidden = data.recent([fresh, old, quiet_but_live])
-        self.assertEqual({r.task_id for r in keep}, {"t_fresh", "t_live"})
-        self.assertEqual(hidden, 1)
-
-    def test_age_is_stated_so_july_is_not_mistaken_for_today(self) -> None:
-        self.assertEqual(data.ago(None), "—")
-        self.assertTrue(data.ago(NOW - 90).endswith("ago"))
-
-    def test_live_projects_sort_first(self) -> None:
-        live = data.build_run(task(id="t_live", workspace_path="/x/aaa/.worktrees/t_live"), [])
-        done = data.build_run(
-            task(id="t_done", status="archived", workspace_path="/x/zzz/.worktrees/t_done"), []
-        )
-        self.assertEqual(list(data.grouped([done, live])), ["aaa", "zzz"])
-
-
 @unittest.skipUnless(WEB, "dashboard extras not installed")
 class RouteTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -192,7 +102,7 @@ class RouteTests(unittest.TestCase):
         self.addCleanup(state.stop)
 
         self.client = TestClient(app)
-        patcher = mock.patch.object(data, "board", return_value=[task()])
+        patcher = mock.patch.object(runs, "board", return_value=[task()])
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -203,11 +113,11 @@ class RouteTests(unittest.TestCase):
         self.assertIn("kaffecard", response.text)
 
     def test_unknown_task_is_404(self) -> None:
-        with mock.patch.object(data, "task_detail", return_value={}):
+        with mock.patch.object(runs, "task_detail", return_value={}):
             self.assertEqual(self.client.get("/task/t_nope").status_code, 404)
 
     def test_task_detail_renders(self) -> None:
-        with mock.patch.object(data, "task_detail", return_value={"task": task(), "runs": []}):
+        with mock.patch.object(runs, "task_detail", return_value={"task": task(), "runs": []}):
             response = self.client.get("/task/t_a1b2c3d4")
         self.assertEqual(response.status_code, 200)
         self.assertIn("xariprojects/xari-33", response.text)
@@ -215,9 +125,9 @@ class RouteTests(unittest.TestCase):
     def test_hostile_task_ids_never_reach_a_subprocess(self) -> None:
         # The id comes from a URL and crosses a process boundary. argv is not
         # a shell, but that is not a reason to pass request data unchecked.
-        with mock.patch.object(data.subprocess, "run") as spawned:
+        with mock.patch.object(runs.subprocess, "run") as spawned:
             for hostile in ("../../etc/passwd", "a b", "$(whoami)", "-rf", "", "x" * 200):
-                self.assertEqual(data.task_detail(hostile), {}, hostile)
+                self.assertEqual(runs.task_detail(hostile), {}, hostile)
             spawned.assert_not_called()
 
     def test_the_post_surface_is_exactly_what_we_intend(self) -> None:
@@ -413,7 +323,7 @@ class ApprovalRouteTests(unittest.TestCase):
         self.assertEqual(approvals.get("r1", path=self.store)["decision"], approvals.DENY)
 
     def test_the_task_page_offers_the_pending_request(self) -> None:
-        with mock.patch.object(data, "task_detail", return_value={"task": task(), "runs": []}):
+        with mock.patch.object(runs, "task_detail", return_value={"task": task(), "runs": []}):
             page = self.client.get("/task/t_a1b2c3d4").text
         self.assertIn("git push --force", page)
         self.assertIn("/approval/r1/approve", page)
@@ -472,46 +382,52 @@ class BuildStampTests(unittest.TestCase):
     reason. Both were invisible: the page looked fine.
     """
 
+    def setUp(self) -> None:
+        # Stamp before patching. The stamp is taken on first use rather than
+        # at import, so a test that patches `_read_commit` first would be
+        # asserting against its own fixture.
+        self.loaded, _ = runs.loaded_build()
+
     def test_it_reports_the_commit_it_loaded_not_the_one_checked_out(self) -> None:
         # The stamp existed to catch a stale process and could not: it shelled
         # git per request, so a server running three-hour-old code displayed
         # the newest commit and looked current.
-        with mock.patch.object(data, "_read_commit", return_value=("ffffff1", False)):
-            stamp = data.build_stamp()
-        self.assertEqual(stamp["commit"], data.LOADED_COMMIT)
+        with mock.patch.object(runs, "_read_commit", return_value=("ffffff1", False)):
+            stamp = runs.build_stamp()
+        self.assertEqual(stamp["commit"], self.loaded)
         self.assertNotEqual(stamp["commit"], "ffffff1")
 
     def test_a_process_older_than_the_checkout_says_so(self) -> None:
-        with mock.patch.object(data, "_read_commit", return_value=("ffffff1", False)):
-            self.assertTrue(data.build_stamp()["stale"])
+        with mock.patch.object(runs, "_read_commit", return_value=("ffffff1", False)):
+            self.assertTrue(runs.build_stamp()["stale"])
 
     def test_a_current_process_is_not_flagged(self) -> None:
-        with mock.patch.object(data, "_read_commit", return_value=(data.LOADED_COMMIT, False)):
-            self.assertFalse(data.build_stamp()["stale"])
+        with mock.patch.object(runs, "_read_commit", return_value=(self.loaded, False)):
+            self.assertFalse(runs.build_stamp()["stale"])
 
     def test_an_unreadable_checkout_is_not_called_stale(self) -> None:
         # No git is not the same as out of date, and crying stale forever
         # teaches people to ignore the line.
-        with mock.patch.object(data, "_read_commit", return_value=("unknown", False)):
-            self.assertFalse(data.build_stamp()["stale"])
+        with mock.patch.object(runs, "_read_commit", return_value=("unknown", False)):
+            self.assertFalse(runs.build_stamp()["stale"])
 
     def test_it_reports_a_commit_and_uptime(self) -> None:
-        stamp = data.build_stamp()
+        stamp = runs.build_stamp()
         self.assertIn("commit", stamp)
         self.assertIn("uptime", stamp)
 
     def test_an_unavailable_git_is_not_fatal(self) -> None:
         # The property moved with the code: the commit is stamped once at
         # import, so this is now about reading the checkout, not the footer.
-        with mock.patch.object(data.subprocess, "run", side_effect=OSError("no git")):
-            commit, dirty = data._read_commit()
+        with mock.patch.object(runs.subprocess, "run", side_effect=OSError("no git")):
+            commit, dirty = runs._read_commit()
         self.assertEqual(commit, "unknown")
         self.assertFalse(dirty)
 
     def test_local_edits_are_flagged(self) -> None:
-        with mock.patch.object(data.subprocess, "run") as run:
+        with mock.patch.object(runs.subprocess, "run") as run:
             run.return_value = subprocess.CompletedProcess([], 0, "abc1234\n M file.py\n", "")
-            self.assertTrue(data._read_commit()[1])
+            self.assertTrue(runs._read_commit()[1])
 
 
 class LinkAndCopyTests(unittest.TestCase):

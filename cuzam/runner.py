@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from . import __version__, approvals, broker, context as flow_context, events
+from . import __version__, approvals, broker, context as flow_context, events, runs
 from .seam import DEV_CONFIG, VERIFY_GATE
 from .config import ConfigError, load_config, load_env, resolved_flow, resolved_provider
 
@@ -43,8 +43,10 @@ MODEL_FAILURE = re.compile(r"<model_failure>(.*?)</model_failure>", re.DOTALL | 
 # Observed protocol violations emit a bare tool tag and nothing else, e.g.
 # "<severity>10</severity>". No genuine stage report is anywhere near this short.
 MIN_STAGE_OUTPUT = 40
-# Cuzam's own run artifacts are not the flow's work product.
-ARTIFACT_DIR_NAME = ".cuzam"
+# Cuzam's own run artifacts are not the flow's work product. Declared in
+# `runs`, which is the module every surface already reads it from; .gitignore
+# moves in lockstep with it.
+ARTIFACT_DIR_NAME = runs.ARTIFACT_DIR_NAME
 
 # The stage budget when nothing else says otherwise. A repository whose
 # worktree starts cold — no node_modules, a database client still to generate —
@@ -98,7 +100,7 @@ def parser() -> argparse.ArgumentParser:
 
 
 def artifact_dir(task_id: str, cwd: Path) -> Path:
-    return cwd / ".cuzam" / "runs" / safe_identifier(task_id, "task id")
+    return runs.run_dir(cwd, safe_identifier(task_id, "task id"))
 
 
 def ignore_artifacts(cwd: Path) -> bool:

@@ -234,15 +234,26 @@ if ! HERMES_HOME="$hermes_home" hermes -p zam-worker hooks list 2>/dev/null \
   exit 1
 fi
 # Hermes fingerprints an approved hook script, so reinstalling a changed copy
-# reports "modified since approval". Approval is granted when an agent starts,
-# not by any hooks subcommand, so it cannot be refreshed from here — say so
-# rather than leaving the operator to find out from a worker that skipped its
-# loop. Do not "fix" this by revoking: that disarms the hook outright until an
-# agent runs again.
+# reports "modified since approval".
+#
+# This used to print "needs re-approval", which read as though the guard were
+# disarmed. It is not, and the difference matters: `_is_allowlisted()` in
+# Hermes' agent/shell_hooks.py matches on event and command only and never
+# consults `script_mtime_at_approval`, so the hook still registers and still
+# fires — `hooks list` shows it allowed. The mtime line is a review-the-diff
+# nudge, not an outage, and an operator who believed the old wording would
+# reasonably have stopped dispatching until they could clear it.
+#
+# Do not "fix" the notice by revoking. Revoking is the thing that would
+# actually disarm the hook, until an agent runs again and re-approves it.
 if HERMES_HOME="$hermes_home" hermes -p zam-worker hooks doctor 2>/dev/null \
    | grep -q "modified since approval"; then
-  echo "Loop flow guard needs re-approval after this update. Run once:" >&2
-  echo "  hermes -p zam-worker --accept-hooks -z ok" >&2
+  echo "Loop flow guard armed on the zam-worker profile — still enforcing." >&2
+  echo "  The guard script changed in this update, so Hermes flags it as" >&2
+  echo "  modified since approval. That is a nudge to read the diff, not a" >&2
+  echo "  gap: approval matches on event and command, not on the file's" >&2
+  echo "  timestamp. To clear the notice after reviewing:" >&2
+  echo "    hermes -p zam-worker --accept-hooks -z ok" >&2
 else
   echo "Loop flow guard armed on the zam-worker profile."
 fi

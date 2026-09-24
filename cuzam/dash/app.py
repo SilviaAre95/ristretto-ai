@@ -29,12 +29,12 @@ from fastapi.responses import (
 )
 from fastapi.templating import Jinja2Templates
 
-from .. import actions, approvals, events, voice
-from . import control, data, launch as launcher
+from .. import actions, approvals, runs, voice
+from . import control, launch as launcher
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
-TEMPLATES.env.filters["duration"] = data.humanise
-TEMPLATES.env.filters["ago"] = data.ago
+TEMPLATES.env.filters["duration"] = runs.humanise
+TEMPLATES.env.filters["ago"] = runs.ago
 TEMPLATES.env.filters["timestamp"] = lambda value: (
     time.strftime("%H:%M:%S", time.localtime(value)) if value else "—"
 )
@@ -43,21 +43,33 @@ app = FastAPI(title="Zam", docs_url=None, redoc_url=None, openapi_url=None)
 
 
 def _snapshot(show_all: bool = False) -> dict[str, Any]:
-    everything = data.fleet()
-    shown, hidden = (everything, 0) if show_all else data.recent(everything)
+    everything = runs.fleet()
+    shown, hidden = (everything, 0) if show_all else runs.recent(everything)
     return {
         "runs": shown,
-        "grouped": data.grouped(shown),
+        "grouped": runs.grouped(shown),
         "hidden": hidden,
         "show_all": show_all,
         "total": len(everything),
-        "live": len([r for r in everything if r.status in data.LIVE_STATES]),
+        # Counted on health, not board status. Counting `live` from the board
+        # while counting `dead` from the process table put the dead runs
+        # inside the live number, so the header read "live 5 · dead 3" with
+        # three of the five being the three — the exact ambiguity this
+        # feature exists to remove.
+        "live": len([r for r in everything if r.health == "running"]),
         "stalled": len([r for r in everything if r.health == "stalled"]),
+        # Counted separately from stalled because the two need opposite
+        # responses: a stall may just be a quiet build stage, a dead run is
+        # never coming back on its own.
+        "dead": len([r for r in everything if r.health == "dead"]),
         "blocked": len([r for r in everything if r.health == "blocked"]),
         # A flow stopped waiting on a person is the one thing that must not
         # need drilling into a task page to notice.
+        # Whether `ps` could be read at all. Degrading silently to the
+        # signal-age guess looks exactly like a healthy fleet.
+        "liveness_known": not everything or everything[0].liveness_known,
         "waiting": approvals.pending(),
-        "build": data.build_stamp(),
+        "build": runs.build_stamp(),
     }
 
 
@@ -68,10 +80,7 @@ def fleet(request: Request, all: bool = False) -> HTMLResponse:
 
 @app.get("/task/{task_id}", response_class=HTMLResponse)
 def task(request: Request, task_id: str, ok: str | None = None, failed: str | None = None) -> HTMLResponse:
-    detail = data.task_detail(task_id)
-    task_row = detail.get("task") or {}
-    recorded = events.read(task_id, limit=500)
-    run = data.build_run(task_row, recorded) if task_row else None
+    run, detail = runs.detail(task_id)
     now = int(time.time())
     waiting = [
         {**item, "minutes_left": max(0, item["expires_at"] - now) // 60}
@@ -85,9 +94,9 @@ def task(request: Request, task_id: str, ok: str | None = None, failed: str | No
             "task_id": task_id,
             "runs": detail.get("runs") or [],
             "comments": detail.get("comments") or [],
-            "timeline": list(reversed(recorded)),
+            "timeline": list(reversed(run.events)) if run else [],
             "waiting": waiting,
-            "build": data.build_stamp(),
+            "build": runs.build_stamp(),
             "ok": ok,
             "failed": failed,
         },
@@ -127,7 +136,7 @@ def launch_form(request: Request, ok: str | None = None, failed: str | None = No
         _cfg = None
     context['example_key'] = launcher.example_key(_cfg)
     context.update(
-        {"active": launcher.active_runs(), "ok": ok, "failed": failed, "build": data.build_stamp()}
+        {"active": launcher.active_runs(), "ok": ok, "failed": failed, "build": runs.build_stamp()}
     )
     return TEMPLATES.TemplateResponse(request, "launch.html", context)
 
@@ -305,6 +314,7 @@ async def stream(request: Request) -> StreamingResponse:
                 payload = {
                     "live": snapshot["live"],
                     "stalled": snapshot["stalled"],
+                    "dead": snapshot["dead"],
                     "blocked": snapshot["blocked"],
                     "runs": [
                         {
@@ -312,8 +322,8 @@ async def stream(request: Request) -> StreamingResponse:
                             "status": r.status,
                             "health": r.health,
                             "stage": r.stage,
-                            "elapsed": data.humanise(r.elapsed),
-                            "signal": data.humanise(r.age_of_signal),
+                            "elapsed": runs.humanise(r.elapsed),
+                            "signal": runs.humanise(r.age_of_signal),
                         }
                         for r in snapshot["runs"]
                     ],

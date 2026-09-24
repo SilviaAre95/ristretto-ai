@@ -17,6 +17,9 @@
     --zam:       #A8641B;
     --running:   #16706B;
     --stalled:   #A8641B;
+    /* Dead is a fact, not the guess stalled is, so it reads as a failure
+       rather than as a warning. */
+    --dead:      #A32E28;
     --failed:    #A32E28;
     --blocked:   #6B4FA8;
     --done:      #858B9A;
@@ -29,6 +32,7 @@
       --ink:     #E8EAF0; --ink-soft: #9AA1B2; --ink-faint: #6B7285;
       --hairline:#272C37; --zam: #E0A257;
       --running: #4FC4BB; --stalled: #E0A257; --failed: #F0857E;
+      --dead: #F0857E;
       --blocked: #A78BFA; --done: #6B7285;
     }
   }
@@ -52,6 +56,7 @@
   .counts b { font-weight: 600; font-variant-numeric: tabular-nums; }
   .counts .c-live b { color: var(--running); }
   .counts .c-stalled b { color: var(--stalled); }
+  .counts .c-dead b { color: var(--dead); }
   .counts .c-blocked b { color: var(--blocked); }
   .counts span { color: var(--ink-faint); }
   h2.project {
@@ -69,6 +74,7 @@
   .stripe { align-self: stretch; background: var(--done); }
   .h-running .stripe { background: var(--running); }
   .h-stalled .stripe { background: var(--stalled); }
+  .h-dead    .stripe { background: var(--dead); }
   .h-failed  .stripe { background: var(--failed); }
   .h-blocked .stripe { background: var(--blocked); }
   .card .name { font-weight: 550; font-size: 15px; }
@@ -84,6 +90,7 @@
   }
   .h-running .pill { color: var(--running); }
   .h-stalled .pill { color: var(--stalled); }
+  .h-dead    .pill { color: var(--dead); }
   .h-failed  .pill { color: var(--failed); }
   .h-blocked .pill { color: var(--blocked); }
   .empty { color: var(--ink-faint); padding: 40px 0; text-align: center; }

@@ -200,7 +200,9 @@ def start_flow(repo: str, branch: str, task_id: str, issue: str, flow: str) -> s
                 f"could not create the worktree: {detail[-1] if detail else 'git failed'}"
             )
 
-    log_dir = worktree / ".cuzam" / "runs" / task_id
+    from .. import runs
+
+    log_dir = runs.run_dir(worktree, task_id)
     try:
         log_dir.mkdir(parents=True, exist_ok=True)
         log = (log_dir / "flow.out").open("a", encoding="utf-8")
@@ -251,40 +253,48 @@ def flow_is_running(task_id: str) -> bool:
     surface. On 2026-09-10 that state was shown as `blocked`, offered an
     `unblock` button, and restarted a run that had just passed its plan stage.
 
-    Delegated to `running_flows` rather than asking separately. This used to
-    run `pgrep -f`, which matches the command line of whatever runs the
-    search: a shell that merely mentions the runner reports itself as a live
-    flow, and `stalled_runs` then reads a dead run as healthy — the exact
-    inversion this function exists to prevent. `running_flows` snapshots `ps`
-    and filters afterwards, which is what keeps the filter out of its own
-    results, and having one answer here means the dashboard and the relaunch
-    guard cannot disagree about what is live.
+    Delegated to `cuzam.runs` rather than asking separately. This used to run
+    `pgrep -f`, which matches the command line of whatever runs the search: a
+    shell that merely mentions the runner reports itself as a live flow, and
+    `stalled_runs` then reads a dead run as healthy — the exact inversion this
+    function exists to prevent. One module now answers "what is a live run"
+    for every surface, so the dashboard, the relaunch guard and `cuzam runs`
+    cannot disagree about it.
     """
     if not TASK_ID.fullmatch(task_id):
         return False
-    from . import data
+    from .. import runs
 
-    return task_id in data.running_flows()
+    return task_id in runs.running_flows()
 
 
 def stalled_runs() -> list[dict[str, str]]:
-    """Runs the board still calls live but which have no process behind them."""
-    from . import data
+    """Runs the board still calls live but which have no process behind them.
+
+    Broader than the `dead` health value, and deliberately so: that one is
+    about `running` alone, while this answers "what could I restart", which
+    includes `blocked` — the board's word for "failed and gave up".
+
+    One snapshot for the whole fleet. This used to call `flow_is_running` per
+    run, which meant a `ps` of the entire machine for every task on the
+    board — tens of them, to answer a question one snapshot already had.
+    """
+    from .. import runs as run_data
 
     try:
-        fleet = data.fleet()
+        fleet = run_data.fleet()
     except Exception:  # noqa: BLE001 - a listing must not raise at the caller
         return []
     stalled = []
     for run in fleet:
-        if run.status not in data.ACTIVE_STATES and run.status != "blocked":
+        if run.status not in run_data.ACTIVE_STATES and run.status != "blocked":
             continue
-        if flow_is_running(run.task_id):
+        if run.flow_alive:
             continue
         stalled.append(
             {
                 "task_id": run.task_id,
-                "issue": getattr(run, "issue_key", "") or "",
+                "issue": run.issue_key or "",
                 "status": run.status,
             }
         )
@@ -434,10 +444,14 @@ def blocking_findings(repo: Path, base: str) -> list[str]:
 
 def active_runs() -> list[str]:
     """Task ids the board considers live, newest first."""
-    from . import data
+    from .. import runs as run_data
 
     try:
-        return [run.task_id for run in data.fleet() if run.status in data.ACTIVE_STATES]
+        return [
+            run.task_id
+            for run in run_data.fleet()
+            if run.status in run_data.ACTIVE_STATES
+        ]
     except Exception:  # noqa: BLE001 - a busy check must not block a launch
         return []
 

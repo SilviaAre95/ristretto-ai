@@ -5,6 +5,7 @@
 <div class="counts">
   <span class="c-live">live <b id="n-live">{{ live }}</b></span>
   <span class="c-stalled">stalled <b id="n-stalled">{{ stalled }}</b></span>
+  <span class="c-dead">dead <b id="n-dead">{{ dead }}</b></span>
   <span class="c-blocked">blocked <b id="n-blocked">{{ blocked }}</b></span>
 </div>
 {% endblock %}
@@ -48,7 +49,7 @@
           <span>{{ run.status }}</span>
           <span data-field="elapsed">{{ run.elapsed | duration }}</span>
           <span>{{ run.last_signal_at | ago }}</span>
-          {% if run.health in ("running", "stalled") %}
+          {% if run.health in ("running", "stalled", "dead") %}
             <span data-field="signal">last {{ run.signal_source }} {{ run.age_of_signal | duration }} ago</span>
           {% endif %}
           {% if run.failure %}<span class="reason">{{ run.failure }}</span>{% endif %}
@@ -80,11 +81,20 @@
   <p class="hint">Zam answers from the fleet above. It has no terminal, file or code tools here.</p>
 </section>
 
+{% if not liveness_known %}
+  <p class="banner bad">
+    Could not read this machine's process table, so liveness below is guessed
+    from signal age and nothing is called dead. A run shown as running may not be.
+  </p>
+{% endif %}
+
 <p class="note">
-  Hermes does not expose a heartbeat through its CLI, so liveness is derived from the
-  newest signal Zam has — a recorded event, or the run's start — and each card says which.
-  A run active with no signal for 15 minutes is shown as stalled rather than healthy.
-  This view is read-only.
+  <b>Dead</b> is a fact: the board still calls the run <code>running</code> and there is
+  no process behind it. Nothing here acts on that — the board is not touched and no card
+  is moved. <code>cuzam relaunch</code> is how a dead run is restarted, deliberately.
+  <b>Stalled</b> is a guess: Hermes does not expose a heartbeat through its CLI, so for a
+  task that never started a process, liveness is derived from the newest signal Zam has —
+  a recorded event, or the run's start — and each card says which. This view is read-only.
 </p>
 {% endblock %}
 
@@ -93,7 +103,7 @@
   const source = new EventSource("/stream");
   source.onmessage = (message) => {
     const payload = JSON.parse(message.data);
-    for (const key of ["live", "stalled", "blocked"]) {
+    for (const key of ["live", "stalled", "dead", "blocked"]) {
       const node = document.getElementById("n-" + key);
       if (node) node.textContent = payload[key];
     }

@@ -29,9 +29,9 @@ def fleet_status() -> dict[str, Any]:
     the context window is a tool nobody can afford to call.
     """
     try:
-        from ..dash import data
+        from .. import runs as fleet_data
 
-        runs = data.fleet()
+        runs = fleet_data.fleet()
     except Exception as exc:  # noqa: BLE001 - a tool must answer, not raise
         return {"error": f"could not read the fleet: {exc}", "runs": []}
 
@@ -45,10 +45,17 @@ def fleet_status() -> dict[str, Any]:
         }
         for r in runs[:20]
     ]
-    live = [r for r in summary if r["health"] in ("running", "stalled")]
+    live = [r for r in summary if r["health"] == "running"]
+    # Counted, not folded into "not live". A fleet where everything died
+    # otherwise reports `live: 0` out of N with nothing saying why, and the
+    # assistant is left to notice it run by run.
+    dead = [r for r in summary if r["health"] == "dead"]
+    stalled = [r for r in summary if r["health"] == "stalled"]
     return {
         "total": len(runs),
         "live": len(live),
+        "dead": len(dead),
+        "stalled": len(stalled),
         "runs": summary,
     }
 

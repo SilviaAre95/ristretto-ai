@@ -74,10 +74,26 @@
     {% endif %}
   </div>
 
+  {% if not run.liveness_known %}
+    <p class="banner bad">
+      Could not read this machine's process table. Liveness here is guessed
+      from signal age, and this run is not being called dead on missing evidence.
+    </p>
+  {% endif %}
+
+  {% if run.health == "dead" %}
+    <p class="banner bad">
+      No process is running this. The board still calls it <code>running</code>, and
+      nothing here has changed that — restarting is <code>cuzam relaunch
+      {{ run.issue_key or run.task_id }}</code>, which starts again from the plan stage.
+    </p>
+  {% endif %}
+
   <table class="detail">
     <tr><th>Task</th><td>{{ run.task_id }}</td></tr>
     <tr><th>Status</th><td>{{ run.status }}</td></tr>
     <tr><th>Project</th><td>{{ run.project }}</td></tr>
+    {% if run.flow %}<tr><th>Flow</th><td>{{ run.flow }}{% if run.shape %} ({{ run.shape }}){% endif %}</td></tr>{% endif %}
     {% if run.stage %}<tr><th>Stage</th><td>{{ run.stage }}</td></tr>{% endif %}
     {% if run.branch %}<tr><th>Branch</th><td>{{ run.branch }}</td></tr>{% endif %}
     <tr><th>Elapsed</th><td>{{ run.elapsed | duration }}</td></tr>
@@ -90,6 +106,37 @@
       </td>
     </tr>
     {% if run.failure %}<tr><th>Failure</th><td style="color:var(--failed)">{{ run.failure }}</td></tr>{% endif %}
+  </table>
+
+  {# Meant to be copied into a terminal, which is why they are laid out rather
+     than summarised, and why a log line appears only when the file exists. #}
+  <h2 class="project">Where it is</h2>
+  <table class="detail">
+    {% if run.worktree %}
+      <tr>
+        <th>Worktree</th>
+        <td>
+          <code>{{ run.worktree }}</code>
+          {% if run.worktree_gone %}<span class="meta">reclaimed — no longer on disk</span>{% endif %}
+        </td>
+      </tr>
+    {% endif %}
+    {% if run.log %}
+      <tr><th>Log</th><td><code>tail -f {{ run.log }}</code></td></tr>
+    {% elif run.artifact_dir %}
+      <tr><th>Artifacts</th><td><code>{{ run.artifact_dir }}</code> — no log file written</td></tr>
+    {% endif %}
+    {% if run.runner_pid %}
+      <tr>
+        <th>Processes</th>
+        <td>
+          runner pid {{ run.runner_pid }}{% if run.claude_pid %}, Claude pid {{ run.claude_pid }}{% endif %}
+        </td>
+      </tr>
+    {% endif %}
+    {% if not run.worktree and not run.runner_pid %}
+      <tr><td colspan="2" class="meta">Nothing recorded a location for this run.</td></tr>
+    {% endif %}
   </table>
 
   <h2 class="project">Zam pipeline events</h2>

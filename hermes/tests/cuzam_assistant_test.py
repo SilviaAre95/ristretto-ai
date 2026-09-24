@@ -89,7 +89,7 @@ class SafetyTest(unittest.TestCase):
 
 class ToolTest(unittest.TestCase):
     def test_fleet_status_never_raises(self) -> None:
-        with mock.patch("cuzam.dash.data.fleet", side_effect=RuntimeError("boom")):
+        with mock.patch("cuzam.runs.fleet", side_effect=RuntimeError("boom")):
             out = tools.fleet_status()
         self.assertIn("error", out)
         self.assertEqual(out["runs"], [])
