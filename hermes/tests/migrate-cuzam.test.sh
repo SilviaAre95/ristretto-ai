@@ -139,5 +139,30 @@ t "unmanaged plugin link kept"       "[ -L '$HH/plugins/ris-chat' ]"
 t "unmanaged links are reported"     "printf '%s' \"\$OUT3\" | grep -q 'we did not write'"
 t "managed links still removed"      "[ ! -L '$HH/plugins/ris-approvals' ]"
 
+# State already under the new name is fatal, and fatal BEFORE anything
+# moves. This is not hypothetical: `make check` used to leave an empty
+# approvals.db and events.db in the real state home, because the dashboard
+# route tests rendered the fleet without overriding it. Warning and carrying
+# on would have stranded the real databases and brought the install up on the
+# empty pair, with every surface agreeing nothing had ever happened.
+build_fixture
+mkdir -p "$NEW_STATE"
+printf 'stub\n' > "$NEW_STATE/events.db"
+OUT4="$(run 2>&1)"; RC4=$?
+t "a state collision fails"          "[ $RC4 -ne 0 ]"
+t "it names the colliding file"      "printf '%s' \"\$OUT4\" | grep -q 'events.db'"
+t "it shows both sizes"              "printf '%s' \"\$OUT4\" | grep -q 'old .* bytes'"
+t "the real state is not stranded"   "[ -f '$OLD_STATE/events.db' ] && [ \"\$(cat '$OLD_STATE/events.db')\" = events ]"
+t "the stub is not overwritten"      "[ \"\$(cat '$NEW_STATE/events.db')\" = stub ]"
+# Refusing halfway would leave a state home that is neither old nor new.
+t "nothing moved before refusing"    "[ -f '$OLD_STATE/approvals.db' ] && [ ! -e '$NEW_STATE/approvals.db' ]"
+t "runtime/ survives a refusal"      "[ -d '$OLD_STATE/runtime' ]"
+
+# Resolve it the way the message says, and the migration completes.
+rm "$NEW_STATE/events.db"
+OUT5="$(run 2>&1)"; RC5=$?
+t "resolving the collision unblocks" "[ $RC5 -eq 0 ]"
+t "the real events.db then moves"    "[ \"\$(cat '$NEW_STATE/events.db')\" = events ]"
+
 echo; echo "migrate-cuzam.test.sh: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
