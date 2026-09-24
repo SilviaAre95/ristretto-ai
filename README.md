@@ -41,6 +41,46 @@ flowchart LR
     AP -.->|approve or deny in Slack| U
 ```
 
+### How code reaches Hermes
+
+Three mechanisms, and which one a file gets is a decision, not an accident.
+The question each time is *what happens if this changes under something that
+is already running.*
+
+```mermaid
+flowchart TB
+    subgraph REPO["this repository"]
+        PL[plugins<br/>ris-approvals · ris-launch · ris-chat]
+        SK[skills<br/>durable-dev · issue-closeout]
+        SC[cron scripts + agent hook<br/>morning-brief-precheck · ris-stop · ris-event]
+        LR[loop-runner skill<br/>run-loop.sh]
+        PKG[the ristretto package]
+    end
+    PIN["~/.ristretto/runtime<br/>detached clone of origin/main"]
+    HH["~/.hermes"]
+
+    PL -->|symlink| HH
+    SK -->|symlink| HH
+    SC -->|copy| HH
+    PKG -->|make install-runtime| PIN
+    LR -->|make install-runtime| PIN
+    PIN -->|symlink| HH
+```
+
+| mechanism | what | why |
+|---|---|---|
+| **symlink** | plugins, `durable-dev`, `issue-closeout` | live on purpose. These are read inside a turn you are watching, and the danger is a plugin disagreeing with the CLI about what "approve" means — not staleness. |
+| **copy** | cron scripts, the agent hook | Hermes requires scripts inside `~/.hermes/scripts`, and it fingerprints an approved hook — a symlink would let the content change underneath the approval. Refreshed by `make update`, never edited in place. |
+| **pin** | the `ristretto` package **and the `loop-runner` skill** | a flow runs unattended for an hour. It must not execute whichever branch you happen to have checked out, or an edit you were halfway through. `make install-runtime` moves both together. |
+
+The third row is the one that is easy to get wrong. `run-loop.sh` is filed as
+a skill but behaves as a runtime — it *is* the classic loop. Pinning the
+Python package alone left the classic path following the working checkout,
+so the guarantee held for staged flows and quietly did not for the path most
+runs take. `scripts/link-loop-runner.sh` points that one skill at the pinned
+clone, falling back to the checkout when nothing is pinned yet and saying
+which it chose.
+
 ## 📁 Repository map
 
 | Path | Purpose |
@@ -48,6 +88,7 @@ flowchart LR
 | `ristretto.yaml` | Public instance, provider, repository, and flow schema. |
 | `ristretto/` | Configuration, CLI, doctor, and multi-stage flow runner. |
 | `hermes/` | Public Hermes baseline, skills, scripts, tests, and cron example. |
+| `scripts/` | Installers, the runtime pin, and the loop-runner link. |
 | `slack/` | Generic Slack application manifest. |
 | `docs/getting-started.md` | Step-by-step setup for a new instance. |
 | `docs/features/` | Behavior contracts and explicit non-goals. |
