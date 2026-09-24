@@ -135,6 +135,12 @@ def parser() -> argparse.ArgumentParser:
     launch_command.add_argument(
         "--flow", default="", help="coding flow (default: the configured default_flow)"
     )
+    # classic only. A staged flow's models come from its stages, and launch
+    # refuses a tier rather than accepting one it will not use.
+    launch_command.add_argument(
+        "--model", default="",
+        help="model tier for a classic run: sonnet, haiku or opus (default: Claude's)",
+    )
     launch_command.add_argument("--actor", default="cli", help="who is launching")
     launch_command.add_argument(
         "--allow-busy",
@@ -534,6 +540,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.project,
                 args.issue,
                 args.flow,
+                args.model,
                 actor=args.actor,
                 allow_busy=args.allow_busy,
                 unattended=args.unattended,

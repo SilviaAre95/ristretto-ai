@@ -94,6 +94,16 @@ class UnreadableRowTest(unittest.TestCase):
         self.assertNotEqual(row["what"], "Bash")
 
 
+FIXTURE_CONFIG = {
+    "default_flow": "full",
+    "base_branch": "main",
+    "flows": {
+        "classic": {"description": "existing loop", "builtin": "classic"},
+        "full": {"description": "plan, build, review, repair, verify, PR", "stages": []},
+    },
+}
+
+
 class StartFlowTest(unittest.TestCase):
     """Claim the task, cut the worktree, run a process — never an agent."""
 
@@ -109,12 +119,16 @@ class StartFlowTest(unittest.TestCase):
         subprocess.run(["git", "-C", str(self.repo), "branch", "feat/x"], check=True)
         self.addCleanup(self.tmp.cleanup)
 
-    def run_start(self, claim_rc: int = 0):
+    def run_start(self, claim_rc: int = 0, flow: str = "full", model: str = ""):
         """Let git run for real; intercept only the board and the flow spawn.
 
         Patching Popen wholesale would break the real git calls too, since
         subprocess.run goes through it — so git is delegated back to the real
         one and only the runner spawn is caught.
+
+        The config is a fixture rather than this machine's: what counts as
+        `classic` decides which of two programs is spawned, and a test whose
+        answer depends on the developer's own cuzam.yaml proves nothing.
         """
         calls: list[list[str]] = []
         spawned: list[tuple[list[str], dict]] = []
@@ -136,9 +150,16 @@ class StartFlowTest(unittest.TestCase):
         # the result depend on whether this machine has a runtime installed.
         with mock.patch.object(launch, "flow_interpreter",
                                return_value=([sys.executable, "-P"], {"PATH": "/usr/bin"}, "")), \
+             mock.patch.object(launch, "flow_script",
+                               return_value=(Path("/pinned/hermes/skills/loop-runner/"
+                                                  "scripts/run-loop.sh"), "")), \
+             mock.patch.object(launch, "load_config",
+                               return_value=(FIXTURE_CONFIG, Path("fixture.yaml"))), \
              mock.patch.object(launch.subprocess, "run", side_effect=fake_run), \
              mock.patch.object(launch.subprocess, "Popen", side_effect=fake_popen):
-            problem = launch.start_flow(str(self.repo), "feat/x", "t_abc", "XARI-1", "full")
+            problem = launch.start_flow(
+                str(self.repo), "feat/x", "t_abc", "XARI-1", flow, model
+            )
         return problem, calls, spawned
 
     def test_it_claims_before_starting_anything(self) -> None:
@@ -188,6 +209,98 @@ class StartFlowTest(unittest.TestCase):
         self.assertEqual(kwargs["cwd"], self.repo / launch.WORKTREE_DIR / "t_abc")
         self.assertTrue(kwargs["start_new_session"],
                         "the flow must outlive the CLI or Slack request that started it")
+
+    def test_classic_spawns_the_loop_and_never_the_multi_stage_runner(self) -> None:
+        # The defect this change exists to fix, verified against the pinned
+        # runtime before it was written: `-m cuzam.runner --flow classic` exits 2
+        # with "classic is executed by run-loop.sh, not the multi-stage runner".
+        # Popen had already returned a pid, so `launch` reported the run started
+        # while the task sat claimed and `running` with nothing running it — and
+        # `active_runs` counted it, refusing the next launch until the TTL lapsed.
+        problem, _, spawned = self.run_start(flow="classic")
+
+        self.assertEqual(problem, "")
+        argv, kwargs = spawned[0]
+        self.assertNotIn("cuzam.runner", argv, "classic is not the staged runner")
+        self.assertNotIn("-m", argv)
+        self.assertEqual(argv[0], "bash")
+        self.assertTrue(argv[1].endswith("loop-runner/scripts/run-loop.sh"))
+        self.assertEqual(argv[2:4], ["t_abc", "XARI-1"],
+                         "run-loop.sh reads the task id and issue positionally")
+        self.assertEqual(argv[-2:], ["--flow", "classic"])
+        self.assertEqual(kwargs["cwd"], self.repo / launch.WORKTREE_DIR / "t_abc")
+        self.assertTrue(kwargs["start_new_session"])
+
+    def test_the_classic_argv_is_one_both_liveness_matchers_can_read(self) -> None:
+        # Not a restatement of the assertions above: this states the *reason* the
+        # shape is what it is. `runs._classify` scans argv positions 0 and 1 for
+        # the script and reads the task id at position+1; the awk in live-runs.sh
+        # checks fields $2 and $3. A run spawned in a shape neither reads is a
+        # run reported dead while it works, with an invitation to relaunch it.
+        from cuzam import runs
+
+        _, _, spawned = self.run_start(flow="classic")
+        argv, _ = spawned[0]
+
+        process = runs._classify(4242, " ".join(argv))
+        self.assertIsNotNone(process, "the launcher spawned a shape runs.py cannot see")
+        self.assertEqual(process.shape, "classic")
+        self.assertEqual(process.task_id, "t_abc")
+        self.assertEqual(process.flow, "classic")
+
+    def test_a_model_tier_reaches_the_loop_the_way_it_parses_it(self) -> None:
+        # run-loop.sh only enters flag parsing when its first argument after the
+        # shift is --model or --flow, so the order here is load-bearing.
+        _, _, spawned = self.run_start(flow="classic", model="sonnet")
+        argv, _ = spawned[0]
+
+        self.assertEqual(argv[4:], ["--model", "sonnet", "--flow", "classic"])
+
+        from cuzam import runs
+
+        process = runs._classify(4242, " ".join(argv))
+        self.assertEqual(process.flow, "classic",
+                         "a positional-looking argv must not read as another flow")
+
+    def test_an_invalid_tier_is_refused_before_the_board_is_touched(self) -> None:
+        # run-loop.sh exits 2 on an unknown tier. Through the launcher that is a
+        # run reported as started and dead a moment later.
+        problem, calls, spawned = self.run_start(flow="classic", model="gpt-9")
+
+        self.assertIn("unknown model tier", problem)
+        self.assertEqual(spawned, [])
+        for argv in calls:
+            self.assertNotIn("claim", argv, "nothing may be claimed for a run that cannot start")
+
+    def test_a_retired_tier_still_runs_rather_than_blocking_a_relaunch(self) -> None:
+        # A task queued before 2026-09-23 carries `model: local` in its body, and
+        # relaunch reads the body. Rejecting it would block the task rather than
+        # run it on the Claude default, which is the point of retiring the local
+        # coder. run-loop.sh accepts and drops it; so does the launcher.
+        problem, _, spawned = self.run_start(flow="classic", model="local")
+
+        self.assertEqual(problem, "")
+        argv, _ = spawned[0]
+        self.assertNotIn("--model", argv, "the retired tier is dropped, not forwarded")
+        self.assertNotIn("local", argv)
+        self.assertEqual(argv[4:], ["--flow", "classic"])
+
+    def test_a_staged_flow_refuses_a_tier_instead_of_ignoring_it(self) -> None:
+        # Accepting it and dropping it would read as honoured by whoever asked.
+        problem, _, spawned = self.run_start(flow="full", model="sonnet")
+
+        self.assertIn("takes its models from its stages", problem)
+        self.assertEqual(spawned, [])
+
+    def test_a_flow_no_longer_in_the_config_fails_before_the_claim(self) -> None:
+        # The relaunch case: a task queued on a flow later deleted from
+        # cuzam.yaml. Spawning it left the board claimed with a dead child.
+        problem, calls, spawned = self.run_start(flow="tier3")
+
+        self.assertIn("unknown flow", problem)
+        self.assertEqual(spawned, [])
+        for argv in calls:
+            self.assertNotIn("claim", argv)
 
 
 if __name__ == "__main__":
@@ -289,6 +402,14 @@ class FlowIsRunningTest(unittest.TestCase):
 class RelaunchTest(unittest.TestCase):
     """A run that dies stays dead — so restarting it has to actually work."""
 
+    def setUp(self) -> None:
+        # Relaunch asks `gh` whether the branch already has a pull request. The
+        # tests below are not about that question, and letting them ask it for
+        # real makes their result depend on the machine's gh auth.
+        patcher = mock.patch.object(launch, "open_pull_request", return_value="")
+        self.no_pr = patcher.start()
+        self.addCleanup(patcher.stop)
+
     def stalled(self, **kwargs):
         return mock.patch.object(launch, "stalled_runs", return_value=[kwargs])
 
@@ -354,6 +475,63 @@ class RelaunchTest(unittest.TestCase):
             launch.relaunch()
 
         self.assertEqual(started.call_args.args[1], "xariprojects/xari-9")
+
+    def test_it_carries_the_model_tier_the_first_attempt_used(self) -> None:
+        # Without this a classic run queued as `sonnet` came back on the Claude
+        # default and nothing said so — a silent change of model mid-issue.
+        with self.stalled(task_id="t_aaa111", issue="XARI-9", status="running"), \
+             mock.patch.object(launch, "_task_body", return_value={
+                 "repo": "/tmp/r", "issue": "XARI-9", "model": "sonnet",
+                 "flow": "classic", "branch": "xariprojects/xari-9"}), \
+             mock.patch.object(launch, "start_flow", return_value="") as started, \
+             mock.patch.object(launch.subprocess, "run") as board, \
+             mock.patch.object(launch.events, "emit"):
+            board.return_value = subprocess.CompletedProcess([], 0, "", "")
+            launch.relaunch()
+
+        self.assertEqual(started.call_args.args[5], "sonnet")
+
+    def test_it_refuses_when_the_branch_already_has_a_pull_request(self) -> None:
+        # The loop opens its PR as its final act, so an open PR means the run
+        # finished and died before reporting. The retired loop-runner skill made
+        # this check as its step 2; nothing did after the agent went away, and a
+        # relaunch would pay for the whole flow again and let a fresh `finish`
+        # stage push over work that is already up.
+        self.no_pr.return_value = "https://github.com/o/r/pull/7"
+        with self.stalled(task_id="t_aaa111", issue="XARI-9", status="running"), \
+             mock.patch.object(launch, "_task_body", return_value={
+                 "repo": "/tmp/r", "issue": "XARI-9",
+                 "flow": "classic", "branch": "xariprojects/xari-9"}), \
+             mock.patch.object(launch, "start_flow") as started, \
+             mock.patch.object(launch.subprocess, "run") as board:
+            board.return_value = subprocess.CompletedProcess([], 0, "", "")
+            outcome = launch.relaunch()
+
+        self.assertFalse(outcome.ok)
+        self.assertIn("https://github.com/o/r/pull/7", outcome.message)
+        started.assert_not_called()
+        # And the board is left exactly as it was: reclaiming or unblocking a
+        # task whose work is done would move a card for no reason.
+        for call in board.call_args_list:
+            self.assertNotIn("reclaim", call.args[0])
+            self.assertNotIn("unblock", call.args[0])
+
+    def test_an_unanswerable_pr_check_lets_the_relaunch_proceed(self) -> None:
+        # One-directional on purpose. `gh` missing, unauthenticated or offline
+        # must not block a restart: refusing to relaunch on an unanswered
+        # question is the worse of the two failures.
+        with mock.patch.object(launch.subprocess, "run", side_effect=OSError("no gh")):
+            self.assertEqual(launch.open_pull_request("/tmp/r", "xariprojects/xari-9"), "")
+
+    def test_a_pr_check_that_prints_nothing_is_not_a_url(self) -> None:
+        # `--jq '.[0].url'` prints an empty line when there are no pull
+        # requests, and "null" when the field is absent. Neither is a PR, and
+        # treating either as one would make every relaunch refuse.
+        for output in ("", "\n", "null\n", "  \n"):
+            with self.subTest(output=output), \
+                 mock.patch.object(launch.subprocess, "run") as gh:
+                gh.return_value = subprocess.CompletedProcess([], 0, output, "")
+                self.assertEqual(launch.open_pull_request("/tmp/r", "b"), "")
 
     def test_an_unreadable_task_body_is_not_guessed_at(self) -> None:
         with self.stalled(task_id="t_aaa111", issue="XARI-9", status="running"), \

@@ -3,7 +3,7 @@ id: custom-model-flows
 title: Custom Model Flows
 status: in-progress  # proposed | in-progress | implemented | deprecated
 created_at: 2026-07-18
-last_modified: 2026-09-23
+last_modified: 2026-09-24
 owner: project
 depends_on: [autonomous-coding]
 acceptance_criteria:
@@ -13,6 +13,8 @@ acceptance_criteria:
   - Verification must pass before the final PR stage
   - Users can add a valid flow in YAML without changing runner code
   - Existing classic tasks remain backward compatible
+  - Every flow, classic included, starts from every surface through one path
+  - A classic run's model tier survives a relaunch
   - No shipped flow routes a mutating stage to a local model
 non_goals:
   - NOT allowing arbitrary unvalidated runner commands
@@ -56,13 +58,20 @@ stage explicitly sets `mutates: true`. Stage outputs and logs are stored under
 variables and are never written into the resolved flow output.
 
 Task requests may select a flow explicitly, for example "do PROJ-123 on
-short." Without one, there are two entry points and they differ deliberately:
+short." There is one entry point. Every surface — `cuzam launch`, the Slack
+`!zam-start` command, the launch form and the `durable-dev` skill — calls
+`launch`, which spawns the flow itself. A surface that sends no flow gets the
+configured `default_flow`, `full` as shipped; `durable-dev` asks for `classic`
+explicitly, preserving the proven `/loop-dev` path for work that arrives as
+chat rather than as a launch.
 
-- `cuzam launch`, the Slack `!zam-start` command and the launch form send
-  no flow, so the configured `default_flow` applies — `full` as shipped.
-- A conversational request handled by the `durable-dev` skill writes
-  `flow: classic` into the task body explicitly, preserving the proven
-  `/loop-dev` path for work that arrives as chat rather than as a launch.
+`classic` is spawned as `run-loop.sh`, every other flow as `cuzam.runner`, and
+that is the only place the distinction is made. It is made on the flow's
+`builtin` key, never on its name, so a fourth flow cannot land on the wrong
+side of it by being called something unexpected. A classic run carries an
+optional model tier (`sonnet`, `haiku`, `opus`) written into the task body, so
+a relaunch runs what the first attempt ran; a staged flow takes its models
+from its stages and is given no tier.
 
 There is no longer a way to ask for a local coding run: `local-brain` is the
 only local provider a flow can name, and no shipped flow gives it a mutating

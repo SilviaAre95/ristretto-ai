@@ -86,9 +86,15 @@ for skill in durable-dev issue-closeout; do
     "$hermes_home/skills/software-development/$skill"
 done
 
-# loop-runner is handled separately: it is the only skill that executes
-# unattended for an hour, so it follows the pinned runtime rather than the
-# checkout you are editing. See scripts/link-loop-runner.sh.
+# loop-runner is not a skill any more — its SKILL.md is deleted and `launch`
+# executes run-loop.sh directly. The link stays because two things still resolve
+# through this path: `zam-stop.sh` reaches `reap.sh` by it, and a hand-run loop
+# is documented at it. It follows the pinned runtime rather than the checkout you
+# are editing, because it is an hour of unattended execution either way.
+#
+# A directory here with no SKILL.md is ignored rather than reported as broken —
+# checked against `hermes skills list`, which shows it not at all. That is the
+# outcome wanted: the program stays reachable, the skill stops existing.
 bash "$repo/scripts/link-loop-runner.sh"
 
 # Linked, not copied, so the answering path cannot drift from the store it
@@ -126,6 +132,13 @@ install -m 0755 \
 install -m 0755 \
   "$repo/hermes/scripts/zam-stop.sh" \
   "$hermes_home/scripts/zam-stop.sh"
+# zam-stop.sh verifies its own work against this rather than trusting only the
+# spawn signatures it kills by. Copied rather than symlinked for the same reason
+# every other script here is: the repository path is machine-specific and must
+# not end up baked into ~/.hermes.
+install -m 0755 \
+  "$repo/scripts/live-runs.sh" \
+  "$hermes_home/scripts/live-runs.sh"
 install -m 0755 \
   "$repo/hermes/scripts/zam-event.py" \
   "$hermes_home/scripts/zam-event.py"
@@ -143,14 +156,33 @@ install -m 0755 \
   "$repo/hermes/scripts/zam-doorbell.sh" \
   "$hermes_home/scripts/zam-doorbell.sh"
 
+# The worker profile exists for the loop-flow guard below and for nothing else
+# now. Nothing is dispatched to it: `launch` spawns every flow itself and creates
+# its task deliberately unassigned, so `_cmd_dispatch` — which only considers a
+# task where `status == "ready" and task.assignee` — never hands one over.
+#
+# So it gets no skills. It carried `loop-runner` and `durable-dev`, which were
+# how an agent found `run-loop.sh` and how one queued work; the launcher does
+# both now, and `loop-runner`'s SKILL.md is deleted. Any stale links from an
+# earlier install are removed rather than left: a manifest-less skill directory
+# reads as a broken skill, and leaving a way for an agent to find the loop again
+# is the thing this change is about.
+#
+# A task hand-assigned to this profile would therefore find no way to run a loop
+# — and the guard below is what stops it completing one it did not run. That is
+# why the guard stays armed even though nothing reaches it in normal service.
 if [ ! -d "$hermes_home/profiles/zam-worker" ]; then
   HERMES_HOME="$hermes_home" hermes profile create zam-worker --no-skills \
-    --description "Detached supervised coding worker" >/dev/null
+    --description "Supervised coding worker (guard only; nothing is dispatched)" >/dev/null
 fi
 profile_skills="$hermes_home/profiles/zam-worker/skills/software-development"
-mkdir -p "$profile_skills"
 for skill in durable-dev loop-runner; do
-  link_skill "$repo/hermes/skills/$skill" "$profile_skills/$skill"
+  # Only a link this project made. Anything else is the user's, the same rule
+  # link-loop-runner.sh follows.
+  if [ -L "$profile_skills/$skill" ]; then
+    rm "$profile_skills/$skill"
+    echo "removed the retired $skill link from the zam-worker profile"
+  fi
 done
 
 HERMES_HOME="$hermes_home" hermes -p zam-worker config set model.provider custom >/dev/null

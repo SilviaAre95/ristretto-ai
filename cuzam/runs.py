@@ -66,10 +66,18 @@ LIVE_STATES = ACTIVE_STATES | {"blocked", "scheduled"}
 # per-machine and holds the event log and the approvals store.
 ARTIFACT_DIR_NAME = ".cuzam"
 
-# The log a run writes, most authoritative first. `launch` opens `flow.out`;
-# `run-loop.sh` tees a staged flow into `loop.log`. A classic loop keeps
-# Claude's output in a mktemp file that is gone by the time anyone looks, so
-# it has neither — and a path that does not exist is not reported.
+# The log a run writes, most authoritative first. `launch` opens `flow.out` for
+# every flow it spawns, classic included since the dispatcher decoupling — before
+# that a classic loop reached a machine only through a Hermes worker, which put
+# its output in the worker's transcript and left nothing to tail.
+#
+# A classic `flow.out` fills in two parts: run-loop.sh's own output as it goes,
+# then Claude's, which it keeps in a mktemp file and cats when the run ends. So
+# the file exists from the start and is complete only at the end.
+#
+# `run-loop.sh` also tees a staged flow into `loop.log` when it is the entry
+# point, which is now only a hand-run loop. A path that does not exist is still
+# never reported.
 LOG_NAMES = ("flow.out", "loop.log")
 
 # The two process shapes, which cover three flows. Keying on shape rather than
@@ -193,7 +201,10 @@ class Run:
 
         Reporting `<worktree>/.cuzam/runs/<task>/flow.out` because that is
         where a log *would* be is the derivation this module refuses: it reads
-        as an instruction to tail a file, and a classic run never writes one.
+        as an instruction to tail a file. A launched classic run does have one
+        now, but a run whose worktree `cuzam gc` has reclaimed does not, and
+        neither does one started by hand — so this still asks the filesystem
+        rather than reasoning from the shape.
         """
         directory = self._artifact_path
         if not directory:

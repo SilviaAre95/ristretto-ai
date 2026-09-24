@@ -38,14 +38,12 @@ from typing import Any, Mapping, NamedTuple
 
 from .. import events
 from ..config import ConfigError, load_config, repository_path
-from ..runtime import flow_interpreter, runtime_identity
+from ..runtime import flow_interpreter, flow_script, pinned_env, runtime_identity
 
 # Linear-style keys, which is what every configured project uses. Anything
 # else is a typo, and a typo here starts an hour of work on nothing.
 ISSUE_KEY = re.compile(r"^[A-Z][A-Z0-9]{1,9}-\d{1,6}$")
 
-# The worker profile the dispatcher hands loop tasks to.
-ASSIGNEE = "zam-worker"
 # Where a run's worktree goes, matching what Hermes used to create so existing
 # recovery habits (and `cuzam gc`) still find them.
 WORKTREE_DIR = ".worktrees"
@@ -58,6 +56,15 @@ WORKTREE_DIR = ".worktrees"
 # worker away is leaving the task unassigned — see the create call.
 CLAIM_TTL_SECONDS = 14400
 SKILL = "loop-runner"
+
+# The model tiers a classic run may name. Mirrors run-loop.sh's own allowlist,
+# including how it treats the retired `local` tier: accepted and DROPPED rather
+# than rejected, because a task queued before 2026-09-23 still carries
+# `model: local` in its body, and refusing it would block a relaunch rather than
+# run it on the Claude default — which is the entire point of retiring the local
+# coder. Drop the retired clause in 0.3.0, once no such task can be relaunched.
+MODEL_TIERS = ("sonnet", "haiku", "opus")
+RETIRED_TIERS = ("local",)
 
 # Long enough for a slow build (the one measured run spent 51 minutes in a
 # single stage), short enough that a wedged run does not hold a worktree
@@ -96,6 +103,66 @@ def branch_for(issue: str) -> str:
     part a human later greps for.
     """
     return f"xariprojects/{issue.lower()}"
+
+
+def classic_command(task_id: str, issue: str, flow: str, tier: str = "") -> tuple[list[str], str]:
+    """(argv, unpinned warning) for the classic loop.
+
+    Its own function so the liveness contract test can build the real argv
+    instead of a hand-written imitation of it. That mattered immediately: the
+    test's classic fixture was written to match what the retired Hermes worker
+    spawned, and it agreed with this launcher only by coincidence. Now a change
+    here changes the fixture, and `cuzam/runs.py` and `scripts/live-runs.sh` are
+    both asked about the result.
+
+    Through `bash` rather than executing the script directly. Both matchers read
+    the script at either argv[0] or argv[1], so this is not what makes them work
+    — checked, not assumed. It matches what the retired worker spawned, and it
+    survives the file arriving without its execute bit.
+
+    What *is* load-bearing is the argument order, and the contract test fails on
+    a change to it: the task id must be the first argument after the script,
+    where run-loop.sh's own `shift 2` and `runs._classify` both read it, and
+    `--model` must precede `--flow` because run-loop.sh enters flag parsing only
+    when the first argument after that shift is one of the two.
+    """
+    script, unpinned = flow_script()
+    command = ["bash", str(script), task_id, issue]
+    if tier:
+        command += ["--model", tier]
+    # Named even though it is run-loop.sh's own default: the flow a surface
+    # reports for a live run comes from this argv, read by `_run_loop_flow`.
+    command += ["--flow", flow]
+    return command, unpinned
+
+
+def is_classic(config: Mapping[str, Any], flow: str) -> bool:
+    """Whether this flow is the classic loop.
+
+    Decided on the `builtin` key and never on the flow's name, so a flow called
+    something unexpected cannot land on the wrong side of the two spawn shapes.
+
+    Reads the raw mapping rather than `resolved_flow`, which resolves providers
+    and credentials to answer a question about one key — and would therefore
+    refuse to start a run because some unrelated provider was misconfigured.
+    """
+    return ((config.get("flows") or {}).get(flow) or {}).get("builtin") == "classic"
+
+
+def model_tier(value: str) -> tuple[str, str]:
+    """(tier, problem) for a classic run's optional model. Empty means default.
+
+    The launcher validates it as well as run-loop.sh because an invalid tier
+    makes the script exit 2 immediately, and through the launcher that is a run
+    the board calls `running` with nothing running it — the caller is told the
+    flow started. Refusing here costs nothing and says which tiers exist.
+    """
+    tier = str(value or "").strip()
+    if not tier or tier in RETIRED_TIERS:
+        return "", ""
+    if tier not in MODEL_TIERS:
+        return "", f"unknown model tier {tier!r} — expected one of: {', '.join(MODEL_TIERS)}"
+    return tier, ""
 
 
 def pin_branch_to_base(repo: str, branch: str, base: str) -> str:
@@ -138,7 +205,16 @@ def pin_branch_to_base(repo: str, branch: str, base: str) -> str:
     return ""
 
 
-def start_flow(repo: str, branch: str, task_id: str, issue: str, flow: str) -> str:
+def start_flow(
+    repo: str,
+    branch: str,
+    task_id: str,
+    issue: str,
+    flow: str,
+    model: str = "",
+    *,
+    config_path: Path | None = None,
+) -> str:
     """Claim the task, cut its worktree, and run the flow as a plain process.
 
     Why not hand it to a worker: a Hermes task is always assigned to an agent
@@ -154,8 +230,18 @@ def start_flow(repo: str, branch: str, task_id: str, issue: str, flow: str) -> s
     deterministic work inside an agent turn. So keep the board and take the
     claim ourselves: the runner already heartbeats (`Heartbeat`) and already
     reports its own outcome (`report_outcome`), both written because the
-    worker could not be relied on to. This finishes a migration that has been
-    happening one function at a time.
+    worker could not be relied on to.
+
+    Every flow starts here now, `classic` included. It used to be the one
+    exception: the multi-stage runner refuses it outright, so `launch` built
+    `-m cuzam.runner --flow classic`, the child exited 2 a moment later, and
+    because `Popen` had handed back a pid the caller was told the run started
+    while the task sat claimed and `running` with nothing running it. `classic`
+    reached a machine only through the dispatcher, under an agent turn. This
+    finishes a migration that has been happening one function at a time.
+
+    Two shapes, decided on the flow's `builtin` key and never on its name, so a
+    flow called something unexpected cannot land on the wrong side of it.
 
     Claiming rather than leaving the task ready is load-bearing: an unclaimed
     task is one the dispatcher will pick up on its next pass, which would start
@@ -163,6 +249,23 @@ def start_flow(repo: str, branch: str, task_id: str, issue: str, flow: str) -> s
 
     Returns a problem to report, or "" when the flow is running.
     """
+    # Resolved before the claim: a flow that has since been removed from
+    # cuzam.yaml is a relaunch that cannot work, and failing here leaves the
+    # board untouched instead of claimed-and-dead.
+    try:
+        config, _ = load_config(config_path)
+    except ConfigError as exc:
+        return f"cannot start {flow}: {exc}"
+    if flow not in (config.get("flows") or {}):
+        known = ", ".join(sorted(config.get("flows") or {}))
+        return f"unknown flow {flow!r} — configured flows are: {known}"
+    classic = is_classic(config, flow)
+    tier, bad_tier = model_tier(model)
+    if bad_tier:
+        return bad_tier
+    if tier and not classic:
+        return f"{flow} takes its models from its stages — drop --model"
+
     def git(*args: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             ["git", "-C", repo, *args],
@@ -212,26 +315,42 @@ def start_flow(repo: str, branch: str, task_id: str, issue: str, flow: str) -> s
     # The flow runs from the pinned runtime, not from whatever the launcher
     # was invoked out of. The launcher is interactive and you are watching it;
     # the flow is an hour of unattended work, and it should not be executing
-    # a tree someone is editing. Falls back to this interpreter with a warning
-    # rather than refusing, so an install that has not pinned a runtime yet
-    # can still dispatch — visibly unpinned rather than silently so.
-    prefix, flow_env, unpinned = flow_interpreter()
-    command = [
-        *prefix, "-m", "cuzam.runner",
-        "--task-id", task_id, "--issue", issue, "--flow", flow,
-    ]
+    # a tree someone is editing. Falls back with a warning rather than refusing,
+    # so an install that has not pinned a runtime yet can still dispatch —
+    # visibly unpinned rather than silently so.
+    if classic:
+        command, unpinned = classic_command(task_id, issue, flow, tier)
+        flow_env = pinned_env()
+    else:
+        prefix, flow_env, unpinned = flow_interpreter()
+        command = [
+            *prefix, "-m", "cuzam.runner",
+            "--task-id", task_id, "--issue", issue, "--flow", flow,
+        ]
     if unpinned:
         print(f"launch: {unpinned}", file=sys.stderr)
     try:
         # Its own session, so the flow outlives the CLI invocation or the Slack
-        # request that started it. Nothing supervises it but the board's lease
-        # and the heartbeat the runner sends itself.
+        # request that started it. Nothing supervises it: a staged flow
+        # heartbeats itself, a classic one does not, and the board's claim lapses
+        # on a long run either way. What a surface reads is the process table.
+        #
+        # Detaching is right here and was wrong under the dispatcher, which is
+        # the distinction the whole change rests on. Hermes supervises a task by
+        # the liveness of the worker pid it spawned, and a worker that exits
+        # while its task is still `running` trips the circuit breaker on the
+        # FIRST occurrence — so detaching underneath it got every run marked
+        # crashed about two minutes in. There is no worker now, so there is no
+        # pid being counted. Taking the loop out of the dispatcher is the fix;
+        # detaching under a supervisor that counts pids never was.
         process = subprocess.Popen(
             command, cwd=worktree, stdout=log, stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL, start_new_session=True,
             # flow_env, not os.environ: a pinned interpreter that inherits
             # PYTHONPATH imports the development tree anyway, and PYTHONPATH is
             # exported by check.sh and run-loop.sh as a matter of course.
+            # run-loop.sh exports its own from the script's location, so the
+            # classic path is pinned by where the script came from.
             env={**flow_env, "PYTHONUNBUFFERED": "1"},
         )
     except OSError as exc:
@@ -301,6 +420,35 @@ def stalled_runs() -> list[dict[str, str]]:
     return stalled
 
 
+def open_pull_request(repo: str, branch: str) -> str:
+    """The pull request this branch already has, or "".
+
+    Inherited from the retired loop-runner skill, whose step 2 checked this
+    before running anything: the loop opens its pull request as its final act, so
+    an open PR means the work finished and the run died before reporting it.
+    Restarting then pays for the whole flow again and lets a fresh `finish` stage
+    push over work that is already up. The agent made this check; after the agent
+    went away nothing did.
+
+    Best effort in one direction only. `gh` missing, unauthenticated or offline
+    returns "" and the relaunch proceeds, because refusing to restart on an
+    unanswered question is the worse of the two failures.
+    """
+    if not branch:
+        return ""
+    try:
+        found = subprocess.run(
+            ["gh", "pr", "list", "--head", branch, "--json", "url", "--jq", ".[0].url"],
+            cwd=repo, capture_output=True, text=True, check=False, timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if found.returncode != 0:
+        return ""
+    url = (found.stdout or "").strip()
+    return url if url.startswith("http") else ""
+
+
 def relaunch(target: str = "", config_path: Path | None = None) -> Outcome:
     """Start a dead run again, in the worktree and branch it already has.
 
@@ -315,6 +463,10 @@ def relaunch(target: str = "", config_path: Path | None = None) -> Outcome:
     Resumes the flow, not the stage: it starts again at `plan`. Anything the
     dead run committed through `preserve_work` is still on the branch, so
     nothing is lost, but the earlier stages are paid for again.
+
+    Refuses outright when the branch already has a pull request — that means the
+    run finished and died before reporting, and the flow has nothing left to do.
+    The retired loop-runner skill made that check before running anything.
 
     `target` may be a task id, an issue key, or nothing at all — the last is
     the common case, because the situation is nearly always "the thing I just
@@ -357,6 +509,17 @@ def relaunch(target: str = "", config_path: Path | None = None) -> Outcome:
     if not (repo and issue and flow and branch):
         return Outcome(False, f"{task_id}: the task body does not say what to run", task_id)
 
+    already = open_pull_request(repo, branch)
+    if already:
+        return Outcome(
+            False,
+            f"{issue} already has a pull request: {already} — the run finished and "
+            "died before reporting it. Review the PR and complete the task with "
+            f"`hermes kanban complete {task_id}`; relaunching would pay for the "
+            "whole flow again and push over work that is already up",
+            task_id,
+        )
+
     # Return it to ready so the claim inside start_flow can take it cleanly.
     subprocess.run(
         ["hermes", "kanban", "reclaim", task_id, "--reason", "relaunch"],
@@ -366,11 +529,13 @@ def relaunch(target: str = "", config_path: Path | None = None) -> Outcome:
         ["hermes", "kanban", "unblock", task_id],
         capture_output=True, text=True, check=False, timeout=120,
     )
-    problem = start_flow(repo, branch, task_id, issue, flow)
+    problem = start_flow(
+        repo, branch, task_id, issue, flow, body.get("model", ""), config_path=config_path
+    )
     events.emit(
         task_id, "control.launch", issue_key=issue, stage="control",
         payload={"flow": flow, "branch": branch, "relaunch": True,
-                 "dispatched": not problem},
+                 "model": body.get("model", ""), "dispatched": not problem},
     )
     if problem:
         return Outcome(False, f"{issue} did not restart: {problem}", task_id)
@@ -378,14 +543,19 @@ def relaunch(target: str = "", config_path: Path | None = None) -> Outcome:
 
 
 def _task_body(task_id: str) -> dict[str, str]:
-    """The `key: value` lines `launch` wrote into the task body."""
+    """The `key: value` lines `launch` wrote into the task body.
+
+    `model` is read as well as the four locators, so a relaunch of a classic run
+    keeps the tier the first attempt used. Without it a run queued as `sonnet`
+    came back on the Claude default and nothing said so.
+    """
     shown = subprocess.run(
         ["hermes", "kanban", "show", task_id],
         capture_output=True, text=True, check=False, timeout=120,
     )
     found: dict[str, str] = {}
     for line in (shown.stdout or "").splitlines():
-        match = re.match(r"^\s*(issue|repo|branch|flow):\s*(\S+)\s*$", line)
+        match = re.match(r"^\s*(issue|repo|branch|flow|model):\s*(\S+)\s*$", line)
         if match:
             found.setdefault(match.group(1), match.group(2))
     return found
@@ -402,7 +572,7 @@ def idempotency_key(issue: str, flow: str, now: float | None = None) -> str:
 
 
 def validate(
-    config: Mapping[str, Any], project: str, issue: str, flow: str
+    config: Mapping[str, Any], project: str, issue: str, flow: str, model: str = ""
 ) -> tuple[Path | None, str]:
     """Check the request before anything is spent. Returns (repo, error)."""
     if not ISSUE_KEY.fullmatch(issue or ""):
@@ -410,6 +580,13 @@ def validate(
     if flow not in (config.get("flows") or {}):
         known = ", ".join(sorted(config.get("flows") or {}))
         return None, f"unknown flow {flow!r} — configured flows are: {known}"
+    _, bad_tier = model_tier(model)
+    if bad_tier:
+        return None, bad_tier
+    # A staged flow's models come from its stages. Accepting a tier and ignoring
+    # it would read as honoured by whoever asked for it.
+    if model_tier(model)[0] and not is_classic(config, flow):
+        return None, f"{flow} takes its models from its stages — drop --model"
     try:
         repo = repository_path(config, project)
     except ConfigError as exc:
@@ -460,6 +637,7 @@ def launch(
     project: str,
     issue: str,
     flow: str = "",
+    model: str = "",
     *,
     actor: str = "dashboard",
     allow_busy: bool = False,
@@ -481,7 +659,7 @@ def launch(
     # str(... or "") rather than .strip(): the tool schema says "omit for the
     # configured default", which invites a model to send an explicit null.
     flow = str(flow or "").strip() or str(config.get("default_flow", ""))
-    repo, error = validate(config, project, issue, flow)
+    repo, error = validate(config, project, issue, flow, model)
     if repo is None:
         return Outcome(False, error)
 
@@ -509,6 +687,11 @@ def launch(
     if misbased:
         return Outcome(False, f"{project} cannot start a clean branch: {misbased}")
     lines = [f"issue: {issue}", f"repo: {repo}", f"branch: {branch}", f"flow: {flow}"]
+    tier, _ = model_tier(model)
+    if tier:
+        # In the body, not only on the command line, so a relaunch runs what the
+        # first attempt ran rather than quietly dropping to the Claude default.
+        lines.append(f"model: {tier}")
     if unattended:
         # The runner reads this from the task body rather than from a flag
         # threaded through the worker, because the worker is a model and a
@@ -556,7 +739,7 @@ def launch(
             "the board created a task but did not name it — nothing will run it; "
             "find it with `hermes kanban list` and archive it",
         )
-    problem = start_flow(repo, branch, task_id, issue, flow)
+    problem = start_flow(repo, branch, task_id, issue, flow, tier, config_path=config_path)
     events.emit(
         task_id or f"launch-{issue}",
         "control.launch",
@@ -565,6 +748,7 @@ def launch(
         payload={
             "project": project,
             "flow": flow,
+            "model": tier,
             "branch": branch,
             "actor": actor,
             "unattended": unattended,
