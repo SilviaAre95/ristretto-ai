@@ -118,8 +118,18 @@ class StartFlowTest(unittest.TestCase):
         subprocess.run(["git", "-C", str(self.repo), "commit", "-q", "-m", "base"], check=True)
         subprocess.run(["git", "-C", str(self.repo), "branch", "feat/x"], check=True)
         self.addCleanup(self.tmp.cleanup)
+        # A real file, because start_flow refuses to claim a task it cannot
+        # start and checks that the script is there. A fake path would make
+        # every classic case here assert the refusal instead of the spawn.
+        self.script = (
+            self.repo / "pinned" / "hermes" / "skills" / "loop-runner" / "scripts" / "run-loop.sh"
+        )
+        self.script.parent.mkdir(parents=True)
+        self.script.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+        self.script.chmod(0o755)
 
-    def run_start(self, claim_rc: int = 0, flow: str = "full", model: str = ""):
+    def run_start(self, claim_rc: int = 0, flow: str = "full", model: str = "",
+                  script: Path | None = None):
         """Let git run for real; intercept only the board and the flow spawn.
 
         Patching Popen wholesale would break the real git calls too, since
@@ -151,8 +161,7 @@ class StartFlowTest(unittest.TestCase):
         with mock.patch.object(launch, "flow_interpreter",
                                return_value=([sys.executable, "-P"], {"PATH": "/usr/bin"}, "")), \
              mock.patch.object(launch, "flow_script",
-                               return_value=(Path("/pinned/hermes/skills/loop-runner/"
-                                                  "scripts/run-loop.sh"), "")), \
+                               return_value=(self.script if script is None else script, "")), \
              mock.patch.object(launch, "load_config",
                                return_value=(FIXTURE_CONFIG, Path("fixture.yaml"))), \
              mock.patch.object(launch.subprocess, "run", side_effect=fake_run), \
@@ -291,6 +300,22 @@ class StartFlowTest(unittest.TestCase):
 
         self.assertIn("takes its models from its stages", problem)
         self.assertEqual(spawned, [])
+
+    def test_a_missing_run_loop_script_is_refused_before_the_claim(self) -> None:
+        # `bash` exists whatever happens, so spawning it at a script that is not
+        # there returns a pid and reports success — the same false success as
+        # `-m cuzam.runner --flow classic` exiting 2. Reachable in a real
+        # install: the unpinned fallback is this package's own directory, which
+        # holds no `hermes/` tree when the package was installed rather than
+        # checked out.
+        missing = self.repo / "gone" / "loop-runner" / "scripts" / "run-loop.sh"
+        problem, calls, spawned = self.run_start(flow="classic", script=missing)
+
+        self.assertIn("no run-loop.sh at", problem)
+        self.assertIn("make install-runtime", problem)
+        self.assertEqual(spawned, [], "nothing may be spawned at a script that is absent")
+        for argv in calls:
+            self.assertNotIn("claim", argv, "and nothing may be claimed for it either")
 
     def test_a_flow_no_longer_in_the_config_fails_before_the_claim(self) -> None:
         # The relaunch case: a task queued on a flow later deleted from

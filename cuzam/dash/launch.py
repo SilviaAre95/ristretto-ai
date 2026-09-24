@@ -55,6 +55,10 @@ WORKTREE_DIR = ".worktrees"
 # agent runs here, the claim WILL lapse on a long run. What actually keeps a
 # worker away is leaving the task unassigned — see the create call.
 CLAIM_TTL_SECONDS = 14400
+# The `--skill` hint written onto the card. It names the program that runs the
+# task, not a Hermes skill: `loop-runner/SKILL.md` was deleted with the worker,
+# and nothing reads this field — it is kept so a card created now describes
+# itself the way every card before it did.
 SKILL = "loop-runner"
 
 # The model tiers a classic run may name. Mirrors run-loop.sh's own allowlist,
@@ -107,6 +111,13 @@ def branch_for(issue: str) -> str:
 
 def classic_command(task_id: str, issue: str, flow: str, tier: str = "") -> tuple[list[str], str]:
     """(argv, unpinned warning) for the classic loop.
+
+    The flow runs from the pinned runtime, not from whatever the launcher was
+    invoked out of. The launcher is interactive and you are watching it; the flow
+    is an hour of unattended work and should not execute a tree someone is
+    editing. Falls back to the checkout with a warning rather than refusing, so
+    an install that has not pinned a runtime yet can still dispatch — visibly
+    unpinned rather than silently so.
 
     Its own function so the liveness contract test can build the real argv
     instead of a hand-written imitation of it. That mattered immediately: the
@@ -266,6 +277,30 @@ def start_flow(
     if tier and not classic:
         return f"{flow} takes its models from its stages — drop --model"
 
+    # The command too, and for the same reason: nothing may be claimed that
+    # cannot be started. `bash` exists whatever happens, so spawning it at a
+    # script that is not there would return a pid and report success — the exact
+    # shape of the bug above, one layer down. It is reachable: the fallback is
+    # this package's own directory, which holds no `hermes/` tree when the
+    # package was installed rather than checked out.
+    if classic:
+        command, unpinned = classic_command(task_id, issue, flow, tier)
+        script = Path(command[1])
+        if not script.is_file():
+            return (
+                f"cannot start {flow}: no run-loop.sh at {script} — "
+                "run `make install-runtime` to pin one"
+            )
+        flow_env = pinned_env()
+    else:
+        prefix, flow_env, unpinned = flow_interpreter()
+        command = [
+            *prefix, "-m", "cuzam.runner",
+            "--task-id", task_id, "--issue", issue, "--flow", flow,
+        ]
+    if unpinned:
+        print(f"launch: {unpinned}", file=sys.stderr)
+
     def git(*args: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             ["git", "-C", repo, *args],
@@ -312,23 +347,6 @@ def start_flow(
     except OSError as exc:
         return give_up(f"could not open the flow log: {exc}")
 
-    # The flow runs from the pinned runtime, not from whatever the launcher
-    # was invoked out of. The launcher is interactive and you are watching it;
-    # the flow is an hour of unattended work, and it should not be executing
-    # a tree someone is editing. Falls back with a warning rather than refusing,
-    # so an install that has not pinned a runtime yet can still dispatch —
-    # visibly unpinned rather than silently so.
-    if classic:
-        command, unpinned = classic_command(task_id, issue, flow, tier)
-        flow_env = pinned_env()
-    else:
-        prefix, flow_env, unpinned = flow_interpreter()
-        command = [
-            *prefix, "-m", "cuzam.runner",
-            "--task-id", task_id, "--issue", issue, "--flow", flow,
-        ]
-    if unpinned:
-        print(f"launch: {unpinned}", file=sys.stderr)
     try:
         # Its own session, so the flow outlives the CLI invocation or the Slack
         # request that started it. Nothing supervises it: a staged flow
@@ -580,12 +598,12 @@ def validate(
     if flow not in (config.get("flows") or {}):
         known = ", ".join(sorted(config.get("flows") or {}))
         return None, f"unknown flow {flow!r} — configured flows are: {known}"
-    _, bad_tier = model_tier(model)
+    tier, bad_tier = model_tier(model)
     if bad_tier:
         return None, bad_tier
     # A staged flow's models come from its stages. Accepting a tier and ignoring
     # it would read as honoured by whoever asked for it.
-    if model_tier(model)[0] and not is_classic(config, flow):
+    if tier and not is_classic(config, flow):
         return None, f"{flow} takes its models from its stages — drop --model"
     try:
         repo = repository_path(config, project)
@@ -768,7 +786,16 @@ def launch(
     # The docs promise a launch "says so" when unpinned. On stderr that is a
     # service log nobody reads — the dashboard and the Slack plugin both show
     # Outcome.message and nothing else.
-    _, _, unpinned_note = flow_interpreter()
+    #
+    # Asked of whichever pin this run actually depends on. A classic run is
+    # pinned by the script and never touches the pinned interpreter, so reporting
+    # the interpreter's state would tell the operator their run is unpinned when
+    # it is not — a runtime whose venv is broken but whose tree is intact is
+    # exactly that case.
+    if is_classic(config, flow):
+        _, unpinned_note = flow_script()
+    else:
+        _, _, unpinned_note = flow_interpreter()
     if unpinned_note:
         notes.append(unpinned_note)
     notes.extend(unchecked_findings(repo, base)[:1])
