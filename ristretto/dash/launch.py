@@ -250,14 +250,21 @@ def flow_is_running(task_id: str) -> bool:
     leaves the task `running` and claimed, which reads as healthy from every
     surface. On 2026-09-10 that state was shown as `blocked`, offered an
     `unblock` button, and restarted a run that had just passed its plan stage.
+
+    Delegated to `running_flows` rather than asking separately. This used to
+    run `pgrep -f`, which matches the command line of whatever runs the
+    search: a shell that merely mentions the runner reports itself as a live
+    flow, and `stalled_runs` then reads a dead run as healthy — the exact
+    inversion this function exists to prevent. `running_flows` snapshots `ps`
+    and filters afterwards, which is what keeps the filter out of its own
+    results, and having one answer here means the dashboard and the relaunch
+    guard cannot disagree about what is live.
     """
     if not TASK_ID.fullmatch(task_id):
         return False
-    found = subprocess.run(
-        ["pgrep", "-f", f"ristretto.runner --task-id {task_id}"],
-        capture_output=True, text=True, check=False, timeout=30,
-    )
-    return found.returncode == 0
+    from . import data
+
+    return task_id in data.running_flows()
 
 
 def stalled_runs() -> list[dict[str, str]]:

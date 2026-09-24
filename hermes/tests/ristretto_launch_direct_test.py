@@ -12,6 +12,7 @@ Two defects found by running a real tier1 flow on 2026-09-11:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import subprocess
 import sys
@@ -224,6 +225,61 @@ class ClaimReleaseTest(unittest.TestCase):
             any(argv[:3] == ["hermes", "kanban", "reclaim"] for argv in board),
             "the claim must be released before reporting the failure",
         )
+
+
+class FlowIsRunningTest(unittest.TestCase):
+    """Alive and dead have to be told apart by something that cannot lie."""
+
+    @contextlib.contextmanager
+    def listing(self, text: str):
+        """A fake process list, plus a record of how it was asked for.
+
+        Both halves matter. `pgrep -f` matches the command line of whatever
+        runs the search, so the search reports itself — which is why the
+        calls are recorded and asserted on, not just their result: an
+        implementation that went back to pgrep would return "no match" here
+        and quietly pass every assertion below.
+        """
+        from ristretto.dash import data
+
+        calls: list[list[str]] = []
+
+        def fake(argv, *args, **kwargs):
+            calls.append(list(argv))
+            return subprocess.CompletedProcess(argv, 0, text, "")
+
+        with mock.patch.object(data.subprocess, "run", side_effect=fake):
+            yield calls
+
+    def test_a_shell_mentioning_the_task_is_not_a_live_flow(self) -> None:
+        # This asked `pgrep -f` until 2026-09-24, so any command line
+        # carrying the task id counted — including the search itself.
+        # `stalled_runs` then found nothing stalled and `relaunch` refused to
+        # restart a run that had already died.
+        with self.listing(
+            "/bin/zsh -c pgrep -f 'ristretto.runner --task-id t_aaa111'\n"
+        ) as calls:
+            self.assertFalse(launch.flow_is_running("t_aaa111"))
+
+        self.assertEqual(calls, [["ps", "-eo", "command="]])
+
+    def test_a_real_runner_is_a_live_flow(self) -> None:
+        with self.listing(
+            "/x/.venv/bin/python3 -m ristretto.runner --task-id t_aaa111 "
+            "--issue XARI-1 --flow full\n"
+        ) as calls:
+            self.assertTrue(launch.flow_is_running("t_aaa111"))
+
+        self.assertTrue(
+            all("pgrep" not in argv[0] for argv in calls),
+            f"liveness was decided by a pattern search: {calls}",
+        )
+
+    def test_a_malformed_task_id_never_reaches_the_process_list(self) -> None:
+        with self.listing("") as calls:
+            self.assertFalse(launch.flow_is_running("; rm -rf /"))
+
+        self.assertEqual(calls, [])
 
 
 class RelaunchTest(unittest.TestCase):
