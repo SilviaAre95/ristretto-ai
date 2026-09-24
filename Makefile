@@ -29,6 +29,7 @@ test:
 	bash hermes/tests/push-guard.test.sh
 	bash hermes/tests/link-loop-runner.test.sh
 	bash hermes/tests/template-drift.test.sh
+	bash hermes/tests/live-runs.test.sh
 
 check:
 	bash scripts/check.sh

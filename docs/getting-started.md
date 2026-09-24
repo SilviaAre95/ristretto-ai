@@ -13,10 +13,10 @@ your `~/.hermes/.env`, and non-secret settings live in
 | macOS | Supported baseline for the always-on `launchd` service path. |
 | Python 3.11, Bash 3.2+, Git | Repository tooling and checks. |
 | [Ollama](https://ollama.com) | Serves the local orchestrator brain. Required. |
-| Hermes Agent 0.18.x | The runtime Ris is built on; install and authenticate it separately. |
+| [Hermes Agent](https://github.com/NousResearch/hermes-agent) 0.18.x | The runtime Ris is built on. Third-party, MIT, by Nous Research — installed and authenticated separately; see below. |
 | A Slack workspace you control | Ris talks through a Slack app you create there. |
 | A Linear team | Board-backed briefs and coding tasks. |
-| Claude Code (optional) | Default `classic` coding flow; uses your own account. |
+| Claude Code | Every coding flow runs on it, including the default `full`; uses your own account. Optional only if you never run one. |
 | Codex CLI, GitHub CLI (optional) | Review stages in named flows; PR tooling. |
 
 Do you need a local LLM? **Yes, for the orchestrator.** By design, all
@@ -28,6 +28,34 @@ wants an Apple Silicon Mac with more than 32 GB of memory. Coding is a
 separate axis and it runs on Claude Code with your own account: no local model
 writes, repairs or reviews code, so nothing here needs a large local coder.
 That requirement was dropped on 2026-09-23 along with the premise behind it.
+
+### Where Hermes Agent comes from
+
+Ris does not vendor it and does not install it for you. It is
+[`hermes-agent`](https://github.com/NousResearch/hermes-agent) by Nous
+Research, MIT licensed, published on [PyPI](https://pypi.org/project/hermes-agent/)
+and documented at [hermes-agent.nousresearch.com](https://hermes-agent.nousresearch.com/).
+Upstream's own installer is the shortest route:
+
+```bash
+curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
+hermes --version   # expect 0.18.x
+```
+
+Pin the version instead if you would rather not pipe a script into a shell:
+
+```bash
+pip install 'hermes-agent==0.18.*'
+```
+
+Ris reads the board, sends Slack messages and schedules cron through the
+`hermes` CLI as a subprocess — never by importing it — so the version that
+matters is the one on your `PATH`. Ris is developed against **0.18.x**. Newer
+engines are likely to work, but nothing here gates on the version or contracts
+the `kanban --json` shape the fleet view parses, so an upgrade can break that
+view quietly. If you install from a git checkout rather than a release,
+record any local modifications: an undocumented patch makes your working
+configuration unreproducible on the next machine.
 
 ## 1. Clone and bootstrap
 

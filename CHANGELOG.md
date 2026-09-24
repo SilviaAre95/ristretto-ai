@@ -56,7 +56,35 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   content rather than line position, so a wrong assumption fails instead of
   silently deleting.
 
+- The docs say where Hermes Agent comes from. It is a hard requirement with no
+  URL, package name or version anywhere in the repository, so the one step a
+  stranger cannot skip was the one step unwritten: `hermes-agent` by Nous
+  Research, MIT, on PyPI and GitHub, developed against 0.18.x. Recorded in
+  `docs/getting-started.md`, in the README, and in the message
+  `install-hermes.sh` prints when the binary is missing — the place it is
+  actually hit. Two stale rows in the same requirements table went with it:
+  Claude Code is no longer optional, since every flow runs on it, and the
+  default flow is `full`, not `classic`.
+
 ### Fixed
+
+- `make update` no longer runs over work in flight. It restarted the gateway
+  unconditionally, and `hermes gateway restart` is a kill: Hermes resolves its
+  drain budget to `0` by default and documents why — a window large enough to
+  save a long agent turn would have to outlast an unbounded task. So
+  `agent.restart_drain_timeout` exists but buys seconds against runs measured
+  in hours, and the default stands. The restart is also not the only hazard;
+  `install-hermes.sh` repoints the `loop-runner` link and a runtime rebuild
+  swaps code a staged flow is executing out of, so the refusal covers the
+  whole update rather than the restart alone.
+
+  `scripts/live-runs.sh` answers "is anything live" from the operating system
+  rather than the board, because a run whose process died stays `running` and
+  claimed and reads as healthy from every surface — so a stalled run does not
+  block an update. It matches both shapes, which `install-runtime.sh`'s
+  existing guard did not: that one matched only `ristretto.runner`, and the
+  classic loop is pinned the same way, so a live `run-loop.sh` walked straight
+  through it.
 
 - A stage killed by a signal keeps what it wrote. XARI-118 covered the
   runner's own deadline and a later change covered the runner being signalled,

@@ -442,15 +442,46 @@ task creation kept as defence in depth.
 
 ### The cost of keeping it
 
-A stranger must install a third-party agent platform before any of this runs,
-and this repository does not say where to get it — no URL, no package name, no
-version, anywhere. That is the cheapest thing on this list to fix.
+A stranger must install a third-party agent platform before any of this runs.
+The repository used to be silent on where to get it — no URL, no package name,
+no version, anywhere. Fixed 2026-09-24: `hermes-agent` by Nous Research, MIT,
+on PyPI and GitHub, developed against 0.18.x, with the install route in
+`docs/getting-started.md` and in the message `install-hermes.sh` prints when
+the binary is missing.
 
 Beyond it: there is no version gate and no contract test over the board JSON
 this project parses, so an engine upgrade can break the fleet view silently; and
 an engine installed as a git checkout can carry local modifications that diverge
 from upstream with no record, which makes a working configuration
 unreproducible.
+
+**A gateway restart is a kill, and that is upstream's contract, not a bug.**
+`hermes gateway restart` prints `drain timed out after 0s` and force-restarts,
+because Hermes resolves its drain budget to `0` by default and says why: a
+window large enough to save a long agent turn would have to outlast an
+unbounded task, and one shorter than the service manager's stop timeout
+invites a SIGKILL mid-cleanup. The knob exists — `agent.restart_drain_timeout`
+in `config.yaml`, or `HERMES_RESTART_DRAIN_TIMEOUT` — and setting it would buy
+seconds against runs measured in hours, so it is not the fix and this project
+leaves it at the default.
+
+What the restart actually kills is narrower than it looks. Staged flows are
+spawned detached, so they outlive it; the classic loop does not, because
+`run-loop.sh` deliberately stays in the foreground under the Hermes worker
+that supervises it by pid — detaching it got every run marked crashed two
+minutes in. The comment at the top of that script already names this as the
+accepted cost, and the stated fix is to take the loop out of Hermes'
+dispatcher entirely rather than to detach underneath a supervisor counting
+pids.
+
+The defect was therefore ours, not Hermes': `make update` restarted the
+gateway with no check for work in flight, and so did every other step it runs
+— `install-hermes.sh` repoints the `loop-runner` link, and a runtime rebuild
+swaps the code a staged flow is executing out of. `scripts/live-runs.sh` now
+answers "is anything live" from the operating system rather than the board,
+and both `update.sh` and `install-runtime.sh` refuse on it. The latter had a
+guard already, matching only the staged runner, so a live classic loop walked
+through it.
 
 ## Risks worth naming now
 
