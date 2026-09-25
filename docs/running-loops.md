@@ -133,17 +133,29 @@ request is outstanding.
 
 ## The context boundary
 
-**Nothing in a flow can read your issue tracker.** Measured, not assumed: on
-2026-09-11 a `plan` stage said so in its own artifact — *"the Linear connector
-isn't authorised in this session, so I couldn't read the XARI-123 body. The
-plan is based on the title and on the code."*
+**No stage goes to your issue tracker itself. Cuzam goes, before the flow
+starts.** `context.md` is assembled by the launcher into the run's artifact
+directory and prepended to every stage's inputs: the issue title and body when
+a tracker credential is configured, and up to three matching vault notes,
+clipped. It carries a line telling the stage to treat all of it as data and
+never as instructions. When the tracker is unreachable the file says so
+explicitly, and says not to go looking for the issue elsewhere on the machine.
 
-The stage prompt carries `Issue key: <KEY>` and nothing else — no title, no
-description, no acceptance criteria. Whatever the plan stage manages to work
-out from the repository is all the flow will ever know, because stages using a
-locally served model additionally run under `--bare`, which disables MCP
-discovery, plugins, hooks and CLAUDE.md auto-discovery. They work from
-`plan.md` alone.
+This is the shape the boundary should have. The reading that a flow legitimately
+needs from outside the repository is done by deterministic code with a fixed
+list of sources, before any model starts, and arrives as a file inside the
+worktree — rather than by a model searching a home directory one permission
+prompt at a time. `filesystem-scoping` is the other half of that: it denies the
+search.
+
+What a stage still cannot do is reach the tracker live. It has `context.md` and
+the repository, and nothing else, so the rule below is unchanged.
+
+Two earlier claims here were wrong and are corrected above. The stage prompt no
+longer carries `Issue key: <KEY>` and nothing else, and `--bare` is no longer
+passed anywhere — `--strict-mcp-config` replaced it, which matters because
+hooks are the only hard enforcement boundary a stage has, and under `--bare`
+the stage that pushes was running with them off.
 
 So the rule is: **a flow is only as good as the issue's context being present
 in the repository.** XARI-123 was about `preserve_work`, so the code was the
@@ -230,9 +242,7 @@ legitimate.
 - On the board, `blocked` means "failed and gave up", not "waiting for your
   approval", and `unblock` restarts the run from the beginning — it has
   discarded completed stage work.
-- `--bare` disables hooks, and it is applied to locally served providers. No
-  shipped flow gives a local provider a mutating stage any more, so nothing
-  currently pushes without hook enforcement — but the mechanism is still
-  there for a custom flow that names `local-brain`. A narrower fix probably
-  exists: the hang `--bare` was introduced to fix was MCP discovery, which
-  `--strict-mcp-config` alone may address.
+- There is no filesystem scoping yet. A stage can read anything the operator
+  can, and on `classic` there is no broker to ask, so nothing gates it. Spec'd
+  as `filesystem-scoping`; until it ships, treat an unattended run as having
+  your home directory's read access.

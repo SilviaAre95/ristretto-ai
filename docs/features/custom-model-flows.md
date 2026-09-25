@@ -16,6 +16,9 @@ acceptance_criteria:
   - Every flow, classic included, starts from every surface through one path
   - A classic run's model tier survives a relaunch
   - No shipped flow routes a mutating stage to a local model
+  - Every stage spawn carries a filesystem scope, or the launch is refused
+  - A stage's effective permissions come from Cuzam, never from a settings
+    file committed in the repository being worked on
 non_goals:
   - NOT allowing arbitrary unvalidated runner commands
   - NOT storing provider credentials in the repository or UI
