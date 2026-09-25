@@ -273,5 +273,95 @@ t "instant-exit: exit code 9 propagated"  "[ $RC -eq 9 ]"
 t "instant-exit: no record written"       "[ ! -f '$PID_DIR/t-instant.json' ]"
 t "instant-exit: stderr has guard log"    "grep -q 'run-loop: child gone before record' '$RUN_LOOP_STDERR'"
 
+# What Claude said must survive a stop, and a run must be exactly one process.
+#
+# The first half: the output is buffered into a mktemp file and written out when
+# the run ends, so a stop that killed the loop before that point lost it and
+# leaked the file. TERM is trapped now, which is why zam-stop.sh sends TERM
+# before KILL.
+#
+# The second half is the regression test for the fix that was tried first.
+# Streaming the output with `> >(tee "$OUT")` forks a shell that does not exec,
+# so `ps` shows it carrying this script's argv and task id — and both liveness
+# implementations would have counted one run as two, with the fork outliving the
+# loop. Asserting the count here is what catches that immediately.
+PATH="$(echo "$PATH" | sed "s|$FAKEBIN:||")"
+STREAMBIN="$(mktemp -d)"
+cat > "$STREAMBIN/claude" <<'STREAMEOF'
+#!/usr/bin/env bash
+echo "STAGE-ONE-OUTPUT"
+sleep 20
+STREAMEOF
+chmod +x "$STREAMBIN/claude"
+export PATH="$STREAMBIN:$PATH"
+LIVE_RUNS_SH="$REPO_ROOT/scripts/live-runs.sh"
+
+WT3="$(mktemp -d)"; cd "$WT3"
+STREAM_LOG="$STREAMBIN/flow.out"
+"$SCRIPT" t-stream PROJ-02 > "$STREAM_LOG" 2>&1 &
+LOOP_PID=$!
+sleep 2
+
+t "a running classic loop is exactly one live run, not two" \
+  "[ \"\$(bash '$LIVE_RUNS_SH' | grep -c 't-stream')\" -eq 1 ]"
+
+kill -TERM $LOOP_PID 2>/dev/null
+wait $LOOP_PID 2>/dev/null; STREAM_RC=$?
+sleep 1
+
+t "a stopped run exits non-zero"        "[ $STREAM_RC -ne 0 ]"
+t "what Claude had said survives the stop" \
+  "grep -q STAGE-ONE-OUTPUT '$STREAM_LOG'"
+t "and the stopped run leaves nothing behind that reads as live" \
+  "! bash '$LIVE_RUNS_SH' | grep -q 't-stream'"
+
+pkill -f "$STREAMBIN/claude" 2>/dev/null || true
+
+# Duplication is checked on a run that finishes, because the stop above exits
+# from the trap before the end of run_once.
+cat > "$STREAMBIN/claude" <<'DONEEOF'
+#!/usr/bin/env bash
+echo "COMPLETED-OUTPUT"
+exit 0
+DONEEOF
+chmod +x "$STREAMBIN/claude"
+WT4="$(mktemp -d)"; cd "$WT4"
+DONE_LOG="$STREAMBIN/done.out"
+"$SCRIPT" t-done PROJ-03 > "$DONE_LOG" 2>&1
+t "a completed run logs Claude's output exactly once" \
+  "[ \"\$(grep -c COMPLETED-OUTPUT '$DONE_LOG')\" -eq 1 ]"
+
+# A TERM arriving *after* the run finished must not print the output a second
+# time. run_once flushes on the clean path and the trap flushes too, and several
+# seconds of network calls sit between them — the grep over $OUT, the event emit,
+# `gh pr list`, `kanban complete`. The stub sleeps there so the window is real.
+cat > "$STREAMBIN/claude" <<'LATEEOF'
+#!/usr/bin/env bash
+echo "LATE-OUTPUT"
+exit 0
+LATEEOF
+chmod +x "$STREAMBIN/claude"
+cat > "$STREAMBIN/gh" <<'GHEOF'
+#!/usr/bin/env bash
+sleep 5
+GHEOF
+chmod +x "$STREAMBIN/gh"
+WT5="$(mktemp -d)"; cd "$WT5"
+LATE_LOG="$STREAMBIN/late.out"
+"$SCRIPT" t-late PROJ-04 > "$LATE_LOG" 2>&1 &
+LATE_PID=$!
+# Wait until the flow is past run_once and into the reporting tail.
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  grep -q LATE-OUTPUT "$LATE_LOG" 2>/dev/null && break
+  sleep 0.5
+done
+kill -TERM $LATE_PID 2>/dev/null
+wait $LATE_PID 2>/dev/null
+t "a TERM after the run finished does not reprint the output" \
+  "[ \"\$(grep -c LATE-OUTPUT '$LATE_LOG')\" -eq 1 ]"
+
+cd "$REPO_ROOT"
+rm -rf "$STREAMBIN" "$WT3" "$WT4" "$WT5"
+
 echo; echo "run-loop.test.sh: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

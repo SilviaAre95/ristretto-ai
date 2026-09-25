@@ -18,6 +18,7 @@ acceptance_criteria:
   - Every surface renders one module and computes nothing of its own
   - The view never claims a signal it did not receive
   - Stopping and unblocking are possible from a phone
+  - A stop that could not find the run's process says so, never reports success
   - A mutating request that did not come from this page is refused
   - Every control action is recorded in the timeline
   - The dashboard reaches the assistant through its own loop, not a second agent
@@ -87,11 +88,12 @@ moved, no process is signalled. On 2026-09-10 a surface that could not tell
 alive from dead restarted a healthy run; a surface that can tell must still
 not be the thing that acts.
 
-Liveness keys on process shape, not on the flow's name: a foreground
-`run-loop.sh` and a detached `cuzam.runner` are two shapes covering three
-flows, so `classic` is visible for the first time and a fourth flow cannot
-fall outside it silently. `scripts/live-runs.sh` stays a standalone bash
-implementation on purpose — `install-runtime.sh` consults it while rebuilding
+Liveness keys on process shape, not on the flow's name: a `run-loop.sh` and a
+`cuzam.runner` are two shapes covering three flows, so `classic` is visible and
+a fourth flow cannot fall outside it silently. Both shapes are detached by the
+launcher, so the distinction is which program is executing, never how it was
+started. `scripts/live-runs.sh` stays a standalone bash implementation on
+purpose — `install-runtime.sh` consults it while rebuilding
 the Python environment, and a guard that imports the package to decide whether
 it may replace the package is the circularity it exists to prevent. A contract
 test pins the two against each other and names all three flows.
@@ -103,16 +105,39 @@ run was created; the flow from the live process's own argv, or failing that
 from what `launch` wrote into the task body; the runner pid from one `ps`
 snapshot; the Claude child pid from the record `reap.sh` already maintains,
 verified by pid, start time and command before it is shown. A log path is
-shown only when the file exists — a classic run keeps its Claude output in a
-temporary file and has none, and inventing the path it would have had is the
-kind of derivation this rule exists to forbid.
+shown only when the file exists, and inventing the path it would have had is
+the kind of derivation this rule exists to forbid. A classic run now has one:
+the launcher opens `flow.out` before spawning the loop, so the harness's own
+output is captured for classic exactly as for a staged flow. Claude's own
+output still goes to a temporary file and is written out when the run ends, so
+`flow.out` is complete only once the loop exits — including when a stop ends it,
+which the loop traps so that what Claude had said is not lost with it.
+
+Streaming that output live was tried and reverted. Process substitution forks a
+shell that does not exec, so it carries the loop's own argv and task id, and
+both liveness implementations counted one run as two — with the fork outliving
+the loop, so a stopped run read as live indefinitely. A run is one process, and
+a test asserts that count rather than trusting it.
 
 ### Controls
 
 A run can be stopped and a blocked task unblocked. Stop shells the existing
-hardened kill switch, which reclaims the task, kills the worker by its exact
+hardened kill switch, which reclaims the task, kills the run by its exact
 spawn signature, verified-reaps the Claude Code grandchild, and re-checks for
-the promote race; its `NOT STOPPED` message and non-zero exit are surfaced
+the promote race. There is one signature per shape, and that count is
+load-bearing: a shape with no signature is a stop that kills nothing, passes
+its own verification — the task is blocked because it blocked it, and no pid
+matches a signature that cannot match — and reports success while the run
+carries on to `finish` and pushes. That has happened once already.
+
+A count is not a guarantee, though, and the signatures cannot audit themselves:
+"no pid matched" means either that the run is dead or that the pattern was
+wrong, and the second reads exactly like success. So the verification also asks
+`live-runs.sh`, the standalone answer to what a live run is — the one a contract
+test pins against `cuzam/runs.py` and fails when a flow has no fixture. A live
+process the kill signatures did not match therefore reports `NOT STOPPED` and
+names itself, and a shape added to the launcher inherits the check instead of
+waiting to be noticed. Its `NOT STOPPED` message and non-zero exit are surfaced
 verbatim rather than translated into a cheerful failure. Both actions are
 recorded as `control.stop` / `control.unblock` events, so a run that ends
 early has a reason in its timeline instead of just stopping.

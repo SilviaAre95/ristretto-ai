@@ -6,11 +6,15 @@ set -u
 PASS=0; FAIL=0
 t() { if eval "$2"; then echo "ok  - $1"; PASS=$((PASS+1)); else echo "FAIL - $1"; FAIL=$((FAIL+1)); fi; }
 
-SCRIPT="$(cd "$(dirname "$0")/.." && pwd)/scripts/zam-stop.sh"
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+SCRIPT="$REPO_ROOT/hermes/scripts/zam-stop.sh"
 
-# 1. The reap.sh path hardcoded in the script must resolve on this machine
-#    (catches drift between the script and the ~/.hermes symlink layout).
-REAP_REF="$(sed -n 's/.*bash "\(\$HOME[^"]*reap\.sh\)".*/\1/p' "$SCRIPT")"
+# 1. The reap.sh path the script builds must resolve on this machine (catches
+#    drift between the script and the ~/.hermes symlink layout). Both paths hang
+#    off $HERMES_DIR, which the script resolves the way install-hermes.sh does;
+#    the test resolves it the same way so it cannot drift from either.
+HERMES_DIR="${CUZAM_HERMES_HOME:-${RISTRETTO_HERMES_HOME:-${HERMES_HOME:-$HOME/.hermes}}}"
+REAP_REF="$(sed -n 's/^REAP="\(\$HERMES_DIR[^"]*reap\.sh\)"$/\1/p' "$SCRIPT")"
 t "script references a reap.sh path" "[ -n '$REAP_REF' ]"
 if [ -f "$(eval echo "$REAP_REF")" ]; then
   t "referenced reap.sh exists under real HOME" "true"
@@ -26,14 +30,20 @@ export HOME="$(mktemp -d)"
 FAKEBIN="$(mktemp -d)"
 export PATH="$FAKEBIN:$PATH"
 
-REAP_STUB="$HOME${REAP_REF#\$HOME}"
+# HOME is now the sandbox, so re-resolve and re-expand against it.
+HERMES_DIR="$HOME/.hermes"
+REAP_STUB="$(eval echo "$REAP_REF")"
 mkdir -p "$(dirname "$REAP_STUB")"
 printf '#!/usr/bin/env bash\necho "$1" > "%s/reap-called"\n' "$HOME" > "$REAP_STUB"
 
 cat > "$FAKEBIN/hermes" <<'EOF'
 #!/usr/bin/env bash
 if [ "${1:-} ${2:-}" = "kanban show" ]; then
-  printf '{"task": {"status": "%s"}}\n' "${ZAM_TEST_STATUS:-blocked}"
+  # `__silent__` stands for an unknown or archived id, which the real board
+  # answers with no output at all.
+  if [ "${ZAM_TEST_STATUS:-blocked}" != "__silent__" ]; then
+    printf '{"task": {"status": "%s"}}\n' "${ZAM_TEST_STATUS:-blocked}"
+  fi
 fi
 exit 0
 EOF
@@ -63,9 +73,213 @@ RC=$?
 t "unblocked task exits non-zero" "[ $RC -ne 0 ]"
 t "unblocked task reports NOT STOPPED" "grep -q 'NOT STOPPED: task t-live' '$HOME/out'"
 
+# 4b. An unknown id must not surface a Python traceback. `kanban show` prints
+#     nothing for one, `json.load` raises, and the traceback went to this
+#     script's stderr — which cuzam/dash/control.py captures and shows in the
+#     dashboard verbatim, pushing the real NOT STOPPED line out of view and
+#     leaking an interpreter path with it.
+ZAM_TEST_STATUS=__silent__ bash "$SCRIPT" t-unknown > "$HOME/out-nojson" 2>&1 || true
+t "an unreadable board answer does not surface a traceback" \
+  "! grep -qE 'Traceback|JSONDecodeError|json/decoder' '$HOME/out-nojson'"
+t "and it still reports the state honestly as unknown" \
+  "grep -q 'state=unknown' '$HOME/out-nojson'"
+
+# 4c. A Claude grandchild that survived the reap must fail the stop.
+#
+#     reap.sh always exits 0 and, on an identity mismatch, declines to kill and
+#     deletes the record anyway — and a mismatch needs nothing to be wrong, since
+#     LIVE_CWD comes from `lsof` and an absent or denied probe returns empty.
+#     Claude then keeps running under acceptEdits in the worktree, free to finish
+#     and open a pull request, while every other check passed and the stop said
+#     `stopped:`. It is the only process here that can change the repository, and
+#     no kill signature and neither liveness implementation matches it.
+GRAND_TID="t-grandchild"
+# Same default the script and reap.sh resolve when no board is configured.
+REC_DIR="$HOME/.hermes/kanban/${HERMES_KANBAN_BOARD:-default}/pids"
+mkdir -p "$REC_DIR"
+/bin/sleep 120 &
+GRAND_PID=$!
+printf '{"pid": %d, "lstart": "never matches", "worktree": "/nowhere", "runner": "claude"}\n' \
+  "$GRAND_PID" > "$REC_DIR/$GRAND_TID.json"
+
+# The real reaper, so the decline is genuine rather than simulated.
+install -m 0755 "$REPO_ROOT/hermes/skills/loop-runner/scripts/reap.sh" "$REAP_STUB"
+
+bash "$SCRIPT" "$GRAND_TID" > "$HOME/out-grand" 2>&1
+GRAND_RC=$?
+
+t "the reaper declined to kill on the identity mismatch" \
+  "grep -q 'identity MISMATCH' '$HOME/out-grand'"
+t "the grandchild is still alive, as Guard 4 intends" "kill -0 $GRAND_PID 2>/dev/null"
+t "a surviving grandchild makes the stop report failure" \
+  "[ $GRAND_RC -ne 0 ] && grep -q 'NOT STOPPED' '$HOME/out-grand'"
+t "and it names the pid that can still push" \
+  "grep -q \"$GRAND_PID\" '$HOME/out-grand'"
+
+kill -KILL "$GRAND_PID" 2>/dev/null; wait "$GRAND_PID" 2>/dev/null
+# Put the inert stub back for the cases below.
+printf '#!/usr/bin/env bash\necho "$1" > "%s/reap-called"\n' "$HOME" > "$REAP_STUB"
+chmod +x "$REAP_STUB"
+
+# 4d. A missing reaper must be said out loud, not absorbed as `bash` exiting 127.
+mv "$REAP_STUB" "$REAP_STUB.gone"
+bash "$SCRIPT" t-noreap > "$HOME/out-noreap" 2>&1 || true
+t "a missing reaper is reported, not silently skipped" \
+  "grep -q 'was not reaped' '$HOME/out-noreap'"
+mv "$REAP_STUB.gone" "$REAP_STUB"
+
 # 5. Archived counts as stopped (dispatcher can't pick it up again)
 ZAM_TEST_STATUS=archived bash "$SCRIPT" t-arch > "$HOME/out" 2>&1
 t "archived task counts as stopped" "[ $? -eq 0 ]"
+
+# 6. Every run shape has a signature — checked against real processes.
+#
+#    The cases above stub pkill and pgrep to "nothing matched", so they cannot
+#    tell a signature that works from one that cannot match anything. That gap
+#    is how a shape gets added to the launcher and never to the kill switch: the
+#    stop then kills nothing, passes its own verification (the task is blocked
+#    because stage 1 blocked it, and no pid matches a pattern that cannot match)
+#    and reports success while the run carries on to `finish` and pushes.
+#
+#    So: spawn the real shape, run the real pkill, and require it to die. The
+#    task ids carry $$ so the patterns cannot reach another run on this machine.
+rm -f "$FAKEBIN/pkill" "$FAKEBIN/pgrep"
+
+SHAPE_DIR="$(mktemp -d)"
+mkdir -p "$SHAPE_DIR/loop-runner/scripts"
+printf '#!/usr/bin/env bash\nsleep 120\n' > "$SHAPE_DIR/loop-runner/scripts/run-loop.sh"
+printf '#!/usr/bin/env bash\nsleep 120\n' > "$SHAPE_DIR/stage-runner.sh"
+chmod +x "$SHAPE_DIR/loop-runner/scripts/run-loop.sh" "$SHAPE_DIR/stage-runner.sh"
+
+# The classic shape, exactly as cuzam/dash/launch.py spawns it.
+CLASSIC_TID="t-classic-$$"
+bash "$SHAPE_DIR/loop-runner/scripts/run-loop.sh" "$CLASSIC_TID" XARI-1 --flow classic &
+CLASSIC_PID=$!
+# The staged shape. The signature matches on the words `cuzam.runner
+# --task-id <id>` appearing on the command line, so the stub carries them as
+# real arguments rather than faking an argv[0], which `ps` does not report
+# the same way on every platform.
+STAGED_TID="t-staged-$$"
+bash "$SHAPE_DIR/stage-runner.sh" -m cuzam.runner \
+  --task-id "$STAGED_TID" --issue XARI-1 --flow full &
+STAGED_PID=$!
+sleep 1
+
+t "a launched classic run is on the process table to begin with" \
+  "kill -0 $CLASSIC_PID 2>/dev/null"
+t "a launched staged run is on the process table to begin with" \
+  "kill -0 $STAGED_PID 2>/dev/null"
+
+bash "$SCRIPT" "$CLASSIC_TID" > "$HOME/out-classic" 2>&1
+CLASSIC_RC=$?
+bash "$SCRIPT" "$STAGED_TID" > "$HOME/out-staged" 2>&1
+STAGED_RC=$?
+sleep 1
+
+t "stopping a classic run actually kills it" "! kill -0 $CLASSIC_PID 2>/dev/null"
+t "stopping a staged run actually kills it" "! kill -0 $STAGED_PID 2>/dev/null"
+t "a classic stop that worked reports stopped" \
+  "[ $CLASSIC_RC -eq 0 ] && grep -q '^stopped: task $CLASSIC_TID' '$HOME/out-classic'"
+t "a staged stop that worked reports stopped" \
+  "[ $STAGED_RC -eq 0 ] && grep -q '^stopped: task $STAGED_TID' '$HOME/out-staged'"
+
+kill -KILL "$CLASSIC_PID" "$STAGED_PID" 2>/dev/null
+wait "$CLASSIC_PID" "$STAGED_PID" 2>/dev/null
+
+# 7. A live shape the kill signatures do NOT know must not report success.
+#
+#    Every check in section 6 is built from patterns in zam-stop.sh itself, so it
+#    cannot tell "no pid matched because the run is dead" from "no pid matched
+#    because the pattern was wrong". The second reads exactly like success — and
+#    it is what this file looked like for the staged runner, and again for the
+#    classic loop once nothing was above it. So the verification also asks
+#    live-runs.sh, the standalone answer to what a live run is.
+#
+#    The fixture is a shape live-runs.sh recognises: a console-script run, which
+#    carries no `-m` and therefore matches none of zam-stop's three patterns.
+# Path taken from the script rather than written out here, the same way the
+# reap.sh stub is, so the test cannot drift from what zam-stop.sh actually reads.
+LIVE_REF="$(sed -n 's/^LIVE_RUNS="\(\$HERMES_DIR[^"]*\)"$/\1/p' "$SCRIPT")"
+t "script references a live-runs.sh path" "[ -n '$LIVE_REF' ]"
+LIVE_STUB="$(eval echo "$LIVE_REF")"
+mkdir -p "$(dirname "$LIVE_STUB")"
+install -m 0755 "$REPO_ROOT/scripts/live-runs.sh" "$LIVE_STUB"
+
+UNKNOWN_TID="t_unknown$$"
+bash -c "exec -a 'cuzam-run-flow --task-id $UNKNOWN_TID --issue XARI-1 --flow full' \
+         sleep 300" &
+UNKNOWN_PID=$!
+sleep 1
+
+t "the unknown shape is live to live-runs.sh" \
+  "bash '$LIVE_STUB' | grep -qF '$UNKNOWN_TID'"
+
+bash "$SCRIPT" "$UNKNOWN_TID" > "$HOME/out-unknown" 2>&1
+UNKNOWN_RC=$?
+
+t "a live run no signature matches is NOT reported as stopped" \
+  "[ $UNKNOWN_RC -ne 0 ] && grep -q 'NOT STOPPED' '$HOME/out-unknown'"
+t "and it says which process it could not kill" \
+  "grep -q 'still live and matched no kill signature' '$HOME/out-unknown'"
+# The summary line is what a human skims and what the dashboard surfaces
+# verbatim. Left alone it said "worker pids=none" — "nothing was running" —
+# while stderr said the opposite one line up.
+t "the summary line names the pid rather than saying none" \
+  "grep 'NOT STOPPED' '$HOME/out-unknown' | grep -q \"$UNKNOWN_PID\""
+t "and marks it as one no signature matched" \
+  "grep -q 'unmatched' '$HOME/out-unknown'"
+
+# Finding 4: the guard has to look where the installer actually put it. A
+# hardcoded ~/.hermes made this silently fall back to signature-only checking on
+# any install that configures a different Hermes home — the very false green the
+# check exists to close.
+ELSEWHERE="$(mktemp -d)"
+mkdir -p "$ELSEWHERE/scripts" "$ELSEWHERE/skills/software-development/loop-runner/scripts"
+install -m 0755 "$REPO_ROOT/scripts/live-runs.sh" "$ELSEWHERE/scripts/live-runs.sh"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$ELSEWHERE/skills/software-development/loop-runner/scripts/reap.sh"
+chmod +x "$ELSEWHERE/skills/software-development/loop-runner/scripts/reap.sh"
+mv "$LIVE_STUB" "$LIVE_STUB.hidden"
+
+CUZAM_HERMES_HOME="$ELSEWHERE" bash "$SCRIPT" "$UNKNOWN_TID" > "$HOME/out-elsewhere" 2>&1
+ELSEWHERE_RC=$?
+t "a configured Hermes home is honoured, not assumed" \
+  "[ $ELSEWHERE_RC -ne 0 ] && grep -q 'still live and matched no kill signature' '$HOME/out-elsewhere'"
+t "and it never claims the guard was missing" \
+  "! grep -q 'verifying by kill signature only' '$HOME/out-elsewhere'"
+
+mv "$LIVE_STUB.hidden" "$LIVE_STUB"
+rm -rf "$ELSEWHERE"
+
+# A task id that is a strict prefix of a live one must not be reported as still
+# running. Ids are variable length, so `t_abc123` is a prefix of `t_abc1234`; the
+# kill signatures anchor with `( |$)` and this cross-check did not, so a stop
+# that worked surfaced to the dashboard as a failure with the other run's pid.
+PREFIX_LONG="t_abc1234"
+bash "$SHAPE_DIR/loop-runner/scripts/run-loop.sh" "$PREFIX_LONG" XARI-1 --flow classic &
+LONG_PID=$!
+sleep 1
+t "the longer-id run is live to live-runs.sh" \
+  "bash '$LIVE_STUB' | grep -qF '$PREFIX_LONG'"
+
+bash "$SCRIPT" t_abc123 > "$HOME/out-prefix" 2>&1
+PREFIX_RC=$?
+t "stopping a prefix of a live id is not reported as still running" \
+  "[ $PREFIX_RC -eq 0 ] && ! grep -q 'still live and matched no kill signature' '$HOME/out-prefix'"
+t "and the longer-id run was left alone" "kill -0 $LONG_PID 2>/dev/null"
+
+kill -KILL "$LONG_PID" 2>/dev/null
+wait "$LONG_PID" 2>/dev/null
+
+kill -KILL "$UNKNOWN_PID" 2>/dev/null
+wait "$UNKNOWN_PID" 2>/dev/null
+rm -f "$LIVE_STUB"
+
+# An install predating live-runs.sh must still be able to report a clean stop.
+bash "$SCRIPT" t-clean > "$HOME/out-nolive" 2>&1
+t "without live-runs.sh the verification is unchanged" \
+  "[ $? -eq 0 ] && grep -q '^stopped: task t-clean' '$HOME/out-nolive'"
+
+rm -rf "$SHAPE_DIR"
 
 rm -rf "$HOME" "$FAKEBIN"
 HOME="$REAL_HOME"

@@ -39,6 +39,15 @@ def runtime_root(environ: Mapping[str, str] | None = None) -> Path:
     return events.state_home(environ) / RUNTIME_DIR
 
 
+# Where the classic loop lives inside a checkout. The last three segments are
+# load-bearing, not cosmetic: `runs.CLASSIC_SCRIPT` and the awk in
+# `scripts/live-runs.sh` both identify a classic run by a command line ending in
+# `loop-runner/scripts/run-loop.sh`. A run spawned from any other path is a run
+# neither implementation can see — it reads as dead while it works, and every
+# surface invites the operator to relaunch it. Moving the script means moving
+# both matchers and the contract test in the same change.
+CLASSIC_SCRIPT_PATH = Path("hermes/skills/loop-runner/scripts/run-loop.sh")
+
 # Environment that would un-pin a pinned interpreter by putting another copy
 # of the package ahead of its own site-packages. PYTHONPATH is not a corner
 # case here: scripts/check.sh and run-loop.sh both export it.
@@ -123,6 +132,33 @@ def runtime_identity(environ: Mapping[str, str] | None = None) -> dict[str, str]
     # A pinned checkout that someone edited is no longer pinned to anything.
     identity["tree"] = "dirty" if git("status", "--porcelain") else "clean"
     return identity
+
+
+def flow_script(
+    environ: Mapping[str, str] | None = None,
+) -> tuple[Path, str]:
+    """(path to run-loop.sh, warning) for running the classic loop.
+
+    The classic loop is a shell program, so `flow_interpreter` cannot pin it —
+    that pins the interpreter, and the interpreter never sees this script. It
+    used to be pinned by a symlink `link-loop-runner.sh` moved, because the only
+    thing that ran it was a Hermes worker reading a skill. The launcher starts it
+    now, so the launcher has to resolve it, and it resolves it the same way and
+    with the same visible fallback as the interpreter.
+
+    Probes the file and not its directory, for the reason `link-loop-runner.sh`
+    gives: a half-cloned runtime has the tree without the script, and pointing at
+    that breaks every classic run.
+    """
+    pinned = runtime_root(environ) / CLASSIC_SCRIPT_PATH
+    if pinned.is_file():
+        return pinned, ""
+    return (
+        Path(__file__).resolve().parents[1] / CLASSIC_SCRIPT_PATH,
+        "running from the development checkout, not a pinned runtime — "
+        "this flow executes whatever is in that tree right now; "
+        "run `make install-runtime` to pin it",
+    )
 
 
 def flow_interpreter(

@@ -17,6 +17,18 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Claude process it is waiting on. `cuzam runs <issue>` narrows to one and
   `--json` is the machine-readable form. A path is shown only when there is
   something at the end of it.
+- **`cuzam launch --model <tier>`** — `sonnet`, `haiku` or `opus` for a classic
+  run, written into the task body so a `cuzam relaunch` runs what the first
+  attempt ran instead of silently dropping to the Claude default. A staged flow
+  takes its models from its stages and refuses a tier rather than accepting one
+  it will not use. The retired `local` tier is accepted and dropped, matching
+  `run-loop.sh`, so a task queued before 2026-09-23 can still be relaunched.
+- **`cuzam relaunch` refuses when the branch already has a pull request**, and
+  names it. The loop opens its PR as its final act, so an open PR means the run
+  finished and died before reporting — restarting pays for the whole flow again
+  and lets a fresh `finish` stage push over work that is already up. The retired
+  `loop-runner` skill made this check before running anything; nothing did after
+  the skill went away.
 - **A run that died says so.** A run the board still calls `running` with no
   process behind it is reported as `dead` by both the fleet view and the CLI,
   immediately, instead of reading healthy for fifteen minutes and then
@@ -81,6 +93,143 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   repository, which stay `ristretto-ai`; `.cc-verify`, `.cc-dev.yaml` and
   `.cc-deploy.yaml`, which are a contract with wayworks rather than names
   this project owns; and the CHANGELOG entries above.
+
+- **The classic loop is started by the launcher, not by an agent.** `classic`
+  was the last flow Hermes still dispatched: a task assigned to `zam-worker`,
+  an agent turn reading a skill, and `run-loop.sh` held in that agent's
+  foreground. `cuzam launch` spawns it directly now, as `run-loop.sh` rather
+  than as the multi-stage runner, which refuses that flow. On 2026-09-10 a
+  worker agent abandoned one run and killed two more across four attempts on a
+  single issue, reading a silent stage as a hang. Hermes' supervision was never
+  the problem — it leases a claim, watches a pid and expects a heartbeat, all
+  deterministic. Deterministic work inside an agent turn was, and this was the
+  last place that remained true.
+
+  Two things follow. A classic run no longer dies when the gateway restarts,
+  because no worker holds it — the cost the comment at the top of
+  `run-loop.sh` recorded as accepted is gone rather than mitigated. And nothing
+  is retried on crash: that went with the worker, and `cuzam relaunch` is the
+  deliberate replacement.
+
+  `loop-runner`'s `SKILL.md` is deleted and the `zam-worker` profile is given no
+  skills, so no queued task has a path to an agent. `durable-dev` calls
+  `cuzam launch` instead of creating an assigned task. The profile itself stays,
+  and so does the loop-completion guard on it: it now guards a path that should
+  not be taken rather than one in routine use, which is a reason to keep it
+  armed and not a reason to retire it.
+
+### Fixed
+
+- **`cuzam launch --flow classic` reported success and started nothing.** It
+  built `-m cuzam.runner --flow classic`, which exits 2 with "classic is
+  executed by run-loop.sh, not the multi-stage runner". `Popen` had already
+  returned a pid, so the caller was told the run had started while the task sat
+  claimed and `running` with nothing running it — and `active_runs` counted it,
+  refusing the next launch until the four-hour claim lapsed. `cuzam relaunch` on
+  a classic task failed the same way. This was not a corner: `default_flow`
+  resolving to `classic` made it the behaviour of every launch that named no
+  flow, including the dashboard form and the Slack command.
+- **Stop could not see a classic run, and said it had stopped it.**
+  `zam-stop.sh` matched two spawn signatures — the worker agent's
+  `work kanban task <id>` and the staged `cuzam.runner --task-id <id>`. A
+  launcher-spawned classic run is `bash …/run-loop.sh <id> <issue>` and matched
+  neither, and until the decoupling it did not have to: killing the worker
+  killed `run-loop.sh` as its child. With no worker above it, stop killed
+  nothing, passed its own verification — the task was blocked because stop had
+  blocked it, and no pid matched a pattern that could not match — and reported
+  `stopped`. Verified against a live run before fixing. A third signature
+  closes it, and the three are now defined once rather than repeated between
+  the kill and the verification. The verification also asks `scripts/live-runs.sh`,
+  which `install-hermes.sh` now installs beside it: the signatures cannot audit
+  themselves, because "no pid matched" is indistinguishable from "the pattern was
+  wrong", so a live process no signature matched reports `NOT STOPPED` and names
+  itself rather than passing.
+- **A flow removed from `cuzam.yaml` left a relaunch claimed and dead.** The
+  flow is resolved before the task is claimed, so an unknown one is refused
+  with the board untouched. So is the loop script: `bash` exists whatever
+  happens, so spawning it at a script that is not there returned a pid and
+  reported success. Nothing may be claimed that cannot be started.
+- **A builtin classic flow under any other name was started and then refused.**
+  The launcher decides the shape on the `builtin` key and `run-loop.sh` decides
+  it on the flow *name* it is handed, because it is bash and cannot read the
+  config. An alias split the two: the loop was spawned, took its staged branch,
+  and the multi-stage runner refused the flow. Configuration now requires a
+  builtin classic flow to be named `classic`, which makes the two statements
+  one.
+- **A classic run's output was lost when it was stopped**, and its temporary
+  file leaked, because the output is written out when the run ends and the
+  default signal action skips the exit trap. TERM and INT are trapped, which is
+  what `zam-stop.sh` sending TERM before KILL was always for.
+- **`relaunch` read the task header, not the task body.** `kanban show` prints a
+  header in the same `key: value` shape, including a `model:` line for a task
+  with `model_override` set — a provider model id, which the launcher would
+  refuse, making an otherwise restartable run unrelaunchable. Only the body is
+  read now.
+- **`relaunch` refused on any pull request for the branch.** The branch is
+  deterministic per issue, so a second run on the same issue inherited the
+  first run's still-open PR and could never be restarted — with advice to
+  complete a task that had done no work. Only a pull request newer than the run
+  counts as the run's own.
+- **A stop reported success while the one process that can push kept running.**
+  `reap.sh` always exits 0 and, on an identity mismatch, declines to kill and
+  deletes the record anyway — and a mismatch needs nothing to be wrong, because
+  the cwd it compares comes from `lsof` and an absent or denied probe returns
+  empty. Claude then kept running under `--permission-mode acceptEdits` in the
+  worktree, free to finish and open a pull request, while every other check
+  passed. No kill signature and neither liveness implementation matches `claude`,
+  so the stop's verdict now includes whether the recorded grandchild survived,
+  and a missing reaper is reported instead of absorbed as `bash` exiting 127.
+- **A refused relaunch made every later launch fail.** `reclaim` and `unblock`
+  run before the flow is validated, and validation gained four ways to refuse, so
+  a refused relaunch left the task `ready` — which `active_runs` counts, unlike
+  `blocked` — and every subsequent `cuzam launch`, for any issue, was refused
+  with "1 run(s) already active" until someone archived it.
+- **The pid record's path was spelled out in four places**, each hardcoding
+  `~/.hermes` while the installers honour `CUZAM_HERMES_HOME`. They agreed, so
+  nothing broke; one resolver now, because the stop had to read it as a fifth.
+- **`cuzam launch --unattended` silently did nothing on a classic flow**, which
+  is newly reachable since classic became launchable. It is not so much ignored
+  as already true — a classic run pins `acceptEdits` with no broker and cannot
+  prompt — so the launch says so rather than dropping the flag.
+- **A late stop printed a run's output twice**, and fixing that by emptying the
+  buffer broke the check that reports Claude being unavailable. Flushed at most
+  once per attempt instead, with the file left intact for that check.
+- **The relaunch pull-request check was inert for every staged flow**, including
+  `full`, the shipped default. It dated a run by `loop.json`, which only
+  `run-loop.sh` writes, so a launcher-started staged run had no start time and
+  the check was skipped — the exact harm it was added to prevent, on the most
+  common path. The runner records `started` in `flow.json` now and both markers
+  are read. The docstring had claimed both were read while the code read one.
+- **A closed pull request made an issue permanently unrelaunchable.** The check
+  queried `--state all`, and since the branch is deterministic per issue a PR a
+  reviewer had closed as the wrong approach stayed the newest one on that head
+  forever. Open and merged still refuse a restart; closed-unmerged does not.
+- **`relaunch` read the task body out of the human listing.** Scanning every line
+  matched `kanban show`'s header block; skipping to a line spelled exactly
+  `Body:` fixed that and would have failed *every* relaunch had the heading ever
+  differed, with nothing exercising it. It reads the `--json` body field now,
+  which has no header and no heading — the way `cuzam/runs.py` already did.
+- **The stop's liveness cross-check matched a task id unanchored**, while the
+  kill signatures are anchored for that reason. Ids are variable length, so
+  stopping `t_abc123` while `t_abc1234` ran reported `NOT STOPPED` with the other
+  run's pid — a stop that worked, surfaced as a failure.
+- **The dashboard could not find the kill switch on a configured Hermes home.**
+  `control.py` hardcoded `~/.hermes` while the installer honours
+  `CUZAM_HERMES_HOME`; it failed safe, reporting "not installed", which is why
+  nobody noticed the one control able to end a run had gone. Python resolves the
+  Hermes home the way the installers do now, in one place.
+- **A stop surfaced a Python traceback into the dashboard.** An unknown id makes
+  `kanban show --json` print nothing, and the inline parser's traceback went to
+  stderr, which the dashboard shows verbatim — pushing the real `NOT STOPPED`
+  line out of view and leaking an interpreter path with it.
+- **A corrupt run marker crashed `cuzam relaunch`.** `{"started": 1e400}` parses
+  as infinity and `int()` on it raises `OverflowError`, which is not a
+  `ValueError` — so the recovery path died on a partially written file.
+- **`zam-stop.sh` assumed `~/.hermes`.** The installer honours
+  `CUZAM_HERMES_HOME`, so on any install that sets it both the verified reap and
+  the new liveness verification silently fell back — the second reintroducing
+  the false green it was added to close. It resolves the configured home now,
+  and says so when the guard is genuinely absent.
 
 ### Upgrade notes
 

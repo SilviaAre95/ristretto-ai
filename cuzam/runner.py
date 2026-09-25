@@ -191,9 +191,12 @@ def runner_identity() -> dict[str, str]:
 
 
 def pid_record(task_id: str) -> Path:
+    """Where the Claude child's reaping record lives. One resolver, shared."""
+    from .config import hermes_home
+
     board = safe_identifier(os.environ.get("HERMES_KANBAN_BOARD", "default"), "board id")
     task = safe_identifier(task_id, "task id")
-    return Path.home() / ".hermes" / "kanban" / board / "pids" / f"{task}.json"
+    return hermes_home() / "kanban" / board / "pids" / f"{task}.json"
 
 
 def process_start(pid: int) -> str:
@@ -1402,6 +1405,13 @@ def execute(args: argparse.Namespace) -> int:
                 "flow": args.flow,
                 "issue": args.issue,
                 "base": base,
+                # When this run began, matching the key `run-loop.sh` writes into
+                # `loop.json`. `relaunch` dates a pull request against it to tell
+                # one this run opened from one that was already on the branch —
+                # the branch is deterministic per issue, so without a date every
+                # earlier PR on it looks like this run's. Absent here, that check
+                # was inert for every staged flow, the shipped default included.
+                "started": int(time.time()),
                 "verify_sha256": expected_verify_digest,
                 "stage_timeout": pinned_stage_timeout,
                 "runner": runner_identity(),

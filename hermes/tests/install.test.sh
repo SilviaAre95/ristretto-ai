@@ -113,7 +113,14 @@ assert "Hermes installer creates config without a service" test -f "$fake_home/c
 assert "Hermes installer creates public persona" test -f "$fake_home/SOUL.md"
 assert "Hermes installer links durable-dev" test -L "$fake_home/skills/software-development/durable-dev"
 assert "Hermes installer deploys the morning precheck" test -x "$fake_home/scripts/morning-brief-precheck.py"
-assert "Hermes installer creates worker profile skills" test -L "$fake_home/profiles/zam-worker/skills/software-development/loop-runner"
+# Inverted on 2026-09-24. Nothing is dispatched to the worker profile any more,
+# so it gets no skills — and leaving `loop-runner` linked there would leave an
+# agent a way to find the loop, which is the thing the decoupling removes. The
+# profile itself stays for the flow guard, asserted further down.
+assert "worker profile is given no way to run a loop" test ! -e "$fake_home/profiles/zam-worker/skills/software-development/loop-runner"
+assert "worker profile is given no way to queue one either" test ! -e "$fake_home/profiles/zam-worker/skills/software-development/durable-dev"
+# The program is still reachable at the path zam-stop.sh uses to find reap.sh.
+assert "the loop program stays linked outside the worker profile" test -L "$fake_home/skills/software-development/loop-runner"
 assert "Hermes installer creates one morning brief" test -f "$fake_home/cron-created"
 assert "Hermes installer leaves service unchanged by default" test ! -e "$fake_home/service-installed"
 

@@ -12,10 +12,16 @@ which is what this does. Shaped after `seam_contract_test.py`, for the same
 reason: a rename or a tightened pattern on one side is otherwise silent until
 `make update` restarts the gateway over a live run.
 
-Liveness keys on process *shape* — a foreground `run-loop.sh` and a detached
-`cuzam.runner` — so two shapes cover three flows. The flows are nonetheless
-asserted here **by name**, so that adding a fourth without thinking about this
-file fails a test rather than quietly falling outside both implementations.
+Liveness keys on process *shape* — a `run-loop.sh` and a `cuzam.runner` — so two
+shapes cover three flows. The flows are nonetheless asserted here **by name**, so
+that adding a fourth without thinking about this file fails a test rather than
+quietly falling outside both implementations.
+
+The classic fixtures are built by calling `launch.classic_command`, not by
+writing out what it is believed to produce. Until the dispatcher decoupling this
+file's classic fixture imitated what the Hermes worker spawned and agreed with
+the launcher only by coincidence; a launcher that changed the shape would have
+left both matchers blind while every test here stayed green.
 """
 
 from __future__ import annotations
@@ -27,6 +33,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from cuzam import runs
+from cuzam.dash import launch
 
 REPO = Path(__file__).resolve().parents[2]
 LIVE_RUNS = REPO / "scripts" / "live-runs.sh"
@@ -46,15 +53,31 @@ def spawn_staged(task_id: str, flow: str, module: str = "cuzam.runner") -> subpr
     return subprocess.Popen(["bash", "-c", f"exec -a '{argv}' sleep {FIXTURE_SECONDS}"])
 
 
-def spawn_classic(directory: Path, task_id: str) -> subprocess.Popen:
-    """A foreground run-loop.sh, matched by its pinned path."""
-    script = directory / "loop-runner" / "scripts" / "run-loop.sh"
-    script.parent.mkdir(parents=True, exist_ok=True)
-    script.write_text(f"#!/usr/bin/env bash\nsleep {FIXTURE_SECONDS}\n")
-    script.chmod(0o755)
-    return subprocess.Popen(
-        ["bash", str(script), task_id, "ABC-1", "--flow", "classic"]
-    )
+def spawn_classic(
+    directory: Path, task_id: str, tier: str = "", flow: str = "classic"
+) -> subprocess.Popen:
+    """A run-loop.sh in the shape the launcher actually spawns.
+
+    The argv comes from `launch.classic_command`, so a change to how a classic
+    run is invoked reaches both implementations through this fixture instead of
+    going unnoticed. Only the script path is substituted, for a stub that sleeps:
+    the real one would cut a worktree and spend money.
+    """
+    command, _ = launch.classic_command(task_id, "ABC-1", flow, tier)
+    stub = directory / (tier or "plain") / "loop-runner" / "scripts" / "run-loop.sh"
+    stub.parent.mkdir(parents=True, exist_ok=True)
+    stub.write_text(f"#!/usr/bin/env bash\nsleep {FIXTURE_SECONDS}\n")
+    stub.chmod(0o755)
+    # Substituted by suffix rather than by position. Replacing argv[1] would mean
+    # that a launcher which stopped putting the script there ran the REAL
+    # run-loop.sh with the stub as an argument — a test that cuts a worktree and
+    # spends money. Asserting the stub carries the same suffix matters too: one
+    # that did not would make every classic case in this file vacuous, since the
+    # matchers key on exactly that.
+    assert any(part.endswith(runs.CLASSIC_SCRIPT) for part in command), command
+    assert str(stub).endswith(runs.CLASSIC_SCRIPT), stub
+    argv = [str(stub) if part.endswith(runs.CLASSIC_SCRIPT) else part for part in command]
+    return subprocess.Popen(argv)
 
 
 def bash_pids() -> set[int]:
@@ -83,6 +106,11 @@ class LiveRunContractTest(unittest.TestCase):
         # two shapes, which is the point — but naming them individually is
         # what makes a fourth flow visible as a gap here.
         cls.processes["classic"] = spawn_classic(directory, "t_classic0")
+        # A classic run carrying a model tier. Its argv is
+        # `... <task> <issue> --model sonnet --flow classic`, so the flow is no
+        # longer the word straight after the issue — which is how run-loop.sh's
+        # own parser reads it and therefore how `_run_loop_flow` has to.
+        cls.processes["classic-tier"] = spawn_classic(directory, "t_tiered0", "sonnet")
         cls.processes["full"] = spawn_staged("t_full000", "full")
         cls.processes["short"] = spawn_staged("t_short00", "short")
         # A run that predates the rename still has to count: its command line
@@ -144,6 +172,9 @@ class LiveRunContractTest(unittest.TestCase):
     def test_a_classic_run_is_live_in_both(self) -> None:
         self.assert_agree("classic", True)
 
+    def test_a_classic_run_with_a_model_tier_is_live_in_both(self) -> None:
+        self.assert_agree("classic-tier", True)
+
     def test_the_full_flow_is_live_in_both(self) -> None:
         self.assert_agree("full", True)
 
@@ -171,7 +202,6 @@ class LiveRunContractTest(unittest.TestCase):
         from cuzam.config import load_config
 
         configured = set(load_config()[0].get("flows") or {})
-        # `classic` is the loop-runner path and is not a configured flow entry.
         missing = configured - set(self.processes)
         self.assertEqual(
             missing, set(),
@@ -194,6 +224,14 @@ class LiveRunContractTest(unittest.TestCase):
         self.assertEqual(
             (classic.task_id, classic.shape, classic.flow),
             ("t_classic0", "classic", "classic"),
+        )
+        # The tier must not be mistaken for the flow. run-loop.sh accepts the
+        # flow positionally too, so reading argv blindly would label this run
+        # `sonnet` and every surface would report a flow that does not exist.
+        tiered = by_pid[self.processes["classic-tier"].pid]
+        self.assertEqual(
+            (tiered.task_id, tiered.shape, tiered.flow),
+            ("t_tiered0", "classic", "classic"),
         )
         staged = by_pid[self.processes["full"].pid]
         self.assertEqual(
@@ -225,7 +263,7 @@ class LiveRunContractTest(unittest.TestCase):
     def test_running_flows_is_the_task_ids_of_those_processes(self) -> None:
         """The set every caller of `running_flows` actually consumes."""
         live = runs.running_flows()
-        self.assertTrue({"t_classic0", "t_full000", "t_short00"} <= live)
+        self.assertTrue({"t_classic0", "t_tiered0", "t_full000", "t_short00"} <= live)
         self.assertNotIn("t_shell00", live)
         self.assertNotIn("t_menti0", live)
 

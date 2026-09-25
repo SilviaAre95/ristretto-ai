@@ -251,7 +251,7 @@ class ControlActionTests(unittest.TestCase):
         # take. That must not be translated into a cheerful success.
         completed = subprocess.CompletedProcess([], 1, "NOT STOPPED: worker still alive", "")
         with tempfile.NamedTemporaryFile(suffix=".sh") as script, \
-             mock.patch.object(control, "STOP_SCRIPT", Path(script.name)), \
+             mock.patch.object(control, "stop_script", return_value=Path(script.name)), \
              mock.patch.object(control.subprocess, "run", return_value=completed), \
              mock.patch.object(control.events, "emit"):
             outcome = control.stop("t_a1b2c3d4")
@@ -269,10 +269,29 @@ class ControlActionTests(unittest.TestCase):
 
     def test_missing_kill_switch_is_reported_not_crashed(self) -> None:
         absent = Path(tempfile.gettempdir()) / "zam-stop-does-not-exist.sh"
-        with mock.patch.object(control, "STOP_SCRIPT", absent):
+        with mock.patch.object(control, "stop_script", return_value=absent):
             outcome = control.stop("t_a1b2c3d4")
         self.assertFalse(outcome.ok)
         self.assertIn("not installed", outcome.message)
+
+    def test_the_kill_switch_is_looked_for_where_the_installer_put_it(self) -> None:
+        # It was hardcoded to ~/.hermes while `install-hermes.sh` honours
+        # CUZAM_HERMES_HOME, so on a machine that configures one the Stop
+        # control reported "not installed" — it failed safe, which is why nobody
+        # noticed that the only control able to end a run had gone. The same bug
+        # inside zam-stop.sh was found on review; this is its other half.
+        with tempfile.TemporaryDirectory() as home:
+            with mock.patch.dict("os.environ", {"CUZAM_HERMES_HOME": home}):
+                self.assertEqual(
+                    control.stop_script(),
+                    Path(home) / "scripts" / "zam-stop.sh",
+                )
+            # And the documented fallback is still the default location.
+            with mock.patch.dict("os.environ", {}, clear=True):
+                self.assertEqual(
+                    control.stop_script(),
+                    Path.home() / ".hermes" / "scripts" / "zam-stop.sh",
+                )
 
 
 if __name__ == "__main__":
@@ -466,7 +485,10 @@ class LaunchCoreTests(unittest.TestCase):
             "base_branch": "main",
             "repositories": {"Kaffecard": str(self.repo)},
             "flows": {
-                "classic": {"description": "existing loop"},
+                # `builtin` included, as the shipped configuration has it: the
+                # launcher decides which of two programs to spawn on this key, so
+                # a fixture without it describes a flow that does not exist.
+                "classic": {"description": "existing loop", "builtin": "classic"},
                 "full": {"description": "plan, build, review, repair, verify, PR"},
             },
         }
@@ -526,6 +548,28 @@ class LaunchCoreTests(unittest.TestCase):
         self.assertFalse(outcome.ok)
         self.assertIn("already active", outcome.message)
         spawned.assert_not_called()
+
+    def test_unattended_on_classic_says_it_changed_nothing(self) -> None:
+        # Silently accepted and dropped before. `unattended` is read only by the
+        # staged runner; run-loop.sh never looks at it and pins acceptEdits with
+        # no broker, so a classic run cannot prompt anyone regardless. Classic
+        # became launchable for the first time in this change, so the flag is
+        # newly reachable from the CLI and the dashboard checkbox.
+        with mock.patch.object(launch, "start_flow", return_value=""), \
+             mock.patch.object(launch, "pin_branch_to_base", return_value=""), \
+             mock.patch.object(launch, "blocking_findings", return_value=[]), \
+             mock.patch.object(launch, "unchecked_findings", return_value=[]), \
+             mock.patch.object(launch, "active_runs", return_value=[]), \
+             mock.patch.object(launch, "_task_id", return_value="t_a1b2c3"), \
+             mock.patch.object(launch.subprocess, "run") as board, \
+             mock.patch.object(launch.events, "emit"):
+            board.return_value = subprocess.CompletedProcess([], 0, "t_a1b2c3", "")
+            classic = launch.launch("Kaffecard", "XARI-42", "classic", unattended=True)
+            quiet = launch.launch("Kaffecard", "XARI-42", "classic")
+
+        self.assertTrue(classic.ok)
+        self.assertIn("--unattended changed nothing", classic.message)
+        self.assertNotIn("--unattended", quiet.message)
 
     def test_a_busy_fleet_can_be_overridden(self) -> None:
         with mock.patch.object(launch, "blocking_findings", return_value=[]), \

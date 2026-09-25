@@ -88,6 +88,78 @@ class RuntimeResolutionTest(unittest.TestCase):
         self.assertEqual(identity["tree"], "dirty")
 
 
+class ClassicScriptResolutionTest(unittest.TestCase):
+    """The classic loop is a shell program, so pinning it needs its own answer.
+
+    `flow_interpreter` pins the interpreter, which does nothing for a script the
+    interpreter never sees: before the dispatcher decoupling the classic loop was
+    pinned by a symlink the installer moved, and the launcher never resolved it
+    at all because the launcher never started a classic run.
+    """
+
+    def setUp(self) -> None:
+        holder = tempfile.TemporaryDirectory()
+        self.addCleanup(holder.cleanup)
+        self.home = Path(holder.name)
+        self.env = {"CUZAM_STATE_HOME": str(self.home)}
+
+    def pin_script(self) -> Path:
+        script = self.home / "runtime" / runtime.CLASSIC_SCRIPT_PATH
+        script.parent.mkdir(parents=True)
+        script.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+        script.chmod(0o755)
+        return script
+
+    def test_a_pinned_runtime_supplies_the_classic_script(self) -> None:
+        script = self.pin_script()
+
+        found, warning = runtime.flow_script(self.env)
+
+        self.assertEqual(found, script)
+        self.assertEqual(warning, "")
+
+    def test_without_a_runtime_it_falls_back_to_the_checkout_and_says_so(self) -> None:
+        # Same trade as the interpreter: refusing would cost an install that has
+        # not pinned yet the ability to dispatch at all.
+        found, warning = runtime.flow_script(self.env)
+
+        self.assertTrue(found.is_file(), f"{found} should be this checkout's own copy")
+        self.assertIn("development checkout", warning)
+        self.assertIn("make install-runtime", warning)
+
+    def test_a_half_cloned_runtime_falls_back_rather_than_pointing_at_nothing(self) -> None:
+        # link-loop-runner.sh probes the script and not its directory for this
+        # reason: a half-cloned runtime has the tree without the file, and
+        # pointing at it breaks every classic run.
+        (self.home / "runtime" / runtime.CLASSIC_SCRIPT_PATH).parent.mkdir(parents=True)
+
+        found, warning = runtime.flow_script(self.env)
+
+        self.assertTrue(found.is_file())
+        self.assertIn("development checkout", warning)
+
+    def test_the_script_path_is_one_both_liveness_matchers_recognise(self) -> None:
+        # The load-bearing invariant, and the reason this test names runs.py.
+        # `runs.CLASSIC_SCRIPT` and the awk in scripts/live-runs.sh both identify
+        # a classic run by a command line ending in
+        # `loop-runner/scripts/run-loop.sh`. Spawn it from any other path and
+        # neither implementation can see the run: it reads as dead while it
+        # works, and every surface invites the operator to relaunch it. Moving
+        # the script means moving both matchers and the contract test together.
+        from cuzam import runs
+
+        pinned, _ = runtime.flow_script(self.env)
+        self.pin_script()
+        unpinned, _ = runtime.flow_script(self.env)
+
+        for path in (pinned, unpinned):
+            self.assertTrue(
+                str(path).endswith(runs.CLASSIC_SCRIPT),
+                f"{path} does not end with {runs.CLASSIC_SCRIPT} — "
+                "both liveness implementations would miss a run spawned from it",
+            )
+
+
 class LaunchUsesTheRuntimeTest(unittest.TestCase):
     """The launcher stays where you invoked it; the flow does not."""
 

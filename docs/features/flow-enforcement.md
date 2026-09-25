@@ -3,7 +3,7 @@ id: flow-enforcement
 title: Flow Enforcement
 status: implemented  # proposed | in-progress | implemented | deprecated
 created_at: 2026-08-27
-last_modified: 2026-08-27
+last_modified: 2026-09-24
 owner: project
 depends_on: [autonomous-coding, custom-model-flows]
 acceptance_criteria:
@@ -14,6 +14,8 @@ non_goals:
   - NOT gating tasks that are not loop tasks
   - NOT relying on the event log, which is deliberately best effort
   - NOT preventing a worker from editing files, only from calling it done
+  - NOT the thing that keeps an agent out of a loop, which is the launcher
+    owning the spawn; this only stops an agent calling a loop task done
 ---
 
 # Flow Enforcement
@@ -57,6 +59,20 @@ Hooks are per profile, and the worker runs under `zam-worker`. Declaring the
 guard only in the top-level config would leave the one process it exists to
 gate entirely ungated, so the installer sets it on the worker profile, with
 `hooks_auto_accept` because a detached worker has no TTY to consent at.
+
+## Scope after the dispatcher decoupling
+
+Nothing in normal service calls `kanban_complete` any more. Runs are started by
+the launcher and report their own outcome, and no worker agent is dispatched, so
+the guard now gates a path that should not be taken rather than one in routine
+use. It stays armed, and that is a decision rather than an oversight.
+
+It still fires on what remains reachable: a task assigned to `zam-worker` by
+hand, or `kanban.default_assignee` being set, either of which puts an agent back
+in front of a loop task. Retiring a guard because its path became unreachable is
+how the path comes back ungated — and this path cost a pull request that deleted
+HSTS, `X-Frame-Options`, `nosniff`, Referrer-Policy, Permissions-Policy and
+DNS-prefetch while claiming to be a config rename.
 
 ## Out of scope
 

@@ -12,24 +12,35 @@
 # Run from the task's worktree (the dispatcher sets cwd to the workspace).
 set -u
 
-# This script runs in the FOREGROUND and must keep doing so. It used to
-# detach into its own session, which was wrong for a reason that is not
-# obvious: Hermes supervises a task by the liveness of the worker pid it
-# spawned, and a worker that exits while its task is still `running` is
-# recorded as a protocol violation that trips the circuit breaker on the
-# FIRST occurrence. Detaching therefore got every run marked crashed about
-# two minutes in, however well the flow was going. Heartbeats do not help —
-# `heartbeat_worker` is explicitly "orthogonal to the PID check".
+# This script must not detach, and the reason changed on 2026-09-24 without the
+# rule changing. Both reasons are worth keeping, because the old one is what
+# makes the new arrangement correct.
 #
-# So the worker holds this script for the whole flow, and the pid Hermes
-# watches is a pid that is genuinely doing the work. The runner reports the
-# outcome itself, which moves the task out of `running` BEFORE the worker
-# exits, so the clean-exit sweep never sees it.
+# It used to run in the foreground of a Hermes worker. Detaching there was wrong
+# for a reason that is not obvious: Hermes supervises a task by the liveness of
+# the worker pid it spawned, and a worker that exits while its task is still
+# `running` is recorded as a protocol violation that trips the circuit breaker on
+# the FIRST occurrence. Detaching therefore got every run marked crashed about
+# two minutes in, however well the flow was going. Heartbeats did not help —
+# `heartbeat_worker` is explicitly "orthogonal to the PID check". The conclusion
+# written here at the time was that taking the loop out of Hermes' dispatcher
+# entirely was the fix, not detaching underneath a supervisor counting pids.
 #
-# The corollary, for whoever is tempted to background this again: the loop
-# now dies if the gateway restarts mid-flow. That is a real cost and the
-# accepted one. Taking the loop out of Hermes's dispatcher entirely is the
-# fix, not detaching underneath a supervisor that is counting pids.
+# That is what happened. `cuzam/dash/launch.py` spawns this script itself, in its
+# own session, with the task claimed and deliberately unassigned so no worker can
+# be given it. There is no worker pid being counted any more, so the old hazard
+# is gone — and with it the cost the old comment accepted, that the loop died
+# whenever the gateway restarted.
+#
+# It still must not detach, for a different reason: this process IS the run as
+# far as every surface is concerned. `cuzam/runs.py` and `scripts/live-runs.sh`
+# both identify a classic run by this script's command line and report this pid
+# as its runner, and `zam-stop.sh` kills it by a signature built from the same
+# argv. A version that forked and returned would leave all three watching a pid
+# that had exited: the fleet view would call a working run dead and invite a
+# relaunch, and stop would report success having killed a shell that was already
+# gone. Staying in the foreground of the session the launcher made is what keeps
+# the pid everything watches a pid that is doing the work.
 
 # The loop needs claude, codex and the node toolchain, and it does not get to
 # choose who launches it. A run started from the dashboard inherits launchd's
@@ -124,7 +135,12 @@ if [[ ! "$BOARD" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
   echo "run-loop: board id contains unsafe characters" >&2
   exit 2
 fi
-PID_DIR="$HOME/.hermes/kanban/$BOARD/pids"
+# The same ladder install-hermes.sh resolves, so the record lands where every
+# reader looks: reap.sh, zam-stop.sh and cuzam/runs.py all resolve it this way.
+# It was `$HOME/.hermes` in four places, which agreed until one of them had to
+# change.
+HERMES_DIR="${CUZAM_HERMES_HOME:-${RISTRETTO_HERMES_HOME:-${HERMES_HOME:-$HOME/.hermes}}}"
+PID_DIR="$HERMES_DIR/kanban/$BOARD/pids"
 REC="$PID_DIR/$TASK_ID.json"
 # -P resolves the skill symlink. The installed skill lives at
 # ~/.hermes/skills/software-development/loop-runner but is a link into this
@@ -208,8 +224,46 @@ if [ "$FLOW" != "classic" ]; then
 fi
 
 mkdir -p "$PID_DIR"
+# Claude's output is buffered here and written to stdout when the run ends. The
+# launcher points that stdout at the run's `flow.out`, so a classic run's log
+# fills in two parts: this script's own commentary as it goes, and Claude's in
+# one block at the end.
+#
+# Streaming it instead — `> >(tee "$OUT")` — was tried on 2026-09-24 and reverted
+# the same day. Process substitution forks a shell that does NOT exec, so `ps`
+# shows it carrying THIS script's argv, task id and all. Both `cuzam/runs.py` and
+# `scripts/live-runs.sh` identify a classic run by exactly that, so every run
+# would have been counted twice, and the fork outlives the loop (tee holds on
+# until its stdin closes) — leaving a phantom that reads as live after a stop,
+# refuses `make update`, and makes zam-stop.sh report NOT STOPPED forever. A
+# `| tee` is worse still: `$!` becomes tee's pid and Guard 4 loses the child.
+# If this is worth revisiting, the shape has to be one that execs.
 OUT="$(mktemp)"
+# TERM and INT are trapped rather than left to the default, which does not run
+# the EXIT trap: a stopped run used to lose everything Claude had said and leak
+# its temporary file. `zam-stop.sh` sends TERM before KILL precisely so the run
+# can do this.
+# Printed at most once per attempt. `run_once` flushes on the clean path and the
+# signal traps flush too, and several seconds of network calls sit between them —
+# the grep below, the event emit, `gh pr list`, `kanban complete` — so a TERM
+# arriving in that window would otherwise print Claude's whole output again.
+#
+# A flag rather than truncating the file: `$OUT` is still read after the flush,
+# by the grep that decides whether Claude was unavailable. Emptying it made that
+# check silently stop firing, which the suite caught — the auth failure would
+# have been reported as an ordinary failure with no reason.
+#
+# Reset per attempt, where $OUT itself is emptied, so a resume followed by a
+# fresh run still prints both.
+FLUSHED=0
+flush() {
+  [ "$FLUSHED" = "1" ] && return 0
+  cat "$OUT" 2>/dev/null
+  FLUSHED=1
+}
 trap 'rm -f "$OUT"' EXIT
+trap 'flush; rm -f "$OUT"; exit 143' TERM
+trap 'flush; rm -f "$OUT"; exit 130' INT
 
 new_session_id() {
   uuidgen | tr '[:upper:]' '[:lower:]'
@@ -243,10 +297,14 @@ run_once() {  # $1 = fresh|resume — sets RC + RUN_ELAPSED
   fi
 
   : > "$OUT"
+  FLUSHED=0
   # S-3: permission mode is pinned here and only here. Never add
   # a permission-bypass flag to this invocation.
   # Namespaced form required: bare /loop-dev only resolves in interactive mode.
   local started_at=$SECONDS
+  # A simple command with a redirection, so `$!` is Claude's own pid — the reap
+  # record and every liveness surface depend on that, and both a pipeline and a
+  # process substitution break it in different ways. See the note by $OUT.
   claude "${args[@]}" >"$OUT" 2>&1 &
   CLAUDE_PID=$!
   LSTART="$(ps -p "$CLAUDE_PID" -o lstart= | sed 's/^ *//;s/ *$//')"
@@ -262,7 +320,7 @@ run_once() {  # $1 = fresh|resume — sets RC + RUN_ELAPSED
     echo "run-loop: child gone before record (pid=$CLAUDE_PID)" >&2
     wait "$CLAUDE_PID"; RC=$?
     RUN_ELAPSED=$((SECONDS - started_at))
-    cat "$OUT"
+    flush
     return 0
   fi
 
@@ -272,7 +330,7 @@ run_once() {  # $1 = fresh|resume — sets RC + RUN_ELAPSED
   wait "$CLAUDE_PID"; RC=$?
   RUN_ELAPSED=$((SECONDS - started_at))
   rm -f "$REC"
-  cat "$OUT"
+  flush
 }
 
 # Pipeline telemetry. Never allowed to fail the loop it is describing: the
