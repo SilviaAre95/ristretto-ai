@@ -251,7 +251,7 @@ class ControlActionTests(unittest.TestCase):
         # take. That must not be translated into a cheerful success.
         completed = subprocess.CompletedProcess([], 1, "NOT STOPPED: worker still alive", "")
         with tempfile.NamedTemporaryFile(suffix=".sh") as script, \
-             mock.patch.object(control, "STOP_SCRIPT", Path(script.name)), \
+             mock.patch.object(control, "stop_script", return_value=Path(script.name)), \
              mock.patch.object(control.subprocess, "run", return_value=completed), \
              mock.patch.object(control.events, "emit"):
             outcome = control.stop("t_a1b2c3d4")
@@ -269,10 +269,29 @@ class ControlActionTests(unittest.TestCase):
 
     def test_missing_kill_switch_is_reported_not_crashed(self) -> None:
         absent = Path(tempfile.gettempdir()) / "zam-stop-does-not-exist.sh"
-        with mock.patch.object(control, "STOP_SCRIPT", absent):
+        with mock.patch.object(control, "stop_script", return_value=absent):
             outcome = control.stop("t_a1b2c3d4")
         self.assertFalse(outcome.ok)
         self.assertIn("not installed", outcome.message)
+
+    def test_the_kill_switch_is_looked_for_where_the_installer_put_it(self) -> None:
+        # It was hardcoded to ~/.hermes while `install-hermes.sh` honours
+        # CUZAM_HERMES_HOME, so on a machine that configures one the Stop
+        # control reported "not installed" — it failed safe, which is why nobody
+        # noticed that the only control able to end a run had gone. The same bug
+        # inside zam-stop.sh was found on review; this is its other half.
+        with tempfile.TemporaryDirectory() as home:
+            with mock.patch.dict("os.environ", {"CUZAM_HERMES_HOME": home}):
+                self.assertEqual(
+                    control.stop_script(),
+                    Path(home) / "scripts" / "zam-stop.sh",
+                )
+            # And the documented fallback is still the default location.
+            with mock.patch.dict("os.environ", {}, clear=True):
+                self.assertEqual(
+                    control.stop_script(),
+                    Path.home() / ".hermes" / "scripts" / "zam-stop.sh",
+                )
 
 
 if __name__ == "__main__":

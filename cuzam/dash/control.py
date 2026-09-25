@@ -18,9 +18,21 @@ from pathlib import Path
 from typing import NamedTuple
 
 from .. import events
+from ..config import hermes_home
 from ..runs import SAFE_TASK_ID
 
-STOP_SCRIPT = Path.home() / ".hermes" / "scripts" / "zam-stop.sh"
+
+def stop_script() -> Path:
+    """The kill switch, where the installer actually put it.
+
+    Resolved rather than hardcoded to `~/.hermes`, because `install-hermes.sh`
+    honours `CUZAM_HERMES_HOME` and friends. This was hardcoded, so on a machine
+    that configures a Hermes home the Stop control reported "kill switch not
+    installed" — it failed safe, which is why it went unnoticed, but the one
+    control that ends a run was simply gone. The same bug inside `zam-stop.sh`
+    was fixed on review; this is its other half.
+    """
+    return hermes_home() / "scripts" / "zam-stop.sh"
 
 
 class Outcome(NamedTuple):
@@ -47,11 +59,12 @@ def stop(task_id: str, actor: str = "dashboard", timeout: int = 180) -> Outcome:
     """
     if not SAFE_TASK_ID.fullmatch(task_id):
         return Outcome(False, "invalid task id")
-    if not STOP_SCRIPT.is_file():
-        return Outcome(False, f"kill switch not installed at {STOP_SCRIPT}")
+    script = stop_script()
+    if not script.is_file():
+        return Outcome(False, f"kill switch not installed at {script}")
     try:
         result = subprocess.run(
-            ["bash", str(STOP_SCRIPT), task_id],
+            ["bash", str(script), task_id],
             capture_output=True,
             text=True,
             check=False,

@@ -444,25 +444,39 @@ def stalled_runs() -> list[dict[str, str]]:
     return stalled
 
 
+# The markers a run writes before it does anything else, one per shape.
+# `run-loop.sh` writes `loop.json`; the staged runner writes `flow.json`. Both
+# are read, because a run started by the launcher is only one of the two — and
+# reading only `loop.json` made the pull-request check inert for every staged
+# flow, including the shipped default. The docstring claimed both were read
+# while the code read one, which is the kind of gap a docstring can hide.
+RUN_MARKERS = ("loop.json", "flow.json")
+
+
 def run_started_at(repo: str, task_id: str) -> int | None:
     """When this run began, from the marker it wrote itself, or None.
 
-    `run-loop.sh` writes `loop.json` before anything else and the staged runner
-    writes `flow.json` beside it, both under `runs.run_dir`. Read here to date a
-    run against a pull request, which is the only way to tell a PR this run
-    opened from one that was already on the branch.
+    Used to date a run against a pull request, which is the only way to tell a PR
+    this run opened from one that was already on the branch.
     """
     from .. import runs
 
     directory = runs.run_dir(Path(repo) / WORKTREE_DIR / task_id, task_id)
-    marker = directory / "loop.json"
-    if not marker.is_file():
-        return None
-    try:
-        started = json.loads(marker.read_text(encoding="utf-8")).get("started")
-    except (OSError, ValueError):
-        return None
-    return int(started) if isinstance(started, (int, float)) else None
+    for name in RUN_MARKERS:
+        marker = directory / name
+        if not marker.is_file():
+            continue
+        try:
+            started = json.loads(marker.read_text(encoding="utf-8")).get("started")
+            # OverflowError, not just ValueError: a `started` of 1e400 parses as
+            # float('inf') and `int()` on it raises OverflowError, which is not a
+            # ValueError. An unreadable marker must return "I do not know" — this
+            # is the recovery path and crashing is the one thing it must not do.
+            if isinstance(started, (int, float)):
+                return int(started)
+        except (OSError, ValueError, OverflowError, TypeError):
+            continue
+    return None
 
 
 def open_pull_request(repo: str, branch: str, since: int | None = None) -> str:
@@ -494,25 +508,44 @@ def open_pull_request(repo: str, branch: str, since: int | None = None) -> str:
     try:
         found = subprocess.run(
             ["gh", "pr", "list", "--head", branch, "--state", "all",
-             "--json", "url,createdAt", "--jq", ".[0].url + \" \" + .[0].createdAt"],
+             "--json", "url,createdAt,state"],
             cwd=repo, capture_output=True, text=True, check=False, timeout=60,
         )
     except (OSError, subprocess.SubprocessError):
         return ""
     if found.returncode != 0:
         return ""
-    parts = (found.stdout or "").strip().split(" ", 1)
-    if len(parts) != 2 or not parts[0].startswith("http"):
-        return ""
-    url, created = parts
     try:
-        # `gh` prints RFC 3339 in UTC; fromisoformat handles the Z from 3.11.
-        opened = int(
-            datetime.fromisoformat(created.replace("Z", "+00:00")).timestamp()
-        )
+        listed = json.loads(found.stdout or "[]")
     except ValueError:
         return ""
-    return url if opened >= since else ""
+    if not isinstance(listed, list):
+        return ""
+    for entry in listed:
+        if not isinstance(entry, dict):
+            continue
+        url = str(entry.get("url") or "")
+        if not url.startswith("http"):
+            continue
+        # A closed-unmerged pull request is work somebody rejected, so it must
+        # not block a restart — and it would block it forever, because the branch
+        # is deterministic per issue and stays the newest PR on that head. Open
+        # and merged both mean the flow has nothing left to do; `--state all`
+        # without this filter refused all three alike.
+        if str(entry.get("state") or "").upper() not in ("OPEN", "MERGED"):
+            continue
+        try:
+            # `gh` prints RFC 3339 in UTC; fromisoformat handles the Z from 3.11.
+            opened = int(
+                datetime.fromisoformat(
+                    str(entry.get("createdAt") or "").replace("Z", "+00:00")
+                ).timestamp()
+            )
+        except ValueError:
+            continue
+        if opened >= since:
+            return url
+    return ""
 
 
 def relaunch(target: str = "", config_path: Path | None = None) -> Outcome:
@@ -575,6 +608,17 @@ def relaunch(target: str = "", config_path: Path | None = None) -> Outcome:
     if not (repo and issue and flow and branch):
         return Outcome(False, f"{task_id}: the task body does not say what to run", task_id)
 
+    # Checked again on the way back in, because `launch` validated these and this
+    # path did not. Nothing here reaches a shell — every call is an argv list —
+    # but `repo` becomes a subprocess working directory and the base of a path
+    # that gets read, and `issue` reaches the model's prompt. The board is local
+    # and ours, so this is depth rather than a hole; the asymmetry is the part
+    # worth removing, since a reader would reasonably assume both paths validate.
+    if not ISSUE_KEY.fullmatch(issue):
+        return Outcome(False, f"{task_id}: {issue!r} in the task body is not an issue key", task_id)
+    if not Path(repo).is_dir():
+        return Outcome(False, f"{task_id}: {repo} is not there any more", task_id)
+
     already = open_pull_request(repo, branch, run_started_at(repo, task_id))
     if already:
         return Outcome(
@@ -611,36 +655,33 @@ def relaunch(target: str = "", config_path: Path | None = None) -> Outcome:
 def _task_body(task_id: str) -> dict[str, str]:
     """The `key: value` lines `launch` wrote into the task body.
 
-    `model` is read as well as the four locators, so a relaunch of a classic run
-    keeps the tier the first attempt used. Without it a run queued as `sonnet`
-    came back on the Claude default and nothing said so.
+    Read from `--json`, where the body is its own field, rather than scraped out
+    of the human listing. Two attempts at the latter were wrong in opposite
+    directions: scanning every line also matched the header block, which repeats
+    `branch:` (harmlessly, same value) and carries a `model:` line that is a
+    provider model id rather than one of our tiers — enough to make an otherwise
+    restartable run unrelaunchable. Skipping to a line spelled exactly `Body:`
+    fixed that and created a worse failure: a heading that is ever absent,
+    reworded or indented would yield nothing at all, and *every* relaunch would
+    report "the task body does not say what to run". Nothing exercised it,
+    because every test patches this function.
 
-    Scoped to what follows `Body:`, which is not fussiness. `kanban show` prints
-    a header block first, in the same `key: value` shape, and it has a `branch:`
-    line of its own — harmless only because it carries the same value. It also
-    has a `model:` line for a task with `model_override` set, and that value is a
-    provider model id rather than one of our tiers, so reading the header would
-    hand `start_flow` something it refuses and make an otherwise restartable run
-    unrelaunchable. No CLI flag writes `model_override` today, so this is a trap
-    rather than a live bug — but the function claimed to read the body and did
-    not, and the next key added to either side would decide which.
+    The field has no header to collide with and no heading to find.
+    `cuzam/runs.py` already reads it this way — `_body_field` — so this is the
+    convention rather than a new idea.
     """
     shown = subprocess.run(
-        ["hermes", "kanban", "show", task_id],
+        ["hermes", "kanban", "show", "--json", task_id],
         capture_output=True, text=True, check=False, timeout=120,
     )
+    try:
+        payload = json.loads(shown.stdout or "")
+    except ValueError:
+        return {}
+    task = payload.get("task", payload) if isinstance(payload, dict) else {}
+    body = str((task or {}).get("body") or "")
     found: dict[str, str] = {}
-    in_body = False
-    for line in (shown.stdout or "").splitlines():
-        if not in_body:
-            # The body runs from `Body:` to the next section heading.
-            in_body = line.strip() == "Body:"
-            continue
-        # A section heading ends the body: unindented and ending in a colon.
-        # Our own keys are excluded, so a contract line written with an empty
-        # value reads as a missing value rather than as the end of the body.
-        if re.match(r"^\S.*:\s*$", line) and not BODY_KEY.match(line):
-            break
+    for line in body.splitlines():
         match = BODY_KEY.match(line)
         if match:
             found.setdefault(match.group(1), match.group(2))

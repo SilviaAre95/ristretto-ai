@@ -170,6 +170,37 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   first run's still-open PR and could never be restarted — with advice to
   complete a task that had done no work. Only a pull request newer than the run
   counts as the run's own.
+- **The relaunch pull-request check was inert for every staged flow**, including
+  `full`, the shipped default. It dated a run by `loop.json`, which only
+  `run-loop.sh` writes, so a launcher-started staged run had no start time and
+  the check was skipped — the exact harm it was added to prevent, on the most
+  common path. The runner records `started` in `flow.json` now and both markers
+  are read. The docstring had claimed both were read while the code read one.
+- **A closed pull request made an issue permanently unrelaunchable.** The check
+  queried `--state all`, and since the branch is deterministic per issue a PR a
+  reviewer had closed as the wrong approach stayed the newest one on that head
+  forever. Open and merged still refuse a restart; closed-unmerged does not.
+- **`relaunch` read the task body out of the human listing.** Scanning every line
+  matched `kanban show`'s header block; skipping to a line spelled exactly
+  `Body:` fixed that and would have failed *every* relaunch had the heading ever
+  differed, with nothing exercising it. It reads the `--json` body field now,
+  which has no header and no heading — the way `cuzam/runs.py` already did.
+- **The stop's liveness cross-check matched a task id unanchored**, while the
+  kill signatures are anchored for that reason. Ids are variable length, so
+  stopping `t_abc123` while `t_abc1234` ran reported `NOT STOPPED` with the other
+  run's pid — a stop that worked, surfaced as a failure.
+- **The dashboard could not find the kill switch on a configured Hermes home.**
+  `control.py` hardcoded `~/.hermes` while the installer honours
+  `CUZAM_HERMES_HOME`; it failed safe, reporting "not installed", which is why
+  nobody noticed the one control able to end a run had gone. Python resolves the
+  Hermes home the way the installers do now, in one place.
+- **A stop surfaced a Python traceback into the dashboard.** An unknown id makes
+  `kanban show --json` print nothing, and the inline parser's traceback went to
+  stderr, which the dashboard shows verbatim — pushing the real `NOT STOPPED`
+  line out of view and leaking an interpreter path with it.
+- **A corrupt run marker crashed `cuzam relaunch`.** `{"started": 1e400}` parses
+  as infinity and `int()` on it raises `OverflowError`, which is not a
+  `ValueError` — so the recovery path died on a partially written file.
 - **`zam-stop.sh` assumed `~/.hermes`.** The installer honours
   `CUZAM_HERMES_HOME`, so on any install that sets it both the verified reap and
   the new liveness verification silently fell back — the second reintroducing

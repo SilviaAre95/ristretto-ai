@@ -66,8 +66,16 @@ bash "$HERMES_DIR/skills/software-development/loop-runner/scripts/reap.sh" "$TAS
 #    Re-block in case the task was promoted during stages 2-3.
 hermes kanban block "$TASK_ID" 2>/dev/null || true
 
+# python's stderr is discarded too, not just hermes'. An unknown or archived id
+# makes `kanban show` print nothing, `json.load` raise, and the traceback went to
+# this script's stderr — which cuzam/dash/control.py captures and surfaces in the
+# dashboard verbatim. So the Stop button showed a JSONDecodeError and an
+# interpreter path above the real NOT STOPPED line, which is both a leak and the
+# message that mattered pushed out of view. An empty state is already handled
+# below as `state=unknown`, which is the honest answer.
 TASK_STATE=$(hermes kanban show --json "$TASK_ID" 2>/dev/null \
-  | python3 -c "import json,sys;d=json.load(sys.stdin);print(d.get('task',d).get('status',''))")
+  | python3 -c "import json,sys;d=json.load(sys.stdin);print(d.get('task',d).get('status',''))" \
+    2>/dev/null)
 
 # Every signature again: "no worker pids" was vacuously true for a run that
 # never had a worker, which is what made the false-green possible. A shape
@@ -96,7 +104,16 @@ WORKER_PIDS=$( for SIGNATURE in "${SIGNATURES[@]}"; do
 LIVE_RUNS="$HERMES_DIR/scripts/live-runs.sh"
 STILL_LIVE=""
 if [ -f "$LIVE_RUNS" ]; then
-  STILL_LIVE="$(bash "$LIVE_RUNS" 2>/dev/null | grep -F -- "$TASK_ID" || true)"
+  # Matched as a whole argument, not as a substring. The kill signatures above
+  # are anchored with `( |$)` for exactly this reason and this check was not:
+  # task ids are variable length (`t_[0-9a-f]{6,}`), so one can be a strict
+  # prefix of another, and stopping `t_abc123` while `t_abc1234` ran would have
+  # reported NOT STOPPED with the other run's pid folded in — a stop that worked,
+  # surfaced to the dashboard as a failure. Field comparison rather than a
+  # pattern, so nothing in the id needs escaping.
+  STILL_LIVE="$(bash "$LIVE_RUNS" 2>/dev/null \
+    | awk -v want="$TASK_ID" '{ for (i = 2; i <= NF; i++) if ($i == want) { print; next } }' \
+    || true)"
 else
   echo "zam-stop: $LIVE_RUNS is missing — verifying by kill signature only;" \
        "run make update to install it" >&2

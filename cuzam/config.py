@@ -76,15 +76,31 @@ def user_env_path(environ: Mapping[str, str] | None = None) -> Path:
     return user_config_path(environ).parent / "env"
 
 
+# The environment variables `install-hermes.sh` and `link-loop-runner.sh`
+# resolve, in their order. Python honoured only the last of the three, so the
+# installer and the package disagreed about where Hermes lives on any machine
+# that set one of the others — and a path built on the wrong answer fails as
+# "not installed" rather than as a misconfiguration.
+HERMES_HOME_VARS = ("CUZAM_HERMES_HOME", "RISTRETTO_HERMES_HOME", "HERMES_HOME")
+
+
+def hermes_home(environ: Mapping[str, str] | None = None) -> Path:
+    """Where Hermes keeps its own state, resolved the way the installers do."""
+    env = os.environ if environ is None else environ
+    for name in HERMES_HOME_VARS:
+        value = str(env.get(name) or "").strip()
+        if value:
+            return Path(value).expanduser()
+    return Path.home() / ".hermes"
+
+
 def hermes_env_path(environ: Mapping[str, str] | None = None) -> Path:
     """Hermes' secrets file, which this machine already treats as canonical.
 
     A filename belonging to another project, so it is named here rather than
     inline — the same reason `seam.py` exists. Read, never written.
     """
-    env = os.environ if environ is None else environ
-    home = Path(env.get("HERMES_HOME", Path.home() / ".hermes")).expanduser()
-    return home / ".env"
+    return hermes_home(environ) / ".env"
 
 
 def parse_env_file(path: Path) -> dict[str, str]:

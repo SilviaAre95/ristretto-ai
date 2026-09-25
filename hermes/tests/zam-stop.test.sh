@@ -39,7 +39,11 @@ printf '#!/usr/bin/env bash\necho "$1" > "%s/reap-called"\n' "$HOME" > "$REAP_ST
 cat > "$FAKEBIN/hermes" <<'EOF'
 #!/usr/bin/env bash
 if [ "${1:-} ${2:-}" = "kanban show" ]; then
-  printf '{"task": {"status": "%s"}}\n' "${ZAM_TEST_STATUS:-blocked}"
+  # `__silent__` stands for an unknown or archived id, which the real board
+  # answers with no output at all.
+  if [ "${ZAM_TEST_STATUS:-blocked}" != "__silent__" ]; then
+    printf '{"task": {"status": "%s"}}\n' "${ZAM_TEST_STATUS:-blocked}"
+  fi
 fi
 exit 0
 EOF
@@ -68,6 +72,17 @@ ZAM_TEST_STATUS=in_progress bash "$SCRIPT" t-live > "$HOME/out" 2>&1
 RC=$?
 t "unblocked task exits non-zero" "[ $RC -ne 0 ]"
 t "unblocked task reports NOT STOPPED" "grep -q 'NOT STOPPED: task t-live' '$HOME/out'"
+
+# 4b. An unknown id must not surface a Python traceback. `kanban show` prints
+#     nothing for one, `json.load` raises, and the traceback went to this
+#     script's stderr — which cuzam/dash/control.py captures and shows in the
+#     dashboard verbatim, pushing the real NOT STOPPED line out of view and
+#     leaking an interpreter path with it.
+ZAM_TEST_STATUS=__silent__ bash "$SCRIPT" t-unknown > "$HOME/out-nojson" 2>&1 || true
+t "an unreadable board answer does not surface a traceback" \
+  "! grep -qE 'Traceback|JSONDecodeError|json/decoder' '$HOME/out-nojson'"
+t "and it still reports the state honestly as unknown" \
+  "grep -q 'state=unknown' '$HOME/out-nojson'"
 
 # 5. Archived counts as stopped (dispatcher can't pick it up again)
 ZAM_TEST_STATUS=archived bash "$SCRIPT" t-arch > "$HOME/out" 2>&1
@@ -190,6 +205,26 @@ t "and it never claims the guard was missing" \
 
 mv "$LIVE_STUB.hidden" "$LIVE_STUB"
 rm -rf "$ELSEWHERE"
+
+# A task id that is a strict prefix of a live one must not be reported as still
+# running. Ids are variable length, so `t_abc123` is a prefix of `t_abc1234`; the
+# kill signatures anchor with `( |$)` and this cross-check did not, so a stop
+# that worked surfaced to the dashboard as a failure with the other run's pid.
+PREFIX_LONG="t_abc1234"
+bash "$SHAPE_DIR/loop-runner/scripts/run-loop.sh" "$PREFIX_LONG" XARI-1 --flow classic &
+LONG_PID=$!
+sleep 1
+t "the longer-id run is live to live-runs.sh" \
+  "bash '$LIVE_STUB' | grep -qF '$PREFIX_LONG'"
+
+bash "$SCRIPT" t_abc123 > "$HOME/out-prefix" 2>&1
+PREFIX_RC=$?
+t "stopping a prefix of a live id is not reported as still running" \
+  "[ $PREFIX_RC -eq 0 ] && ! grep -q 'still live and matched no kill signature' '$HOME/out-prefix'"
+t "and the longer-id run was left alone" "kill -0 $LONG_PID 2>/dev/null"
+
+kill -KILL "$LONG_PID" 2>/dev/null
+wait "$LONG_PID" 2>/dev/null
 
 kill -KILL "$UNKNOWN_PID" 2>/dev/null
 wait "$UNKNOWN_PID" 2>/dev/null

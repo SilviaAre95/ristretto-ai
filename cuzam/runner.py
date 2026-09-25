@@ -1402,6 +1402,13 @@ def execute(args: argparse.Namespace) -> int:
                 "flow": args.flow,
                 "issue": args.issue,
                 "base": base,
+                # When this run began, matching the key `run-loop.sh` writes into
+                # `loop.json`. `relaunch` dates a pull request against it to tell
+                # one this run opened from one that was already on the branch —
+                # the branch is deterministic per issue, so without a date every
+                # earlier PR on it looks like this run's. Absent here, that check
+                # was inert for every staged flow, the shipped default included.
+                "started": int(time.time()),
                 "verify_sha256": expected_verify_digest,
                 "stage_timeout": pinned_stage_timeout,
                 "runner": runner_identity(),

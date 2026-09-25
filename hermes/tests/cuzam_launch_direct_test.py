@@ -434,6 +434,12 @@ class RelaunchTest(unittest.TestCase):
         patcher = mock.patch.object(launch, "open_pull_request", return_value="")
         self.no_pr = patcher.start()
         self.addCleanup(patcher.stop)
+        # A real directory, because relaunch now checks the repo the board named
+        # is still there — a run whose checkout has moved cannot be restarted in
+        # it, and saying so beats shelling out into nothing.
+        holder = tempfile.TemporaryDirectory()
+        self.addCleanup(holder.cleanup)
+        self.repo = holder.name
 
     def stalled(self, **kwargs):
         return mock.patch.object(launch, "stalled_runs", return_value=[kwargs])
@@ -474,7 +480,7 @@ class RelaunchTest(unittest.TestCase):
         # What you remember is the issue, not that it became t_2741d851.
         with self.stalled(task_id="t_aaa111", issue="XARI-123", status="running"), \
              mock.patch.object(launch, "_task_body", return_value={
-                 "repo": "/tmp/r", "issue": "XARI-123",
+                 "repo": self.repo, "issue": "XARI-123",
                  "flow": "full", "branch": "xariprojects/xari-123"}), \
              mock.patch.object(launch, "start_flow", return_value="") as started, \
              mock.patch.object(launch.subprocess, "run") as board, \
@@ -484,14 +490,14 @@ class RelaunchTest(unittest.TestCase):
 
         self.assertTrue(outcome.ok)
         started.assert_called_once()
-        self.assertEqual(started.call_args.args[0], "/tmp/r")
+        self.assertEqual(started.call_args.args[0], self.repo)
 
     def test_it_reuses_the_existing_branch_and_worktree(self) -> None:
         # Resuming the flow, not the stage: anything preserve_work committed
         # is on that branch, and cutting a fresh one would orphan it.
         with self.stalled(task_id="t_aaa111", issue="XARI-9", status="running"), \
              mock.patch.object(launch, "_task_body", return_value={
-                 "repo": "/tmp/r", "issue": "XARI-9",
+                 "repo": self.repo, "issue": "XARI-9",
                  "flow": "full", "branch": "xariprojects/xari-9"}), \
              mock.patch.object(launch, "start_flow", return_value="") as started, \
              mock.patch.object(launch.subprocess, "run") as board, \
@@ -506,7 +512,7 @@ class RelaunchTest(unittest.TestCase):
         # default and nothing said so — a silent change of model mid-issue.
         with self.stalled(task_id="t_aaa111", issue="XARI-9", status="running"), \
              mock.patch.object(launch, "_task_body", return_value={
-                 "repo": "/tmp/r", "issue": "XARI-9", "model": "sonnet",
+                 "repo": self.repo, "issue": "XARI-9", "model": "sonnet",
                  "flow": "classic", "branch": "xariprojects/xari-9"}), \
              mock.patch.object(launch, "start_flow", return_value="") as started, \
              mock.patch.object(launch.subprocess, "run") as board, \
@@ -525,7 +531,7 @@ class RelaunchTest(unittest.TestCase):
         self.no_pr.return_value = "https://github.com/o/r/pull/7"
         with self.stalled(task_id="t_aaa111", issue="XARI-9", status="running"), \
              mock.patch.object(launch, "_task_body", return_value={
-                 "repo": "/tmp/r", "issue": "XARI-9",
+                 "repo": self.repo, "issue": "XARI-9",
                  "flow": "classic", "branch": "xariprojects/xari-9"}), \
              mock.patch.object(launch, "start_flow") as started, \
              mock.patch.object(launch.subprocess, "run") as board:
@@ -541,6 +547,33 @@ class RelaunchTest(unittest.TestCase):
             self.assertNotIn("reclaim", call.args[0])
             self.assertNotIn("unblock", call.args[0])
 
+    def test_a_board_issue_key_that_is_not_one_is_refused(self) -> None:
+        # `launch` validates the issue key; this path took the board's word for
+        # it. Nothing reaches a shell, so this is depth rather than a hole — the
+        # asymmetry is the part worth removing.
+        with self.stalled(task_id="t_aaa111", issue="XARI-9", status="running"), \
+             mock.patch.object(launch, "_task_body", return_value={
+                 "repo": self.repo, "issue": "; rm -rf /",
+                 "flow": "classic", "branch": "b"}), \
+             mock.patch.object(launch, "start_flow") as started:
+            outcome = launch.relaunch()
+
+        self.assertFalse(outcome.ok)
+        self.assertIn("not an issue key", outcome.message)
+        started.assert_not_called()
+
+    def test_a_repo_that_has_moved_is_said_so_rather_than_shelled_into(self) -> None:
+        with self.stalled(task_id="t_aaa111", issue="XARI-9", status="running"), \
+             mock.patch.object(launch, "_task_body", return_value={
+                 "repo": "/nowhere/at/all", "issue": "XARI-9",
+                 "flow": "classic", "branch": "b"}), \
+             mock.patch.object(launch, "start_flow") as started:
+            outcome = launch.relaunch()
+
+        self.assertFalse(outcome.ok)
+        self.assertIn("is not there any more", outcome.message)
+        started.assert_not_called()
+
     def test_an_unreadable_task_body_is_not_guessed_at(self) -> None:
         with self.stalled(task_id="t_aaa111", issue="XARI-9", status="running"), \
              mock.patch.object(launch, "_task_body", return_value={"issue": "XARI-9"}), \
@@ -550,6 +583,61 @@ class RelaunchTest(unittest.TestCase):
         self.assertFalse(outcome.ok)
         self.assertIn("does not say what to run", outcome.message)
         started.assert_not_called()
+
+
+class TaskBodyTest(unittest.TestCase):
+    """The body parser, called for real.
+
+    Every relaunch test patches `_task_body` wholesale, so two wrong versions of
+    it shipped unnoticed: one scanned the whole human listing and matched the
+    header block, the other skipped to a line spelled exactly `Body:` and would
+    have returned nothing — failing *every* relaunch — had that heading ever
+    differed. It reads the `--json` body field now, which has neither problem.
+    """
+
+    def shown(self, payload: str):
+        return mock.patch.object(
+            launch.subprocess, "run",
+            return_value=subprocess.CompletedProcess([], 0, payload, ""),
+        )
+
+    def test_it_asks_for_the_machine_readable_form(self) -> None:
+        # Asserted on the argv, not only on the parsing. Without this the test
+        # passed with `--json` removed, because the mock returns JSON whatever is
+        # asked for — the human listing is what carried the header this parser
+        # exists to avoid.
+        with self.shown(json.dumps({"task": {"body": "issue: XARI-9"}})) as run:
+            launch._task_body("t_abc123")
+        self.assertIn("--json", run.call_args.args[0])
+
+    def test_it_reads_the_contract_lines_out_of_the_body_field(self) -> None:
+        body = ("issue: XARI-9\nrepo: /tmp/r\nbranch: xariprojects/xari-9\n"
+                "flow: classic\nmodel: sonnet")
+        with self.shown(json.dumps({"task": {"body": body}})):
+            self.assertEqual(launch._task_body("t_abc123"), {
+                "issue": "XARI-9", "repo": "/tmp/r",
+                "branch": "xariprojects/xari-9", "flow": "classic",
+                "model": "sonnet",
+            })
+
+    def test_a_header_outside_the_body_cannot_reach_it(self) -> None:
+        # `kanban show`'s header repeats `branch:` and carries a `model:` line
+        # that is a provider model id, not one of our tiers — reading it made an
+        # otherwise restartable run unrelaunchable. The field has no header.
+        payload = json.dumps({"task": {
+            "branch": "header-branch",
+            "model": "qwen3.6:35b-mlx",
+            "body": "issue: XARI-9\nrepo: /tmp/r\nbranch: real-branch\nflow: classic",
+        }})
+        with self.shown(payload):
+            found = launch._task_body("t_abc123")
+        self.assertEqual(found["branch"], "real-branch")
+        self.assertNotIn("model", found)
+
+    def test_an_unreadable_answer_is_empty_rather_than_a_guess(self) -> None:
+        for payload in ("", "not json", "[]", "{}", '{"task": null}'):
+            with self.subTest(payload=payload), self.shown(payload):
+                self.assertEqual(launch._task_body("t_abc123"), {})
 
 
 class OpenPullRequestTest(unittest.TestCase):
@@ -574,7 +662,10 @@ class OpenPullRequestTest(unittest.TestCase):
         # `--jq` prints an empty line when there are no pull requests, and
         # "null" when a field is absent. None of these is a PR, and treating one
         # as one would make every relaunch refuse.
-        for output in ("", "\n", "null null\n", "  \n", "https://x/1\n"):
+        for output in ("", "not json", "[]", "{}", "null",
+                       '[{"url": null, "createdAt": null, "state": "OPEN"}]',
+                       '[{"url": "https://x/1", "state": "OPEN"}]',
+                       '[{"url": "https://x/1", "createdAt": "nonsense", "state": "OPEN"}]'):
             with self.subTest(output=output), \
                  mock.patch.object(launch.subprocess, "run") as gh:
                 gh.return_value = subprocess.CompletedProcess([], 0, output, "")
@@ -598,7 +689,9 @@ class OpenPullRequestTest(unittest.TestCase):
         for label, (created, expected) in cases.items():
             with self.subTest(label), mock.patch.object(launch.subprocess, "run") as gh:
                 gh.return_value = subprocess.CompletedProcess(
-                    [], 0, f"https://github.com/o/r/pull/7 {created}\n", ""
+                    [], 0,
+                    json.dumps([{"url": "https://github.com/o/r/pull/7",
+                                 "createdAt": created, "state": "OPEN"}]), "",
                 )
                 self.assertEqual(
                     launch.open_pull_request("/tmp/r", "b", since=since), expected
@@ -611,10 +704,31 @@ class OpenPullRequestTest(unittest.TestCase):
             self.assertEqual(launch.open_pull_request("/tmp/r", "b", since=None), "")
             gh.assert_not_called()
 
-    def test_the_start_time_comes_from_the_marker_the_run_wrote(self) -> None:
-        # run-loop.sh writes loop.json before it does anything else, which is why
-        # the completion guard trusts it: telemetry being unavailable must never
-        # look like a loop that never ran.
+    def test_a_corrupt_marker_does_not_crash_the_recovery_path(self) -> None:
+        # `{"started": 1e400}` parses as float('inf') and `int()` on it raises
+        # OverflowError, which is NOT a ValueError — so the original except
+        # clause missed it and `cuzam relaunch` died on a partially written
+        # marker. Crashing is the one thing a recovery path must not do.
+        from cuzam import runs
+
+        holder = tempfile.TemporaryDirectory()
+        self.addCleanup(holder.cleanup)
+        repo = Path(holder.name)
+        directory = runs.run_dir(repo / launch.WORKTREE_DIR / "t_abc", "t_abc")
+        directory.mkdir(parents=True)
+
+        for raw in ('{"started": 1e400}', '{"started": -1e400}',
+                    '{"started": "soon"}', '{"started": null}', "garbage", "{}"):
+            with self.subTest(raw=raw):
+                (directory / "loop.json").write_text(raw, encoding="utf-8")
+                self.assertIsNone(launch.run_started_at(str(repo), "t_abc"))
+
+    def test_the_start_time_comes_from_either_shape_s_marker(self) -> None:
+        # Both, not just `loop.json`. Only `run-loop.sh` writes that one, so a
+        # staged flow — `full`, the shipped default — never had a start time, and
+        # the pull-request check was skipped for every staged run: exactly the
+        # harm it was added to prevent, on the most common path. The docstring
+        # said both markers were read while the code read one.
         from cuzam import runs
 
         holder = tempfile.TemporaryDirectory()
@@ -626,11 +740,46 @@ class OpenPullRequestTest(unittest.TestCase):
         self.assertIsNone(launch.run_started_at(str(repo), "t_abc"),
                           "no marker means no answer, not a guess")
 
-        (directory / "loop.json").write_text('{"started": 1758700000}', encoding="utf-8")
-        self.assertEqual(launch.run_started_at(str(repo), "t_abc"), 1758700000)
+        for name in launch.RUN_MARKERS:
+            with self.subTest(marker=name):
+                (directory / name).write_text('{"started": 1758700000}', encoding="utf-8")
+                self.assertEqual(launch.run_started_at(str(repo), "t_abc"), 1758700000)
+                (directory / name).unlink()
 
+        # A corrupt first marker must not mask a good second one.
         (directory / "loop.json").write_text("not json at all", encoding="utf-8")
-        self.assertIsNone(launch.run_started_at(str(repo), "t_abc"))
+        (directory / "flow.json").write_text('{"started": 1758700001}', encoding="utf-8")
+        self.assertEqual(launch.run_started_at(str(repo), "t_abc"), 1758700001)
+
+    def test_the_staged_runner_records_when_it_started(self) -> None:
+        # The other half: reading flow.json is no use unless the runner writes a
+        # `started` key into it, which it did not.
+        source = Path("cuzam/runner.py").read_text(encoding="utf-8")
+        marker = source[source.index('artifacts / "flow.json"'):][:900]
+        self.assertIn('"started"', marker,
+                      "flow.json must carry a start time or the PR check is inert")
+
+    def test_a_closed_pull_request_does_not_block_a_restart_forever(self) -> None:
+        # The branch is deterministic per issue and stays the newest PR on that
+        # head, so a reviewer closing one as the wrong approach would have made
+        # the issue permanently unrelaunchable, with no flag to override.
+        cases = {
+            "OPEN": "https://github.com/o/r/pull/7",
+            "MERGED": "https://github.com/o/r/pull/7",
+            "CLOSED": "",
+        }
+        since = 1758700000
+        for state, expected in cases.items():
+            with self.subTest(state=state), mock.patch.object(launch.subprocess, "run") as gh:
+                gh.return_value = subprocess.CompletedProcess(
+                    [], 0,
+                    json.dumps([{"url": "https://github.com/o/r/pull/7",
+                                 "createdAt": "2026-09-24T10:00:00Z",
+                                 "state": state}]), "",
+                )
+                self.assertEqual(
+                    launch.open_pull_request("/tmp/r", "b", since=since), expected
+                )
 
 
 class ClippedDescriptionTest(unittest.TestCase):
