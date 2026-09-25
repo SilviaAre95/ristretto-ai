@@ -28,11 +28,8 @@ acceptance_criteria:
     open a pull request arrives as environment, never as a readable path
   - An unattended run opens its pull request — scope does not depend on
     attendance in either direction
-  - A denied read appears in the run's log as a denial, so a stage that dies on
-    a forgotten path is diagnosable without rerunning it. This requires the
-    spawn to carry `--output-format stream-json` (or `--verbose`): under the
-    default text format only the final assistant message reaches stdout, so an
-    intermediate denial reaches the log only if the model mentions it
+  - A denial that kills a stage is diagnosable from the run's log without
+    rerunning it, and the spawn's output format is unchanged
 non_goals:
   - NOT scoping network access — a stage that can reach the API can exfiltrate
   - NOT a replacement for the approval gate, which decides writes and commands
@@ -57,9 +54,10 @@ test_plan:
     `.claude/settings.json` with a wide `permissions.allow`, run a staged
     stage against it, and assert the session's effective settings are Cuzam's."
   - "End to end, the incident: drive a classic run on an issue whose context
-    exists only outside the scope. Require that the run finishes, that the
-    denial is in `loop.log`, and that the run did not spend its hour at
-    prompts."
+    exists only outside the scope. Require that the run finishes, that it did not
+    spend its hour at prompts, and that the out-of-scope path was never read.
+    Do not assert on `loop.log` for a denial inside a tool call — see the limit
+    named in Behavior."
 ---
 
 # Filesystem Scoping
@@ -82,17 +80,29 @@ for, one prompt at a time, was the whole home directory.
 
 ## Behavior
 
-### One principle first: no credential is ever a readable path
+### One principle first, and its one exception
 
-Every credential a stage needs arrives as **environment on the process that
-needs it** — the model credential and the publishing credential alike. None of
-them is a path inside the scope. Claude Code supports exactly this
-(`ANTHROPIC_API_KEY` or an `apiKeyHelper` supplied through `--settings`), and
-the runner already does it for locally served providers.
+**A credential a stage needs arrives as environment on the process that needs
+it, not as a path inside the scope.** That covers the publishing credential and
+the git identity, and the runner already does it for locally served providers.
+A stage cannot then be handed a directory that happens to contain a credential,
+which is what keeps the cases below from each needing their own reasoning.
 
-This is not a stylistic preference. It is what makes the rest of the scope
-model possible: a stage cannot be handed a directory that happens to contain a
-credential, so the awkward cases below resolve the same way every time.
+**The model credential is the exception, and pretending otherwise would break
+the product.** An earlier draft of this spec stated the principle without one and
+denied `~/.claude/.credentials.json` by name. This project deliberately runs on
+Claude Code's OAuth session with no API key — a test pins that, as the reason a
+Claude provider must never get `--bare` — so denying that file breaks
+authentication for every cloud stage and for `classic`. It propagates, too:
+the preflight probe would fail to authenticate, report "did not answer", and the
+fail-closed rule would then refuse every launch on the machine.
+
+So `~/.claude/.credentials.json` is **granted read-only**, and that is a named
+residual exposure rather than a solved problem: a stage can read the operator's
+Claude OAuth token. It is already using it, which bounds the marginal risk but
+does not remove it. Moving model auth to an environment key would close it and
+is carried as an open question, because it changes a deliberate product decision
+and is not this spec's to make.
 
 ### The unit of scope
 
@@ -109,30 +119,49 @@ A stage's scope is built from these parts, and everything not in them is denied.
   stage read and write concurrent runs' temp files and plant files that
   out-of-sandbox processes later read. `claude`, `git`, `gh` and the verify gate
   all need somewhere to write; they do not need that somewhere to be shared;
-- the session scratch a stage actually needs under `~/.claude`, and **nothing
-  else there** — `.credentials.json`, `settings.json`, `projects/`, `sessions/`,
-  `history.jsonl`, `plugins/`, `plans/` and the operator's global `CLAUDE.md` are
-  all denied by name. Granting the directory wholesale would have been the
-  `.git/hooks` escape again one bullet later: a stage that can write
-  `~/.claude/settings.json` installs a `PreToolUse` hook that runs as the
-  operator, outside the sandbox, in their next session. And `projects/` holds
-  every other project's transcripts and memory, which is the same material the
-  motivating incident was about.
+- under `~/.claude`, only what a session provably needs, and the split is
+  read-only versus read-write rather than granted versus denied:
+  **read-only** `plugins/` — because `classic`'s entire prompt is
+  `/harness:loop-dev <ISSUE>`, a plugin-provided slash command, so a session that
+  cannot read it runs for an hour on a literal string — and
+  `.credentials.json`, for the reason above; **read-write** only this run's own
+  `projects/<slug>/` transcript directory, because `classic` is built on
+  `--session-id` then `--resume` and its transcript lives there, and the spec
+  requires the resume to run under the same profile. The slug is derived from the
+  working directory, which the launcher knows, so it can be named precisely
+  rather than granted as a tree;
+  **denied** `settings.json`, `history.jsonl`, `plans/`, the operator's global
+  `CLAUDE.md`, and *every other* `projects/<slug>/`.
 
-  `plans/` is denied for that second reason too, which costs something and is
-  worth being explicit about. A `plan` stage has been observed writing there, so
-  that write will now fail. It is a shared cross-session directory, exactly like
-  `projects/`, so granting it would let a stage read and overwrite the operator's
-  plans for unrelated work — and a plan whose only copy is outside the worktree
-  is not one the flow uses anyway. The flow's plan is `plan.md` in the run
-  directory, which is in scope;
+  The reasoning behind each side, since an earlier draft got this wrong in both
+  directions. `settings.json` must not be writable because that is the
+  `.git/hooks` escape again — a stage that writes it installs a `PreToolUse` hook
+  that runs as the operator, outside the sandbox, in their next session. Other
+  projects' `projects/<slug>/` must stay denied because they hold every other
+  project's transcripts and memory, which is the same material the motivating
+  incident was about. But `plugins/` and this run's own transcript are not that
+  material; denying them by name, as an earlier draft did, breaks `classic`
+  outright, and the write-escape argument that justified the denial argues for
+  read-only, not for denial.
+
+  `plans/` stays denied, which costs something and is worth being explicit
+  about. A `plan` stage has been observed writing there, so that write will now
+  fail. It is shared across sessions exactly as `projects/` is, and a plan whose
+  only copy is outside the worktree is not one the flow uses — the flow's plan is
+  `plan.md` in the run directory, which is in scope;
 - a narrowed set inside `<repo>/.git`: `objects/`, `worktrees/<own-task-id>/`,
   `refs/heads/<own-branch>`, `refs/remotes/origin/<own-branch>`, `logs/`,
   `packed-refs`, `info/exclude`, and the `FETCH_HEAD`/`ORIG_HEAD` pair. The
   remote tracking ref is not optional and is easy to miss: a successful push
   updates it, and in this checkout those are loose files in the shared `.git`
   with none packed — so omitting it reproduces the `-u` failure below, where the
-  push succeeds and git *then* exits non-zero failing to lock a ref. `.git` cannot be excluded — a worktree's `.git`
+  push succeeds and git *then* exits non-zero failing to lock a ref.
+
+  Read-only alongside them: `refs/heads/<base>` and
+  `refs/remotes/origin/<base>`. Every stage prompt carries `Diff base: <base>`
+  and the `review` role's instruction is to review the diff against it, so
+  without those two refs the review and verify stages fail at their first
+  `git diff <base>...HEAD` — and they are loose files here, with none packed. `.git` cannot be excluded — a worktree's `.git`
   is a file pointing into the primary checkout's `.git/worktrees/<task-id>`, so
   a worktree-only scope breaks git outright — but it must not be granted whole,
   for two separate reasons. `hooks/` and `config` are the escape: a stage that
@@ -204,9 +233,14 @@ So both stores stay outside the scope, and the broker stops being a subprocess
 of `claude`. It becomes a process the launcher starts outside the sandbox, which
 `claude` reaches over a socket or local HTTP MCP transport rather than
 `command:` — the store is then owned by a process the stage cannot write to. This
-changes `broker_config()` and it is a prerequisite of the inner layer, not a
-detail of it: until it is done, a gated stage with a writable store is worse
-than a gated stage with no scope at all.
+changes `broker_config()`, and it is a prerequisite of the **outer** layer — the
+one that goes on all three spawn sites at once — not of the inner one. An earlier
+draft attached it to the inner layer, which would have meant the first step of
+the rollout put the profile in place while the broker was still a `command:`
+subprocess opening a store under the denied state home: every gated stage would
+fail its first permission request. The ordering is not a detail. A gated stage
+with a writable store is worse than a gated stage with no scope at all, and a
+gated stage with an unreachable store does not run.
 
 ### Publishing without a readable credential
 
@@ -313,6 +347,15 @@ Cuzam's payload, which contradicts computing the scope from Cuzam's configuratio
 alone and could not be pinned by a test. So the criterion is not "carry the
 hooks"; it is that **stages run without discovered hooks, and the OS layer is
 what replaces them.**
+
+**And `classic` loses its hooks too, by a different route.** It keeps discovered
+settings, since it does not get `--restricted` — but the operator's hook commands
+point at scripts outside every granted read, so under the profile those hooks
+fail rather than run. That is the same outcome as the staged stages reach through
+`--restricted`, arrived at silently instead of by decision, which is worse. Either
+the generator grants the hook commands' paths read-only, or the spec says plainly
+that no flow runs with the operator's hooks; it should not be an accident of which
+paths happened to be listed.
 
 That is worth stating rather than glossing, because dropping `--bare` was
 justified by "hooks are the only hard enforcement boundary a stage has —
@@ -438,7 +481,25 @@ A denied read surfaces as a tool error inside the stage, and the stage's log
 keeps it, so a stage that dies on a path the profile forgot is diagnosable
 without rerunning it.
 
-No new event kind is promised here, and the reason is worth stating rather than
+**The output format does not change, and an earlier draft was wrong to require
+it.** That draft asked for `--output-format stream-json` so intermediate denials
+would reach the log. A staged stage's stdout *is* its artifact — the runner writes
+it verbatim to `plan.md`, `review.md` and the rest, later stages consume those as
+inputs, and the `pr` stage's URL is parsed out of one — so switching the format
+would turn every artifact into a JSON event stream and break the PR extraction.
+The rollout also gives `classic` the profile path and nothing else, so it would
+not have got the flag anyway.
+
+What is achievable without touching the artifact stream, stated as the limit it
+is: a denial that **kills the stage** is on the process's stderr, which both spawn
+sites already capture into the log, so the case the criterion exists for — a stage
+dying on a path the profile forgot — is diagnosable. A denial **inside a tool
+call** is a tool result the model sees, and reaches the log only if the model
+mentions it. Closing that needs a channel out of band from the artifact, and the
+macOS system log already records every sandbox violation with its path, which is
+the candidate to verify during implementation rather than to promise here.
+
+No new event kind is promised either, and the reason is worth stating rather than
 leaving as an omission. `events.py` is a closed vocabulary — a new kind is a
 deliberate change there and in the fleet-view reader — and more awkwardly, the
 only process that sees a kernel denial is the one inside the scope. The parent
@@ -487,6 +548,15 @@ rule stays: a flow is only as good as the issue's context being present.
 
 ## Open questions
 
+- [ ] **Every flag this spec depends on needs a test that fails when its meaning
+      changes.** The CLI moved from 2.1.282 to 2.1.283 during the session that
+      wrote this spec. `--restricted`, `--add-dir`, `--settings` and
+      `--permission-mode` are all load-bearing here, and their semantics are
+      Claude Code's to change; a scope that silently stops confining anything
+      after an upgrade is exactly the guarantee-that-rots trap. Pinning the
+      *flags* is not enough — the test that matters is the one that asserts a
+      read outside scope actually fails, because that one keeps answering the
+      question after the flags change under it.
 - [ ] **`--restricted` makes some work unapprovable on an unattended staged
       stage.** It lets only a person or the configured permission handler
       approve writes to settings, git and tool-configuration files — and an
@@ -537,6 +607,34 @@ rule stays: a flow is only as good as the issue's context being present.
       — so it is not folded in here. But it makes the credential question
       disappear rather than narrow, and it should be decided rather than
       drifted past.
+- [ ] **Should model auth move to an environment key?** Today it is the one
+      credential that stays a readable path, because this project deliberately
+      runs on the OAuth session with no API key and a test pins that. An
+      environment key would make the credential principle hold without an
+      exception and remove the last credential file from every stage's scope. It
+      changes a deliberate product decision, so it is not this spec's call.
+- [ ] **`~/.claude` can be relocated per run, and that is probably the design
+      rather than the carve-out list above.** `CLAUDE_CONFIG_DIR` relocates the
+      config directory — credentials, `settings.json`, `projects/` transcripts and
+      `plugins/` all move with it. A per-run directory would make the isolation a
+      property of the layout instead of a property of a profile, which is the
+      same argument as one git directory per run below, and it is the one the
+      evidence in this spec's own history supports: three revisions got the
+      grant-and-deny list wrong in both directions, twice creating the next
+      review round's highest-severity finding.
+
+      Two things make it real work rather than a swap, and they are why it is a
+      question and not a decision. The launcher would have to **seed** the
+      per-run directory, because a fresh one has no plugins — and `classic`'s
+      entire prompt is a plugin-provided slash command. And the **credential does
+      not follow for free**: on macOS the OAuth credential prefers the keychain,
+      whose entry is keyed by the config directory, so a relocated run would find
+      no credential at all unless model auth moves to an environment key. That
+      ties this question to the one above; answering both together is cheaper
+      than answering either alone.
+
+      Sourced from Claude Code's documentation, **not verified first-hand here.**
+      Verify before building on it.
 - [ ] **A shared `.git` is why cross-run isolation needs narrowing at all.**
       The set above is narrow enough to keep runs out of each other's worktree
       metadata and refs, but it is a list of carve-outs in a directory three
@@ -559,7 +657,7 @@ Not contractual. Where the boundary would land, given what is there today:
   Same discipline as `runs.run_dir()`, which was three places that had drifted.
 - **Four spawn sites exist**, and three need the wrapper:
   `cuzam/runner.py:411` (`runner_command`, every staged stage),
-  `hermes/skills/loop-runner/scripts/run-loop.sh:280` (classic, which owns the
+  `hermes/skills/loop-runner/scripts/run-loop.sh:308` (classic, which owns the
   S-3 permission pin), and `cuzam/runner.py:661` (the provider preflight probe,
   which already runs in a scratch directory and is the cheapest place to prove
   the wrapper works). The fourth, `cuzam/assistant/loop.py:86`, is out of scope

@@ -133,8 +133,8 @@ request is outstanding.
 
 ## The context boundary
 
-**On a staged flow, no stage goes to your issue tracker itself — Cuzam goes,
-before any model starts.** The multi-stage runner assembles `context.md` into
+**On a staged flow, Cuzam fetches the issue before any model starts, so no stage
+has to go looking for it.** The multi-stage runner assembles `context.md` into
 the run's artifact directory and prepends it to every stage's inputs: the issue
 title and body when a tracker credential is configured, and up to three matching
 vault notes, clipped. It carries a line telling the stage to treat all of it as
