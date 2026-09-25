@@ -135,7 +135,12 @@ if [[ ! "$BOARD" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
   echo "run-loop: board id contains unsafe characters" >&2
   exit 2
 fi
-PID_DIR="$HOME/.hermes/kanban/$BOARD/pids"
+# The same ladder install-hermes.sh resolves, so the record lands where every
+# reader looks: reap.sh, zam-stop.sh and cuzam/runs.py all resolve it this way.
+# It was `$HOME/.hermes` in four places, which agreed until one of them had to
+# change.
+HERMES_DIR="${CUZAM_HERMES_HOME:-${RISTRETTO_HERMES_HOME:-${HERMES_HOME:-$HOME/.hermes}}}"
+PID_DIR="$HERMES_DIR/kanban/$BOARD/pids"
 REC="$PID_DIR/$TASK_ID.json"
 # -P resolves the skill symlink. The installed skill lives at
 # ~/.hermes/skills/software-development/loop-runner but is a link into this
@@ -238,7 +243,24 @@ OUT="$(mktemp)"
 # the EXIT trap: a stopped run used to lose everything Claude had said and leak
 # its temporary file. `zam-stop.sh` sends TERM before KILL precisely so the run
 # can do this.
-flush() { cat "$OUT" 2>/dev/null; }
+# Printed at most once per attempt. `run_once` flushes on the clean path and the
+# signal traps flush too, and several seconds of network calls sit between them —
+# the grep below, the event emit, `gh pr list`, `kanban complete` — so a TERM
+# arriving in that window would otherwise print Claude's whole output again.
+#
+# A flag rather than truncating the file: `$OUT` is still read after the flush,
+# by the grep that decides whether Claude was unavailable. Emptying it made that
+# check silently stop firing, which the suite caught — the auth failure would
+# have been reported as an ordinary failure with no reason.
+#
+# Reset per attempt, where $OUT itself is emptied, so a resume followed by a
+# fresh run still prints both.
+FLUSHED=0
+flush() {
+  [ "$FLUSHED" = "1" ] && return 0
+  cat "$OUT" 2>/dev/null
+  FLUSHED=1
+}
 trap 'rm -f "$OUT"' EXIT
 trap 'flush; rm -f "$OUT"; exit 143' TERM
 trap 'flush; rm -f "$OUT"; exit 130' INT
@@ -275,6 +297,7 @@ run_once() {  # $1 = fresh|resume — sets RC + RUN_ELAPSED
   fi
 
   : > "$OUT"
+  FLUSHED=0
   # S-3: permission mode is pinned here and only here. Never add
   # a permission-bypass flag to this invocation.
   # Namespaced form required: bare /loop-dev only resolves in interactive mode.

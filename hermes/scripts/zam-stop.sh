@@ -59,7 +59,33 @@ for SIGNATURE in "${SIGNATURES[@]}"; do
 done
 
 # 3. Verified-kill the Claude Code grandchild (Guard 4 — mismatches are never killed).
-bash "$HERMES_DIR/skills/software-development/loop-runner/scripts/reap.sh" "$TASK_ID"
+#
+#    The pid is read BEFORE the reap, because reap.sh removes the record whether
+#    it killed or declined — so after it runs there is nothing left to check
+#    against. That record is the only thing that knows which process Claude is:
+#    `live-runs.sh` matches run-loop.sh and cuzam.runner, and the kill signatures
+#    match those plus the retired worker. None of them match `claude`, and it is
+#    the one process here that edits files and opens pull requests.
+BOARD="${HERMES_KANBAN_BOARD:-default}"
+CLAUDE_PID=""
+if [[ "$BOARD" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+  REC="$HERMES_DIR/kanban/$BOARD/pids/$TASK_ID.json"
+  if [ -f "$REC" ]; then
+    CLAUDE_PID="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('pid',''))" \
+      "$REC" 2>/dev/null || true)"
+  fi
+fi
+
+REAP="$HERMES_DIR/skills/software-development/loop-runner/scripts/reap.sh"
+if [ -f "$REAP" ]; then
+  bash "$REAP" "$TASK_ID"
+else
+  # Unchecked before, and `bash` exiting 127 looks like nothing happening. The
+  # grandchild is the process that can still push, so a missing reaper is said
+  # out loud rather than absorbed.
+  echo "zam-stop: $REAP is missing — the Claude grandchild was not reaped;" \
+       "run make update" >&2
+fi
 
 # 4. Verification pass — catches the race where the worker promotes the task
 #    between stage 1 and stage 3, causing silent false-green in old versions.
@@ -123,6 +149,30 @@ case "$TASK_STATE" in
   blocked|archived|done) STATE_OK=1 ;;
   *) STATE_OK=0 ;;
 esac
+
+# reap.sh always exits 0 and, on an identity mismatch, declines to kill and
+# deletes the record anyway — so "the reaper ran" says nothing about whether the
+# grandchild died. A mismatch is reachable without anything being wrong: LIVE_CWD
+# comes from `lsof`, and an absent or denied probe returns empty, which cannot
+# equal the recorded worktree. Claude then keeps running under
+# `--permission-mode acceptEdits` in the worktree with nothing above it, free to
+# finish and open a pull request, while every other check here passes and the
+# stop reports success. That is the false green this section exists to close,
+# aimed at the only process that can still change the repository.
+CLAUDE_ALIVE=""
+if [ -n "${CLAUDE_PID:-}" ] && [[ "$CLAUDE_PID" =~ ^[0-9]+$ ]] && [ "$CLAUDE_PID" -gt 0 ]; then
+  if kill -0 "$CLAUDE_PID" 2>/dev/null; then
+    CLAUDE_ALIVE="$CLAUDE_PID"
+  fi
+fi
+
+if [ -n "$CLAUDE_ALIVE" ]; then
+  echo "zam-stop: the Claude grandchild pid=$CLAUDE_ALIVE survived the reap for" \
+       "$TASK_ID — it can still edit and push. Guard 4 refuses to kill on an" \
+       "identity mismatch, so check it by hand: ps -p $CLAUDE_ALIVE -o command=" >&2
+  STATE_OK=0
+  WORKER_PIDS="${WORKER_PIDS:+$WORKER_PIDS,}$CLAUDE_ALIVE (claude, unreaped)"
+fi
 
 if [ -n "$STILL_LIVE" ]; then
   echo "zam-stop: a process for $TASK_ID is still live and matched no kill signature:" >&2

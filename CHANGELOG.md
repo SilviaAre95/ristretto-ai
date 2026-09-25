@@ -170,6 +170,30 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   first run's still-open PR and could never be restarted — with advice to
   complete a task that had done no work. Only a pull request newer than the run
   counts as the run's own.
+- **A stop reported success while the one process that can push kept running.**
+  `reap.sh` always exits 0 and, on an identity mismatch, declines to kill and
+  deletes the record anyway — and a mismatch needs nothing to be wrong, because
+  the cwd it compares comes from `lsof` and an absent or denied probe returns
+  empty. Claude then kept running under `--permission-mode acceptEdits` in the
+  worktree, free to finish and open a pull request, while every other check
+  passed. No kill signature and neither liveness implementation matches `claude`,
+  so the stop's verdict now includes whether the recorded grandchild survived,
+  and a missing reaper is reported instead of absorbed as `bash` exiting 127.
+- **A refused relaunch made every later launch fail.** `reclaim` and `unblock`
+  run before the flow is validated, and validation gained four ways to refuse, so
+  a refused relaunch left the task `ready` — which `active_runs` counts, unlike
+  `blocked` — and every subsequent `cuzam launch`, for any issue, was refused
+  with "1 run(s) already active" until someone archived it.
+- **The pid record's path was spelled out in four places**, each hardcoding
+  `~/.hermes` while the installers honour `CUZAM_HERMES_HOME`. They agreed, so
+  nothing broke; one resolver now, because the stop had to read it as a fifth.
+- **`cuzam launch --unattended` silently did nothing on a classic flow**, which
+  is newly reachable since classic became launchable. It is not so much ignored
+  as already true — a classic run pins `acceptEdits` with no broker and cannot
+  prompt — so the launch says so rather than dropping the flag.
+- **A late stop printed a run's output twice**, and fixing that by emptying the
+  buffer broke the check that reports Claude being unavailable. Flushed at most
+  once per attempt instead, with the file left intact for that check.
 - **The relaunch pull-request check was inert for every staged flow**, including
   `full`, the shipped default. It dated a run by `loop.json`, which only
   `run-loop.sh` writes, so a launcher-started staged run had no start time and

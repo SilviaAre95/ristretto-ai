@@ -331,8 +331,37 @@ DONE_LOG="$STREAMBIN/done.out"
 t "a completed run logs Claude's output exactly once" \
   "[ \"\$(grep -c COMPLETED-OUTPUT '$DONE_LOG')\" -eq 1 ]"
 
+# A TERM arriving *after* the run finished must not print the output a second
+# time. run_once flushes on the clean path and the trap flushes too, and several
+# seconds of network calls sit between them — the grep over $OUT, the event emit,
+# `gh pr list`, `kanban complete`. The stub sleeps there so the window is real.
+cat > "$STREAMBIN/claude" <<'LATEEOF'
+#!/usr/bin/env bash
+echo "LATE-OUTPUT"
+exit 0
+LATEEOF
+chmod +x "$STREAMBIN/claude"
+cat > "$STREAMBIN/gh" <<'GHEOF'
+#!/usr/bin/env bash
+sleep 5
+GHEOF
+chmod +x "$STREAMBIN/gh"
+WT5="$(mktemp -d)"; cd "$WT5"
+LATE_LOG="$STREAMBIN/late.out"
+"$SCRIPT" t-late PROJ-04 > "$LATE_LOG" 2>&1 &
+LATE_PID=$!
+# Wait until the flow is past run_once and into the reporting tail.
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  grep -q LATE-OUTPUT "$LATE_LOG" 2>/dev/null && break
+  sleep 0.5
+done
+kill -TERM $LATE_PID 2>/dev/null
+wait $LATE_PID 2>/dev/null
+t "a TERM after the run finished does not reprint the output" \
+  "[ \"\$(grep -c LATE-OUTPUT '$LATE_LOG')\" -eq 1 ]"
+
 cd "$REPO_ROOT"
-rm -rf "$STREAMBIN" "$WT3" "$WT4"
+rm -rf "$STREAMBIN" "$WT3" "$WT4" "$WT5"
 
 echo; echo "run-loop.test.sh: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

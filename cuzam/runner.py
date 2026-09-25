@@ -191,9 +191,12 @@ def runner_identity() -> dict[str, str]:
 
 
 def pid_record(task_id: str) -> Path:
+    """Where the Claude child's reaping record lives. One resolver, shared."""
+    from .config import hermes_home
+
     board = safe_identifier(os.environ.get("HERMES_KANBAN_BOARD", "default"), "board id")
     task = safe_identifier(task_id, "task id")
-    return Path.home() / ".hermes" / "kanban" / board / "pids" / f"{task}.json"
+    return hermes_home() / "kanban" / board / "pids" / f"{task}.json"
 
 
 def process_start(pid: int) -> str:

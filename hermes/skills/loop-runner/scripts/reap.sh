@@ -16,7 +16,9 @@ if [[ ! "$BOARD" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
   echo "reap: board id contains unsafe characters" >&2
   exit 2
 fi
-REC="$HOME/.hermes/kanban/$BOARD/pids/$TASK_ID.json"
+# Resolved the way run-loop.sh writes it and install-hermes.sh installs into.
+HERMES_DIR="${CUZAM_HERMES_HOME:-${RISTRETTO_HERMES_HOME:-${HERMES_HOME:-$HOME/.hermes}}}"
+REC="$HERMES_DIR/kanban/$BOARD/pids/$TASK_ID.json"
 
 [ -f "$REC" ] || exit 0
 

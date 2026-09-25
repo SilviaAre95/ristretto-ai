@@ -574,6 +574,32 @@ class RelaunchTest(unittest.TestCase):
         self.assertIn("is not there any more", outcome.message)
         started.assert_not_called()
 
+    def test_a_refused_relaunch_does_not_poison_every_later_launch(self) -> None:
+        # reclaim + unblock run before start_flow, which now has four ways to
+        # refuse before it claims anything. A task left `ready` is counted by
+        # active_runs — `ready` is in ACTIVE_STATES, `blocked` is not — so one
+        # refused relaunch made every later `cuzam launch`, for any issue, fail
+        # with "1 run(s) already active" until someone archived it.
+        with self.stalled(task_id="t_aaa111", issue="XARI-9", status="running"), \
+             mock.patch.object(launch, "_task_body", return_value={
+                 "repo": self.repo, "issue": "XARI-9",
+                 "flow": "classic", "branch": "b"}), \
+             mock.patch.object(launch, "start_flow", return_value="no such flow"), \
+             mock.patch.object(launch.subprocess, "run") as board, \
+             mock.patch.object(launch.events, "emit"):
+            board.return_value = subprocess.CompletedProcess([], 0, "", "")
+            outcome = launch.relaunch()
+
+        self.assertFalse(outcome.ok)
+        blocked = [c.args[0] for c in board.call_args_list
+                   if len(c.args[0]) > 2 and c.args[0][2] == "block"]
+        self.assertTrue(blocked, f"the task was left ready: {board.call_args_list}")
+        self.assertIn("t_aaa111", blocked[0])
+        # And the order matters: it must be blocked after the reclaim, not before.
+        verbs = [c.args[0][2] for c in board.call_args_list
+                 if len(c.args[0]) > 2 and c.args[0][:2] == ["hermes", "kanban"]]
+        self.assertLess(verbs.index("reclaim"), verbs.index("block"))
+
     def test_an_unreadable_task_body_is_not_guessed_at(self) -> None:
         with self.stalled(task_id="t_aaa111", issue="XARI-9", status="running"), \
              mock.patch.object(launch, "_task_body", return_value={"issue": "XARI-9"}), \
@@ -750,6 +776,23 @@ class OpenPullRequestTest(unittest.TestCase):
         (directory / "loop.json").write_text("not json at all", encoding="utf-8")
         (directory / "flow.json").write_text('{"started": 1758700001}', encoding="utf-8")
         self.assertEqual(launch.run_started_at(str(repo), "t_abc"), 1758700001)
+
+    def test_json_that_is_not_an_object_is_not_a_crash(self) -> None:
+        # `json.loads("null").get(...)` raises AttributeError, which the except
+        # list did not name — so the recovery path crashed on a hand-edited
+        # marker, after its own docstring promised it would not.
+        from cuzam import runs
+
+        holder = tempfile.TemporaryDirectory()
+        self.addCleanup(holder.cleanup)
+        repo = Path(holder.name)
+        directory = runs.run_dir(repo / launch.WORKTREE_DIR / "t_abc", "t_abc")
+        directory.mkdir(parents=True)
+
+        for raw in ("null", "[]", "42", '"a string"', '[{"started": 1}]'):
+            with self.subTest(raw=raw):
+                (directory / "loop.json").write_text(raw, encoding="utf-8")
+                self.assertIsNone(launch.run_started_at(str(repo), "t_abc"))
 
     def test_the_staged_runner_records_when_it_started(self) -> None:
         # The other half: reading flow.json is no use unless the runner writes a

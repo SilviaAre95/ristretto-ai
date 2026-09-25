@@ -488,14 +488,21 @@ def _pid_record(task_id: str) -> dict[str, Any]:
     """What `run-loop.sh` wrote about the Claude child it spawned.
 
     Ours, not Hermes': `run-loop.sh` writes it and `reap.sh` reads and removes
-    it. It lives under `~/.hermes/` because that is where the board's own
+    it. It lives under Hermes' home because that is where the board's own
     per-task state lives, and deliberately outside the worktree so the policed
     process cannot author its own reaping record.
+
+    The path was spelled out in four places, all hardcoding `~/.hermes`. They
+    agreed, so nothing broke — but `zam-stop.sh` needed to read it too, and a
+    fifth copy of a path is how the `.cuzam/runs/<task>` divergence happened.
+    One resolver now, honouring what the installers honour.
     """
+    from .config import hermes_home
+
     board = os.environ.get("HERMES_KANBAN_BOARD", "default")
     if not SAFE_TASK_ID.fullmatch(task_id) or not SAFE_TASK_ID.fullmatch(board):
         return {}
-    record = Path.home() / ".hermes" / "kanban" / board / "pids" / f"{task_id}.json"
+    record = hermes_home() / "kanban" / board / "pids" / f"{task_id}.json"
     try:
         loaded = json.loads(record.read_text(encoding="utf-8"))
     except (OSError, ValueError):

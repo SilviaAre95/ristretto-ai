@@ -14,7 +14,7 @@ SCRIPT="$REPO_ROOT/hermes/scripts/zam-stop.sh"
 #    off $HERMES_DIR, which the script resolves the way install-hermes.sh does;
 #    the test resolves it the same way so it cannot drift from either.
 HERMES_DIR="${CUZAM_HERMES_HOME:-${RISTRETTO_HERMES_HOME:-${HERMES_HOME:-$HOME/.hermes}}}"
-REAP_REF="$(sed -n 's/.*bash "\(\$HERMES_DIR[^"]*reap\.sh\)".*/\1/p' "$SCRIPT")"
+REAP_REF="$(sed -n 's/^REAP="\(\$HERMES_DIR[^"]*reap\.sh\)"$/\1/p' "$SCRIPT")"
 t "script references a reap.sh path" "[ -n '$REAP_REF' ]"
 if [ -f "$(eval echo "$REAP_REF")" ]; then
   t "referenced reap.sh exists under real HOME" "true"
@@ -83,6 +83,50 @@ t "an unreadable board answer does not surface a traceback" \
   "! grep -qE 'Traceback|JSONDecodeError|json/decoder' '$HOME/out-nojson'"
 t "and it still reports the state honestly as unknown" \
   "grep -q 'state=unknown' '$HOME/out-nojson'"
+
+# 4c. A Claude grandchild that survived the reap must fail the stop.
+#
+#     reap.sh always exits 0 and, on an identity mismatch, declines to kill and
+#     deletes the record anyway — and a mismatch needs nothing to be wrong, since
+#     LIVE_CWD comes from `lsof` and an absent or denied probe returns empty.
+#     Claude then keeps running under acceptEdits in the worktree, free to finish
+#     and open a pull request, while every other check passed and the stop said
+#     `stopped:`. It is the only process here that can change the repository, and
+#     no kill signature and neither liveness implementation matches it.
+GRAND_TID="t-grandchild"
+# Same default the script and reap.sh resolve when no board is configured.
+REC_DIR="$HOME/.hermes/kanban/${HERMES_KANBAN_BOARD:-default}/pids"
+mkdir -p "$REC_DIR"
+/bin/sleep 120 &
+GRAND_PID=$!
+printf '{"pid": %d, "lstart": "never matches", "worktree": "/nowhere", "runner": "claude"}\n' \
+  "$GRAND_PID" > "$REC_DIR/$GRAND_TID.json"
+
+# The real reaper, so the decline is genuine rather than simulated.
+install -m 0755 "$REPO_ROOT/hermes/skills/loop-runner/scripts/reap.sh" "$REAP_STUB"
+
+bash "$SCRIPT" "$GRAND_TID" > "$HOME/out-grand" 2>&1
+GRAND_RC=$?
+
+t "the reaper declined to kill on the identity mismatch" \
+  "grep -q 'identity MISMATCH' '$HOME/out-grand'"
+t "the grandchild is still alive, as Guard 4 intends" "kill -0 $GRAND_PID 2>/dev/null"
+t "a surviving grandchild makes the stop report failure" \
+  "[ $GRAND_RC -ne 0 ] && grep -q 'NOT STOPPED' '$HOME/out-grand'"
+t "and it names the pid that can still push" \
+  "grep -q \"$GRAND_PID\" '$HOME/out-grand'"
+
+kill -KILL "$GRAND_PID" 2>/dev/null; wait "$GRAND_PID" 2>/dev/null
+# Put the inert stub back for the cases below.
+printf '#!/usr/bin/env bash\necho "$1" > "%s/reap-called"\n' "$HOME" > "$REAP_STUB"
+chmod +x "$REAP_STUB"
+
+# 4d. A missing reaper must be said out loud, not absorbed as `bash` exiting 127.
+mv "$REAP_STUB" "$REAP_STUB.gone"
+bash "$SCRIPT" t-noreap > "$HOME/out-noreap" 2>&1 || true
+t "a missing reaper is reported, not silently skipped" \
+  "grep -q 'was not reaped' '$HOME/out-noreap'"
+mv "$REAP_STUB.gone" "$REAP_STUB"
 
 # 5. Archived counts as stopped (dispatcher can't pick it up again)
 ZAM_TEST_STATUS=archived bash "$SCRIPT" t-arch > "$HOME/out" 2>&1

@@ -467,7 +467,12 @@ def run_started_at(repo: str, task_id: str) -> int | None:
         if not marker.is_file():
             continue
         try:
-            started = json.loads(marker.read_text(encoding="utf-8")).get("started")
+            loaded = json.loads(marker.read_text(encoding="utf-8"))
+            # `json.loads("null")`, a list or a bare number all parse, and
+            # `.get` on them raises AttributeError — which is not in the list
+            # below, so the recovery path crashed on a hand-edited marker after
+            # its own docstring promised it would not.
+            started = loaded.get("started") if isinstance(loaded, dict) else None
             # OverflowError, not just ValueError: a `started` of 1e400 parses as
             # float('inf') and `int()` on it raises OverflowError, which is not a
             # ValueError. An unreadable marker must return "I do not know" — this
@@ -648,6 +653,19 @@ def relaunch(target: str = "", config_path: Path | None = None) -> Outcome:
                  "model": body.get("model", ""), "dispatched": not problem},
     )
     if problem:
+        # Put it back where it was. `reclaim` and `unblock` above moved it to
+        # `ready`, and `start_flow` now has four ways to refuse before it claims
+        # anything — an unloadable config, a flow deleted from cuzam.yaml, a bad
+        # tier, a missing run-loop.sh. `ready` is in `runs.ACTIVE_STATES` and
+        # `blocked` is not, so a task left ready is counted by `active_runs` and
+        # every later `cuzam launch`, for any issue, is refused with "1 run(s)
+        # already active" until someone archives it. This is the same reasoning
+        # as `give_up` inside `start_flow`, which only covers failures after the
+        # claim.
+        subprocess.run(
+            ["hermes", "kanban", "block", task_id, f"relaunch refused: {problem}"[:200]],
+            capture_output=True, text=True, check=False, timeout=120,
+        )
         return Outcome(False, f"{issue} did not restart: {problem}", task_id)
     return Outcome(True, f"{issue} restarted on {flow} (from plan)", task_id)
 
@@ -892,6 +910,14 @@ def launch(
         return Outcome(False, f"{issue} did not start: {problem}", task_id)
     started = f"{issue} started on {flow}"
     notes = []
+    # Said rather than silently dropped. `unattended` is read only by the staged
+    # runner's `attended()`; `run-loop.sh` never looks at it. It is not ignored
+    # so much as already true — a classic run pins `--permission-mode
+    # acceptEdits` with no permission broker, so it cannot ask anyone anything.
+    # Refusing the flag would be the `--model` rule, but the effect asked for is
+    # the effect you get, so this states it instead.
+    if unattended and is_classic(config, flow):
+        notes.append("classic never prompts, so --unattended changed nothing")
     # The docs promise a launch "says so" when unpinned. On stderr that is a
     # service log nobody reads — the dashboard and the Slack plugin both show
     # Outcome.message and nothing else.
