@@ -212,7 +212,7 @@ class PreflightFlowTest(unittest.TestCase):
 
 
 class LocalProviderCommandTest(unittest.TestCase):
-    """A locally served model needs --bare; a Claude one must never get it."""
+    """A locally served model gets --strict-mcp-config; neither gets --bare."""
 
     def build(self, provider: dict) -> tuple[list[str], dict[str, str]]:
         stage = {"id": "build", "role": "build", "mutates": True}

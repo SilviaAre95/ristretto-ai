@@ -9,8 +9,10 @@ depends_on: [autonomous-coding, custom-model-flows, approval-loop, event-spine]
 acceptance_criteria:
   - "A stage process cannot read a path outside its scope: the generated
     profile, run against a file outside scope, returns a permission error"
-  - The profile is written outside the worktree, so a running stage cannot
-    widen the scope of its own next stage or of a resume
+  - The profile is written outside the worktree, so a running stage cannot widen
+    the scope of its own next stage or of a resume
+  - The approvals store is not writable from inside any stage's scope: a gated
+    stage cannot decide its own pending request
   - "`cuzam launch` refuses before it claims the board task or cuts the
     worktree when the scope cannot be applied"
   - Every *flow* spawn path reaches `claude` with a scope — classic, every
@@ -18,8 +20,10 @@ acceptance_criteria:
     reach it at all. `cuzam chat` is excluded and tracked separately
   - The scope is computed from Cuzam's configuration only, never from files
     committed in the repository being worked on
-  - The settings Cuzam supplies deny at least what the discovered settings
-    they displace denied, and carry the hooks a stage would otherwise have
+  - The settings Cuzam supplies deny at least what the discovered settings they
+    displace denied
+  - No credential is reachable as a path in any stage's scope; model and
+    publishing credentials arrive as environment
   - No stage's scope contains a credential directory; the ability to push and
     open a pull request arrives as environment, never as a readable path
   - An unattended run opens its pull request — scope does not depend on
@@ -75,51 +79,106 @@ for, one prompt at a time, was the whole home directory.
 
 ## Behavior
 
+### One principle first: no credential is ever a readable path
+
+Every credential a stage needs arrives as **environment on the process that
+needs it** — the model credential and the publishing credential alike. None of
+them is a path inside the scope. Claude Code supports exactly this
+(`ANTHROPIC_API_KEY` or an `apiKeyHelper` supplied through `--settings`), and
+the runner already does it for locally served providers.
+
+This is not a stylistic preference. It is what makes the rest of the scope
+model possible: a stage cannot be handed a directory that happens to contain a
+credential, so the awkward cases below resolve the same way every time.
+
 ### The unit of scope
 
-A stage's scope is built from four parts, and everything not in them is denied.
+A stage's scope is built from these parts, and everything not in them is denied.
 
 **Read and write:**
 
-- the worktree, `<repo>/.worktrees/<task-id>`, which is the stage's cwd;
-- its artifact directory, `<worktree>/.cuzam/runs/<task-id>`, which is inside
-  the worktree and so already covered — named here because it is where
-  `context.md` lands;
-- the temporary directory. `claude`, `git`, `gh` and the verify gate all write
-  there, and the provider preflight probe runs with its cwd inside one;
-- Claude Code's own state directory, because a `plan` stage has been observed
-  writing its plan there and the alternative is a stage that dies on its own
-  scratch space;
-- `events.db` and `approvals.db` under the state home, with their sqlite
-  sidecar files. Not a convenience: **the permission broker is an MCP
-  subprocess of `claude`**, so it runs inside this scope, and it opens both.
-  `approvals.py` fails closed, so a broker that cannot open its store denies
-  every gated tool call and kills the run. The rest of the state home stays
-  denied;
-- `<repo>/.git`, **except `hooks/` and `config`, which are read-only**. The
-  directory is not optional: a worktree's `.git` is a file pointing into the
-  primary checkout's `.git/worktrees/<task-id>`, so a worktree-only scope
-  breaks git outright. But unrestricted write to it is an escape from this
-  whole boundary — a stage that can write `.git/hooks/pre-commit`, or set
-  `core.hooksPath` in `.git/config`, has arranged for code to run as the
-  operator, outside the sandbox, on their next commit in the real checkout.
-  Today the repository's own committed settings deny `Edit(.git/**)`; this
-  feature replaces those settings, so it has to carry the guarantee rather than
-  inherit it. Git needs neither path to commit, branch or push.
+- the worktree, `<repo>/.worktrees/<task-id>`, which is the stage's cwd, and
+  therefore its artifact directory `<worktree>/.cuzam/runs/<task-id>` — named
+  because it is where `context.md` lands;
+- a **private temporary directory** under the artifact directory, with `TMPDIR`
+  pointed at it. Not the shared per-user `$TMPDIR`: on macOS that is one
+  directory for every process the operator runs, so scoping to it would let a
+  stage read and write concurrent runs' temp files and plant files that
+  out-of-sandbox processes later read. `claude`, `git`, `gh` and the verify gate
+  all need somewhere to write; they do not need that somewhere to be shared;
+- `~/.claude/plans` and the session scratch a stage actually uses — **and
+  nothing else under `~/.claude`.** The rest of that directory is denied by
+  name: `.credentials.json`, `settings.json`, `projects/`, `sessions/`,
+  `history.jsonl`, `plugins/` and the operator's global `CLAUDE.md`. Granting
+  the directory wholesale would have been the `.git/hooks` escape again one
+  bullet later — a stage that can write `~/.claude/settings.json` installs a
+  `PreToolUse` hook that runs as the operator, outside the sandbox, in their
+  next session — and `projects/` holds every other project's transcripts and
+  memory, which is the same material the motivating incident was about;
+- a narrowed set inside `<repo>/.git`: `objects/`, `worktrees/<own-task-id>/`,
+  `refs/heads/<own-branch>`, `logs/`, `packed-refs`, `info/exclude`, and the
+  `FETCH_HEAD`/`ORIG_HEAD` pair. `.git` cannot be excluded — a worktree's `.git`
+  is a file pointing into the primary checkout's `.git/worktrees/<task-id>`, so
+  a worktree-only scope breaks git outright — but it must not be granted whole,
+  for two separate reasons. `hooks/` and `config` are the escape: a stage that
+  writes `.git/hooks/pre-commit`, or sets `core.hooksPath`, has arranged for
+  code to run as the operator on their next commit in the real checkout, and
+  this feature replaces the committed settings that deny `Edit(.git/**)` today,
+  so it has to carry that guarantee rather than inherit it. And `.git` is
+  **shared with the primary checkout and every sibling worktree**, so an
+  unnarrowed grant would let a stage write another live run's
+  `worktrees/<other-task-id>/`, move the primary checkout's branch tips, or
+  `git worktree prune` a concurrent run out from under itself.
 
 **Read only:**
 
-- a fixed *runtime set*, read-only: the interpreter, the node runtime the
-  `claude` binary resolves through, and — for a dispatched flow — the pinned
-  runtime at `~/.cuzam/runtime`, because `sys.executable` is its virtualenv's
-  python and the broker is started with it;
+- a fixed *runtime set*: the interpreter, the node runtime the `claude` binary
+  resolves through, and — for a dispatched flow — the pinned runtime at
+  `~/.cuzam/runtime`, because `sys.executable` is its virtualenv's python;
+- `<repo>/.git/config`. Readable because git reads it constantly; not writable
+  because that is the escape above. The consequence is concrete and belongs in
+  the stage prompt rather than being discovered at runtime: **the publishing
+  stage must push without `-u`.** `git push -u` and `gh pr create` on an
+  untracked branch both write `branch.<name>.remote` and `.merge` into
+  `.git/config`, and with it read-only git pushes successfully and *then* exits
+  non-zero on "could not lock config file" — which a `pr` stage reads as a
+  failed push;
 - whatever the project declares, below.
 
 **Denied, explicitly, and this is the point:** the rest of `$HOME`, the
-operator's vault, the rest of the state home, the primary checkout's working
-tree, and every sibling worktree — including another live run's. And every
-credential directory: `~/.ssh`, `~/.config/gh` and `~/.gitconfig` are outside a
-`pr` stage's scope as much as a `plan` stage's.
+operator's vault, the state home, the primary checkout's working tree, and every
+sibling worktree. And every credential directory — `~/.ssh`, `~/.config/gh`,
+`~/.gitconfig` and `~/.claude/.credentials.json` are outside a `pr` stage's
+scope as much as a `plan` stage's.
+
+Denying `~/.gitconfig` takes the commit identity with it, and nothing in Cuzam
+sets one — this checkout happens to carry a local identity, but a repository
+relying on the global file would get "Author identity unknown" from the `pr`
+stage's commit and from the timeout commit that preserves work. So the identity
+arrives as `GIT_AUTHOR_*` and `GIT_COMMITTER_*` in the same environment as the
+publishing credential. A control whose failure mode is losing an hour of work
+at the commit is not one that fails closed.
+
+### The broker cannot share the stage's sandbox
+
+An earlier draft granted `approvals.db` and `events.db` read-write, reasoning
+that the broker is an MCP subprocess of `claude` and therefore inside the scope.
+That reasoning is right and the conclusion was backwards: **because** the broker
+shares the stage's sandbox, granting it the store grants the stage's own Bash
+tool the same access. `approvals.decide()` is a plain conditional `UPDATE`, so a
+gated stage could answer its own pending request with `sqlite3` and the operator
+would never see a card. The approval gate this spec promises not to replace
+would instead be bypassed by the scope it grants. `events.db` is the milder
+version of the same hole: forged pipeline events, reported by the fleet view and
+the doorbell as fact.
+
+So both stores stay outside the scope, and the broker stops being a subprocess
+of `claude`. It becomes a process the launcher starts outside the sandbox, which
+`claude` reaches over a socket or local HTTP MCP transport rather than
+`command:` — the store is then owned by a process the stage cannot write to. This
+changes `broker_config()` and it is a prerequisite of the inner layer, not a
+detail of it: until it is done, a gated stage with a writable store is worse
+than a gated stage with no scope at all.
 
 ### Publishing without a readable credential
 
@@ -199,13 +258,23 @@ Cuzam's `--settings` payload has to deny at least as much as whatever it
 displaces, or the inner layer is a net loosening on the one repository we can
 actually inspect.
 
-The second guarantee is hooks. `--restricted` ignores discovered settings and
-hooks come from settings; Cuzam configures no Claude Code hooks anywhere, so
-after this change a stage has none. That is precisely the condition `--bare`
-created and that dropping `--bare` was meant to end — "hooks are the only hard
-enforcement boundary a stage has", and under `--bare` the stage that pushes was
-the one running without them. Cuzam's payload has to carry hooks, or the inner
-layer re-creates a defect this project already fixed once.
+The second is hooks, and here the honest answer is a cost rather than a
+guarantee. `--restricted` ignores discovered settings and hooks come from
+settings, so after this change a stage has none — Cuzam configures no Claude Code
+hooks anywhere, and the hooks a stage has today are the *operator's* machine-local
+user settings. Carrying those would mean copying machine-local configuration into
+Cuzam's payload, which contradicts computing the scope from Cuzam's configuration
+alone and could not be pinned by a test. So the criterion is not "carry the
+hooks"; it is that **stages run without discovered hooks, and the OS layer is
+what replaces them.**
+
+That is worth stating rather than glossing, because dropping `--bare` was
+justified by "hooks are the only hard enforcement boundary a stage has —
+permission rules are matched, not enforced". That sentence is still true of
+permission rules, and it is the argument for the outer layer: the kernel is an
+enforcement boundary in the way a matched rule is not. What is genuinely lost is
+whatever the operator's own hooks were doing, and if that matters, the answer is
+a hook set Cuzam ships and tests — named work, not an assumption.
 
 **The two layers arrive in that order, and classic keeps its flag set.** The
 OS layer goes on all three spawn sites at once, because it is the layer that
@@ -242,6 +311,13 @@ this feature does not give it one.
 `$CUZAM_STATE_HOME/scopes/<task-id>.sb`, written by the launcher, and denied to
 the stage that runs under it.
 
+The launcher writes it; `gc` removes it when it reclaims the run's worktree;
+nothing else touches it. A resume regenerates it when it is missing and refuses
+before re-exec if it cannot — because `classic` re-execs `claude` on resume with
+the same path, and a profile that vanished to a state-home reset or a different
+`CUZAM_STATE_HOME` would otherwise fail the run mid-flight, after the work. The
+launch-time refusal does not cover resume, so resume needs the rule spelled out.
+
 Not in the artifact directory, because the artifact directory is inside the
 worktree and the worktree is writable. A stage that could edit its own profile
 could widen the scope of the next stage, or of a resume — `classic` re-execs
@@ -254,7 +330,10 @@ cannot author its own reaping record".
 `cuzam launch` refuses, and refuses early — before the board task is claimed
 and before the worktree is cut — when:
 
-- `sandbox-exec` is not on the host;
+- `sandbox-exec` is not usable. Invoked by absolute path, `/usr/bin/sandbox-exec`
+  — a security wrapper resolved through `PATH` is not one — with the path
+  injectable so the unusable branch is reachable from a test rather than being
+  dead code that the test pretends to exercise;
 - the profile cannot be generated or fails to parse;
 - the project resolves to no computable scope;
 - a declared `reads` path is relative, or escapes after expansion.
@@ -263,7 +342,12 @@ One exception, named rather than left to collide with the rule: the provider
 preflight probe has no worktree, no repository and no project — it runs in a
 scratch temporary directory by design. It gets a declared degenerate scope of
 that directory plus the runtime set, and it is the cheapest place to prove the
-wrapper works at all.
+wrapper works at all. It also has to authenticate, which is the first thing the
+credential-as-environment principle buys: the probe needs no grant into
+`~/.claude` to reach the model, so the degenerate scope stays degenerate. Had the
+credential remained a path, the probe would have failed to authenticate, reported
+"did not answer", and the fail-closed rule would then have refused every launch
+on the machine.
 
 Refusal is a refusal: no run, no worktree, no claim, no half-started flow to
 reap. The message names which of the four it was.
@@ -388,6 +472,14 @@ rule stays: a flow is only as good as the issue's context being present.
       — so it is not folded in here. But it makes the credential question
       disappear rather than narrow, and it should be decided rather than
       drifted past.
+- [ ] **A shared `.git` is why cross-run isolation needs narrowing at all.**
+      The set above is narrow enough to keep runs out of each other's worktree
+      metadata and refs, but it is a list of carve-outs in a directory three
+      parties share, which is the kind of thing that rots. The structural
+      alternative is one git directory per run — a clone rather than a worktree
+      — which would make the isolation a property of the layout instead of a
+      property of a profile. Bigger change, cheaper invariant; worth pricing
+      before the carve-out list grows.
 - [ ] **`reads` is per project, not per flow.** A flow that needs a path the
       project does not declare cannot get one. That is intended for now; if it
       turns out flows want different reads inside one project, `flows` is the

@@ -268,8 +268,9 @@ def role_prompt(
     # Context first, and for every stage rather than only the planner. A stage
     # has no way to look anything up that does not go through a permission
     # prompt, and the one that went hunting through the operator's notes was
-    # the build stage, not the plan. Listed only when it exists, so a flow whose sources were all
-    # unreachable does not advertise a file that is not there.
+    # the build stage, not the plan. Listed only when it exists, so a flow
+    # whose sources were all unreachable does not advertise a file that is
+    # not there.
     context = artifacts / flow_context.CONTEXT_FILE
     if context.exists():
         inputs = [context, *inputs]
