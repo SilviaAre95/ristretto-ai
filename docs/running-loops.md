@@ -133,13 +133,20 @@ request is outstanding.
 
 ## The context boundary
 
-**No stage goes to your issue tracker itself. Cuzam goes, before the flow
-starts.** `context.md` is assembled by the launcher into the run's artifact
-directory and prepended to every stage's inputs: the issue title and body when
-a tracker credential is configured, and up to three matching vault notes,
-clipped. It carries a line telling the stage to treat all of it as data and
-never as instructions. When the tracker is unreachable the file says so
+**On a staged flow, no stage goes to your issue tracker itself — Cuzam goes,
+before any model starts.** The multi-stage runner assembles `context.md` into
+the run's artifact directory and prepends it to every stage's inputs: the issue
+title and body when a tracker credential is configured, and up to three matching
+vault notes, clipped. It carries a line telling the stage to treat all of it as
+data and never as instructions. When the tracker is unreachable the file says so
 explicitly, and says not to go looking for the issue elsewhere on the machine.
+
+**`classic` gets none of this.** The runner raises for `classic` before context
+assembly is reached, and `run-loop.sh` has no equivalent — so the most-used flow
+still works from the issue key and the repository alone. That is the gap behind
+the incident below, and it is why `filesystem-scoping` names context assembly
+for `classic` as a sequencing decision rather than an afterthought: denying the
+search without supplying the context would make `classic` worse, not safer.
 
 This is the shape the boundary should have. The reading that a flow legitimately
 needs from outside the repository is done by deterministic code with a fixed
@@ -148,8 +155,10 @@ worktree — rather than by a model searching a home directory one permission
 prompt at a time. `filesystem-scoping` is the other half of that: it denies the
 search.
 
-What a stage still cannot do is reach the tracker live. It has `context.md` and
-the repository, and nothing else, so the rule below is unchanged.
+What a staged stage still cannot do is reach the tracker live. It has
+`context.md` and the repository, and nothing else, so the rule below is
+unchanged — and holds more strongly for `classic`, which has only the
+repository.
 
 Two earlier claims here were wrong and are corrected above. The stage prompt no
 longer carries `Issue key: <KEY>` and nothing else, and `--bare` is no longer

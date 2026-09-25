@@ -13,10 +13,13 @@ acceptance_criteria:
     widen the scope of its own next stage or of a resume
   - "`cuzam launch` refuses before it claims the board task or cuts the
     worktree when the scope cannot be applied"
-  - Every spawn path reaches `claude` with a scope — classic, every staged
-    flow, and a relaunch — or does not reach it at all
+  - Every *flow* spawn path reaches `claude` with a scope — classic, every
+    staged stage, the provider preflight probe, and a relaunch — or does not
+    reach it at all. `cuzam chat` is excluded and tracked separately
   - The scope is computed from Cuzam's configuration only, never from files
     committed in the repository being worked on
+  - The settings Cuzam supplies deny at least what the discovered settings
+    they displace denied, and carry the hooks a stage would otherwise have
   - No stage's scope contains a credential directory; the ability to push and
     open a pull request arrives as environment, never as a readable path
   - An unattended run opens its pull request — scope does not depend on
@@ -58,7 +61,8 @@ test_plan:
 
 An unattended coding flow can read the operator's entire home directory. It is
 launchable from four surfaces — `cuzam launch`, the dashboard form, the Slack
-command and the assistant — and on the most-used path, `classic`, it runs
+command and the assistant's `launch_run` tool — and on the most-used path,
+`classic`, it runs
 `--permission-mode acceptEdits` with no permission broker attached, so nothing
 gates what it reads. This feature gives every stage a declared filesystem
 scope, enforced by the operating system rather than by the agent's own
@@ -81,22 +85,38 @@ A stage's scope is built from four parts, and everything not in them is denied.
 - its artifact directory, `<worktree>/.cuzam/runs/<task-id>`, which is inside
   the worktree and so already covered — named here because it is where
   `context.md` lands;
-- `<repo>/.git`. Not optional: a worktree's `.git` is a file pointing into the
+- the temporary directory. `claude`, `git`, `gh` and the verify gate all write
+  there, and the provider preflight probe runs with its cwd inside one;
+- Claude Code's own state directory, because a `plan` stage has been observed
+  writing its plan there and the alternative is a stage that dies on its own
+  scratch space;
+- `events.db` and `approvals.db` under the state home, with their sqlite
+  sidecar files. Not a convenience: **the permission broker is an MCP
+  subprocess of `claude`**, so it runs inside this scope, and it opens both.
+  `approvals.py` fails closed, so a broker that cannot open its store denies
+  every gated tool call and kills the run. The rest of the state home stays
+  denied;
+- `<repo>/.git`, **except `hooks/` and `config`, which are read-only**. The
+  directory is not optional: a worktree's `.git` is a file pointing into the
   primary checkout's `.git/worktrees/<task-id>`, so a worktree-only scope
-  breaks git outright. It is also where Cuzam writes the artifact exclusions,
-  because a worktree's own `info/exclude` is not consulted.
+  breaks git outright. But unrestricted write to it is an escape from this
+  whole boundary — a stage that can write `.git/hooks/pre-commit`, or set
+  `core.hooksPath` in `.git/config`, has arranged for code to run as the
+  operator, outside the sandbox, on their next commit in the real checkout.
+  Today the repository's own committed settings deny `Edit(.git/**)`; this
+  feature replaces those settings, so it has to carry the guarantee rather than
+  inherit it. Git needs neither path to commit, branch or push.
 
 **Read only:**
 
-- a fixed *runtime set* — the interpreter, the node runtime the `claude` binary
-  resolves through, Claude Code's own state directory, and the temporary
-  directory. Claude Code's state directory is read-write, because a `plan`
-  stage has been observed writing its plan there and the alternative is a
-  stage that dies on its own scratch space;
+- a fixed *runtime set*, read-only: the interpreter, the node runtime the
+  `claude` binary resolves through, and — for a dispatched flow — the pinned
+  runtime at `~/.cuzam/runtime`, because `sys.executable` is its virtualenv's
+  python and the broker is started with it;
 - whatever the project declares, below.
 
 **Denied, explicitly, and this is the point:** the rest of `$HOME`, the
-operator's vault, the state home at `~/.cuzam`, the primary checkout's working
+operator's vault, the rest of the state home, the primary checkout's working
 tree, and every sibling worktree — including another live run's. And every
 credential directory: `~/.ssh`, `~/.config/gh` and `~/.gitconfig` are outside a
 `pr` stage's scope as much as a `plan` stage's.
@@ -171,6 +191,22 @@ being worked on decides its own session's permissions.** Claude Code discovers
 `permissions.allow` list and widen the session Cuzam started. After this
 change the scope is Cuzam's, and a committed settings file cannot move it.
 
+**Which cuts both ways, and the spec owes two guarantees because of it.**
+Discovered settings can also narrow. This repository's own committed file
+denies reads of `~/.ssh`, `~/.aws`, `~/.config/gh` and `.env` files, denies
+`Edit(.git/**)`, `sudo` and force-push — and `--restricted` drops all of it. So
+Cuzam's `--settings` payload has to deny at least as much as whatever it
+displaces, or the inner layer is a net loosening on the one repository we can
+actually inspect.
+
+The second guarantee is hooks. `--restricted` ignores discovered settings and
+hooks come from settings; Cuzam configures no Claude Code hooks anywhere, so
+after this change a stage has none. That is precisely the condition `--bare`
+created and that dropping `--bare` was meant to end — "hooks are the only hard
+enforcement boundary a stage has", and under `--bare` the stage that pushes was
+the one running without them. Cuzam's payload has to carry hooks, or the inner
+layer re-creates a defect this project already fixed once.
+
 **The two layers arrive in that order, and classic keeps its flag set.** The
 OS layer goes on all three spawn sites at once, because it is the layer that
 closes the hole. `--restricted` and `--settings` go on staged stages only;
@@ -223,6 +259,12 @@ and before the worktree is cut — when:
 - the project resolves to no computable scope;
 - a declared `reads` path is relative, or escapes after expansion.
 
+One exception, named rather than left to collide with the rule: the provider
+preflight probe has no worktree, no repository and no project — it runs in a
+scratch temporary directory by design. It gets a declared degenerate scope of
+that directory plus the runtime set, and it is the cheapest place to prove the
+wrapper works at all.
+
 Refusal is a refusal: no run, no worktree, no claim, no half-started flow to
 reap. The message names which of the four it was.
 
@@ -251,11 +293,17 @@ anything.
 
 ### When a stage hits the boundary
 
-A denied read surfaces as a tool error inside the stage and a
-`scope.denied` event carrying the path, so a stage that dies on a path the
-profile forgot is diagnosable from the run card without rerunning it. The run
-log keeps the denial. This is the difference between a control that can be
-tuned and one that is quietly disabled after the first bad night.
+A denied read surfaces as a tool error inside the stage, and the stage's log
+keeps it, so a stage that dies on a path the profile forgot is diagnosable
+without rerunning it.
+
+No new event kind is promised here, and the reason is worth stating rather than
+leaving as an omission. `events.py` is a closed vocabulary — a new kind is a
+deliberate change there and in the fleet-view reader — and more awkwardly, the
+only process that sees a kernel denial is the one inside the scope. The parent
+runner never sees it. So a `scope.denied` event would need the stage to report
+its own denial, which is a different mechanism from the one that enforces it,
+and it belongs in the change that adds it.
 
 ### What this does not fix, said plainly
 
@@ -281,11 +329,16 @@ rule stays: a flow is only as good as the issue's context being present.
 - **Enforcement inside Hermes.** Answered 2026-09-24 and not reopened here.
   Hermes has no filesystem scoping either, and that stays Hermes' business.
   The boundary in this spec is one Cuzam owns, generates and tests.
-- **`cuzam chat`.** The assistant runs with `--permission-mode default` and an
-  `--allowedTools` list containing only its own MCP tools, so under `-p`
-  nothing else is permitted and it has no file tools to scope. It is also the
-  one `claude` process started with no working directory at all, which is worth
-  fixing on its own terms and is not this feature.
+- **The `cuzam chat` process** — as distinct from the assistant's `launch_run`
+  tool, which is one of the four surfaces above. It is excluded because it is
+  not a flow and needs its own decision, **not** because there is nothing there
+  to scope. An earlier draft of this spec claimed it has no file tools; that was
+  wrong. `--allowedTools` is a permission allowlist, not the availability list —
+  `--tools` is that — so the built-in file tools are present, and the process is
+  started with no working directory at all, which makes "the project's settings"
+  whatever directory it inherited. On this evidence it is arguably the least
+  constrained `claude` process on the machine. Out of scope here, and it should
+  not stay out of scope for long.
 - **A cross-platform boundary.** `sandbox-exec` is macOS-only and deprecated by
   Apple. macOS is the stated platform baseline, so the outer layer matches the
   product. A second host platform needs a second generator behind the same
@@ -312,6 +365,15 @@ rule stays: a flow is only as good as the issue's context being present.
       runtime, the caches they use) rather than hardcoded, or it breaks on the
       next toolchain move. Where that discovery lives, and whether a wrong
       answer is a launch refusal or a missing path, is undecided.
+- [ ] **`classic` gets no `context.md`, which makes this feature a regression
+      for it until that changes.** `execute()` raises for `classic` before
+      context assembly is reached, and `run-loop.sh` has no equivalent — so the
+      most-used path has neither the assembled context nor, afterwards, the
+      ability to go and find it. A classic run on an issue whose spec lives in a
+      vault note searches for it today; afterwards it is simply denied. Either
+      context assembly reaches `classic` first, or scoping lands on staged flows
+      first. Sequencing decision, and the one that most affects whether this is
+      an improvement on day one.
 - [ ] **How the publishing credential resolves is unverified.** The remote is
       HTTPS and no shipped code runs `git push` or `gh pr create` — the model
       does, so `gh` resolves its own token and git resolves a credential helper.

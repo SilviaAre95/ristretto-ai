@@ -5,7 +5,7 @@ status: in-progress  # proposed | in-progress | implemented | deprecated
 created_at: 2026-07-05
 last_modified: 2026-09-24
 owner: project
-depends_on: [approval-loop, filesystem-scoping]
+depends_on: [approval-loop]
 acceptance_criteria:
   - Works on a branch
   - Opens a PR
