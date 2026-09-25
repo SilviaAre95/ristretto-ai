@@ -155,10 +155,16 @@ worktree — rather than by a model searching a home directory one permission
 prompt at a time. `filesystem-scoping` is the other half of that: it denies the
 search.
 
-What a staged stage still cannot do is reach the tracker live. It has
-`context.md` and the repository, and nothing else, so the rule below is
-unchanged — and holds more strongly for `classic`, which has only the
-repository.
+Whether a stage can reach the tracker *live* is not something this project
+decides, and the earlier claim that it cannot was wrong twice over.
+`--strict-mcp-config` is passed only to locally served providers, so a stage on a
+cloud provider — which is every stage of the shipped `full` and `short` — runs
+with MCP discovery, plugins and your user settings on. If you have a tracker MCP
+server configured, a `build` stage can call it. What `context.md` buys is that it
+does not have to, and that the flow works the same when you have not.
+
+So the rule below is unchanged, and holds most strongly for `classic`, which has
+only the repository.
 
 Two earlier claims here were wrong and are corrected above. The stage prompt no
 longer carries `Issue key: <KEY>` and nothing else, and `--bare` is no longer
