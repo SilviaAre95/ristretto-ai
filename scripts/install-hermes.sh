@@ -161,12 +161,18 @@ install -m 0755 \
 # its task deliberately unassigned, so `_cmd_dispatch` — which only considers a
 # task where `status == "ready" and task.assignee` — never hands one over.
 #
-# So it gets no skills. It carried `loop-runner` and `durable-dev`, which were
+# So it gets none of ours. It carried `loop-runner` and `durable-dev`, which were
 # how an agent found `run-loop.sh` and how one queued work; the launcher does
 # both now, and `loop-runner`'s SKILL.md is deleted. Any stale links from an
 # earlier install are removed rather than left: a manifest-less skill directory
 # reads as a broken skill, and leaving a way for an agent to find the loop again
 # is the thing this change is about.
+#
+# Hermes' own bundled skills stay in this directory and are none of our business
+# — `plan`, `test-driven-development`, `systematic-debugging` and the rest are
+# real directories it put there, not links, and none of them can run a loop. An
+# earlier version of this comment said the profile "gets no skills", which the
+# machine disproves the moment you list it.
 #
 # A task hand-assigned to this profile would therefore find no way to run a loop
 # — and the guard below is what stops it completing one it did not run. That is
