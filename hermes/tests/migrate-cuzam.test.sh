@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # The rename migration, against a fake install.
 #
-# Two properties matter more than the individual moves. It must be safe to
-# run twice, because the first run can fail halfway on a real machine; and it
-# must never remove a link this project did not write, because the whole
-# reason the migration exists is that the installers' guards refuse to guess.
+# Three properties matter more than the individual moves. It must refuse
+# while a coding run is live, because every step below is hostile to a run in
+# flight; it must be safe to run twice, because the first run can fail halfway
+# on a real machine; and it must never remove a link this project did not
+# write, because the whole reason the migration exists is that the installers'
+# guards refuse to guess.
 #
 # `hermes` is stubbed. The migration calls it to disable plugins, remove a
 # cron job and rename a profile, and none of those should reach a real
@@ -14,9 +16,52 @@ PASS=0; FAIL=0
 t() { if eval "$2"; then echo "ok  - $1"; PASS=$((PASS+1)); else echo "FAIL - $1"; FAIL=$((FAIL+1)); fi; }
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-SCRIPT="$ROOT/scripts/migrate-cuzam.sh"
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/cuzam-migrate-test.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
+
+# The migration is run from a COPY of scripts/, and that is the only reason
+# this file is hermetic.
+#
+# Its first act is to refuse while a coding run is live, and it asks
+# scripts/live-runs.sh — which snapshots `ps -eo pid=,command=` and filters,
+# deliberately never `pgrep`, for the reasons its own comments give. So it
+# reads the real machine, and no variable this test sets can reach it: with a
+# real Cuzam run alive on the developer's box, 26 of the 33 assertions below
+# used to fail, on code that passes 33/33 on a quiet one.
+#
+# The guard is right — the migration moves the event store out from under a
+# running flow — so nothing about it is weakened here. The seam is that the
+# migration resolves its own repository from ${BASH_SOURCE[0]} and calls
+# "$repo/scripts/live-runs.sh". Run the real script from a fake repository and
+# the probe it consults is ours, while a real machine has no way to reach the
+# stub: there is no override variable, and nothing in scripts/ changed.
+#
+# Copied rather than symlinked, and that is not fussiness. Writing the stub
+# through a symlink truncates the real scripts/live-runs.sh in the checkout.
+REPO="$TMP/repo"
+mkdir -p "$REPO"
+cp -R "$ROOT/scripts" "$REPO/scripts"
+# The migration also reads $repo/hermes/SOUL.md and runs
+# $repo/scripts/template-drift.sh on the one branch where the live SOUL.md
+# still matches its seed. The fixture builds no seed record, so that branch is
+# not taken — but hermes/ is linked in so it stays reachable rather than
+# becoming a second thing to remember.
+ln -s "$ROOT/hermes" "$REPO/hermes"
+SCRIPT="$REPO/scripts/migrate-cuzam.sh"
+
+# The two answers the stub can give. Both are about what the MACHINE looks
+# like, which is exactly the input this file could not previously control.
+quiet_machine() {
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$REPO/scripts/live-runs.sh"
+  chmod +x "$REPO/scripts/live-runs.sh"
+}
+live_run() {
+  printf '#!/usr/bin/env bash\n%s\nexit 0\n' \
+    'echo "4242 bash /x/loop-runner/scripts/run-loop.sh t_live000 ABC-1 --flow classic"' \
+    > "$REPO/scripts/live-runs.sh"
+  chmod +x "$REPO/scripts/live-runs.sh"
+}
+quiet_machine
 
 HH="$TMP/hermes"
 OLD_STATE="$TMP/.ristretto"
@@ -163,6 +208,27 @@ rm "$NEW_STATE/events.db"
 OUT5="$(run 2>&1)"; RC5=$?
 t "resolving the collision unblocks" "[ $RC5 -eq 0 ]"
 t "the real events.db then moves"    "[ \"\$(cat '$NEW_STATE/events.db')\" = events ]"
+
+# The guard itself. Untestable before the fake repository existed, which is
+# why the first thing the migration does was also the only thing this file
+# never checked. It has to refuse BEFORE anything moves: a migration that
+# unlinks the skill a classic loop is executing and then notices the loop has
+# already broken it.
+build_fixture
+live_run
+OUT6="$(run 2>&1)"; RC6=$?
+quiet_machine
+t "a live run blocks the migration"  "[ $RC6 -ne 0 ]"
+t "the live run is named"            "printf '%s' \"\$OUT6\" | grep -q 'run-loop.sh'"
+t "it says why it refused"           "printf '%s' \"\$OUT6\" | grep -q 'refusing while a run is live'"
+t "nothing moved while live"         "[ -f '$OLD_STATE/approvals.db' ] && [ ! -e '$NEW_STATE/approvals.db' ]"
+t "no link was removed while live"   "[ -L '$HH/plugins/ris-approvals' ]"
+t "the profile was not renamed"      "[ -d '$HH/profiles/ris-worker' ] && [ ! -d '$HH/profiles/zam-worker' ]"
+
+# And a quiet machine still migrates, so the assertion above is about the
+# guard rather than about the stub being consulted at all.
+OUT7="$(run 2>&1)"; RC7=$?
+t "a quiet machine then migrates"    "[ $RC7 -eq 0 ] && [ -f '$NEW_STATE/approvals.db' ]"
 
 echo; echo "migrate-cuzam.test.sh: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
