@@ -163,7 +163,10 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   third-party provider — the hosting split did not cause it, it was the first
   thing to exercise the path. `mcp` is now a core dependency, the lazy import
   has one site behind `broker.serveable()`, and the runtime pin proves the
-  broker can serve rather than only that the runner imports.
+  broker can serve rather than only that the runner imports. `mcp` is
+  capped below 2.0: 2.2.0 removed `Server.list_tools` from the low-level
+  server, and every import still resolves there — so `serveable` checks the
+  API surface as well, or the same failure returns one layer further in.
 
 - **A stage pointed at a non-vendor endpoint inherited the operator's own vendor
   credentials.** Requiring the provider's own token to resolve did not help: the

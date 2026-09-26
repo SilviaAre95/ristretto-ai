@@ -395,3 +395,15 @@ class BrokerCanActuallyServeTest(unittest.TestCase):
         # passed anyway; every gated mutating stage then failed at its first
         # permission request. This fails on any install missing it.
         broker.serveable()
+
+    def test_an_mcp_major_that_drops_the_api_is_refused(self) -> None:
+        # mcp 2.2.0 removed Server.list_tools. Every import still resolves on
+        # that version, so checking the imports alone reports a healthy broker
+        # that dies on the decorator a moment later.
+        class Server:
+            def __init__(self, name: str) -> None:
+                self.name = name
+
+        with mock.patch.object(broker, "_mcp", return_value=(None, None, None, Server, None)):
+            with self.assertRaisesRegex(RuntimeError, "list_tools"):
+                broker.serveable()

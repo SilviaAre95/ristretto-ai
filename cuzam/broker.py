@@ -104,13 +104,28 @@ def _mcp() -> tuple[Any, Any, Any, Any, Any]:
     return anyio, types, NotificationOptions, Server, stdio_server
 
 
+# What `main` reaches for on the low-level server. Checked rather than assumed
+# because mcp 2.2.0 removed `list_tools` from it: the imports still succeed on
+# that version, so an import-only check passes and the broker dies on the
+# decorator instead — the same failure shape as the missing dependency, one
+# layer further in.
+SERVER_API = ("list_tools", "call_tool", "create_initialization_options")
+
+
 def serveable() -> None:
     """Raise unless this interpreter can actually run the server.
 
     What the runtime pin checks. `import cuzam.broker` succeeding is not the
-    same question and never was.
+    same question and never was, and neither is `import mcp`.
     """
-    _mcp()
+    _anyio, _types, _notifications, Server, _stdio = _mcp()
+    server = Server("zam-approve")
+    missing = [name for name in SERVER_API if not hasattr(server, name)]
+    if missing:
+        raise RuntimeError(
+            f"the installed mcp package has no Server.{missing[0]}; the broker "
+            "needs the 1.x low-level server API"
+        )
 
 
 def main() -> None:  # pragma: no cover - exercised as a live MCP server

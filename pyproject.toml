@@ -14,7 +14,10 @@ authors = [{name = "Silvia Arellano"}]
 # that cannot reach the broker fails at its first permission request.
 # It was undeclared until 2026-09-26, which meant `install-runtime`
 # produced a runtime that could never gate a mutating stage.
-dependencies = ["PyYAML>=6.0,<7.0", "mcp>=1.0"]
+# Capped below 2.0 deliberately: mcp 2.2.0 removed `Server.list_tools`
+# from the low-level server this uses. The imports still succeed there,
+# so the broker starts and dies on the decorator — see `serveable`.
+dependencies = ["PyYAML>=6.0,<7.0", "mcp>=1.0,<2.0"]
 
 [project.optional-dependencies]
 # Read-only fleet view. Optional: the CLI and loop work without it.
