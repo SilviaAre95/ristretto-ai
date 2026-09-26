@@ -24,7 +24,13 @@ import sys
 from pathlib import Path
 from typing import Any, Mapping, NamedTuple
 
-from ..config import ConfigError, instance_value, load_config, resolved_provider
+from ..config import (
+    ConfigError,
+    instance_value,
+    load_config,
+    provider_env,
+    resolved_provider,
+)
 
 # The loop is a conversation, not a batch job, but a wedged turn must not hang
 # a chat surface forever.
@@ -74,7 +80,7 @@ def _command(provider: Mapping[str, Any], prompt: str, session: str | None, is_n
     """
     import os
 
-    env = os.environ.copy()
+    env = provider_env(provider)
     # default, not plan: plan mode blocks tool execution, and the whole point
     # is that Zam calls its read tools. Safe here because v1 exposes only
     # read-only tools and each is allowlisted below; mutating tools, when they
@@ -87,10 +93,8 @@ def _command(provider: Mapping[str, Any], prompt: str, session: str | None, is_n
     model = provider.get("model")
     if model:
         command += ["--model", str(model)]
-    if provider.get("base_url"):
-        env["ANTHROPIC_BASE_URL"] = str(provider["base_url"])
-    if provider.get("auth_token"):
-        env["ANTHROPIC_AUTH_TOKEN"] = str(provider["auth_token"])
+    # The base URL, the token, and the removal of the operator's own
+    # credentials for a non-vendor provider all come from provider_env.
     if provider.get("context_length"):
         env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = str(provider["context_length"])
     # The tools, and permission to call the read-only ones without prompting.

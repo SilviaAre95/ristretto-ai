@@ -19,7 +19,14 @@ from typing import Any, Callable, Mapping
 
 from . import __version__, approvals, broker, context as flow_context, events, runs
 from .seam import DEV_CONFIG, VERIFY_GATE
-from .config import ConfigError, load_config, load_env, resolved_flow, resolved_provider
+from .config import (
+    ConfigError,
+    load_config,
+    load_env,
+    provider_env,
+    resolved_flow,
+    resolved_provider,
+)
 
 
 SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -416,17 +423,25 @@ def runner_command(
     output: Path,
     gated: bool = True,
 ) -> tuple[list[str], dict[str, str], str]:
-    env = os.environ.copy()
+    env = provider_env(provider)
     model = provider.get("model")
     runner = provider["runner"]
     if runner == "claude-code":
         command = ["claude", "-p"]
         if provider.get("base_url"):
-            # A locally served model needs the MCP *discovery* call suppressed
-            # or the stage never starts: Claude Code fetches MCP configuration
-            # from api.anthropic.com with no timeout, which never returns when
-            # the base URL points at Ollama. That is what burned tier1's whole
-            # hour — 935 bytes of warnings and no request ever made.
+            # Any endpoint that is not the vendor's needs the MCP *discovery*
+            # call suppressed or the stage never starts: Claude Code fetches MCP
+            # configuration from api.anthropic.com with no timeout, which never
+            # returns once the base URL points somewhere else. That is what
+            # burned tier1's whole hour — 935 bytes of warnings and no request
+            # ever made.
+            #
+            # Keyed on the base_url, not on the declared `hosting`, and that is
+            # deliberate: the question here is "is this Anthropic's endpoint",
+            # which a base_url answers on its own. Hosting answers a different
+            # question — whether the model runs on this machine — and only the
+            # mutating-stage rule needs that one. Conflating them is what this
+            # line used to do.
             #
             # --strict-mcp-config is what actually fixes it: use only the
             # config passed on the command line, discover nothing. This used
@@ -446,6 +461,13 @@ def runner_command(
             #
             # --add-dir stays: it costs nothing, and it keeps the repository
             # readable when a provider's own settings would not reach it.
+            #
+            # tier1 and the 2026-09-20 measurement were both local runs, which
+            # is why the reasoning above is written about Ollama on the
+            # loopback. The failure is about the endpoint, not about where it
+            # is: a hosted provider serves no MCP discovery either. That last
+            # step is reasoned, not measured — no shipped provider is hosted,
+            # so no test here exercises it.
             command += ["--strict-mcp-config", "--add-dir", str(cwd)]
             env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
         mode = "acceptEdits" if stage["mutates"] else "plan"
@@ -473,10 +495,9 @@ def runner_command(
             ]
         if model:
             command += ["--model", str(model)]
-        if provider.get("base_url"):
-            env["ANTHROPIC_BASE_URL"] = str(provider["base_url"])
-        if provider.get("auth_token"):
-            env["ANTHROPIC_AUTH_TOKEN"] = str(provider["auth_token"])
+        # ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN come from provider_env,
+        # which is also what strips the operator's own credentials for a
+        # non-vendor endpoint.
         if provider.get("context_length"):
             # The runner does not know local model names and assumes a 200k
             # window for them, compacting long stages far earlier than the
@@ -653,15 +674,12 @@ def preflight_provider(provider: Mapping[str, Any]) -> str:
         # spend tokens to test a failure mode never observed there.
         return ""
     model = str(provider.get("model") or "")
-    env = os.environ.copy()
-    if provider.get("base_url"):
-        env["ANTHROPIC_BASE_URL"] = str(provider["base_url"])
-    if provider.get("auth_token"):
-        env["ANTHROPIC_AUTH_TOKEN"] = str(provider["auth_token"])
+    env = provider_env(provider)
     command = ["claude", "-p", "--permission-mode", "plan"]
     if provider.get("base_url"):
         # Probe the way the stage will actually run, or the probe tests a
-        # configuration nothing uses — and would fail on every local provider.
+        # configuration nothing uses — and would fail on every provider with an
+        # endpoint of its own, local or hosted.
         # This used to add --bare, which the stage no longer passes; the probe
         # would then have been the only thing running bare, which is the
         # inverse of its purpose.
@@ -1200,7 +1218,23 @@ def run_stage(
         fallback = provider.get("fallback")
         log_text = text or (log.read_text(encoding="utf-8") if log.exists() else "")
         if fallback and UNAVAILABLE.search(log_text):
-            fallback_provider = resolved_provider(config, fallback)
+            try:
+                fallback_provider = resolved_provider(config, fallback)
+            except ConfigError as exc:
+                # Same rule as the preflight path: an unresolvable fallback is
+                # no fallback. resolved_provider can refuse now — a third-party
+                # standby whose key is unset — and letting that propagate kills
+                # the run at exit 2 several stages in rather than reporting the
+                # primary's failure.
+                print(
+                    f"stage {stage['id']}: {provider['name']} unavailable and "
+                    f"fallback {fallback} cannot be resolved: {exc}",
+                    file=sys.stderr,
+                )
+                fallback_provider = None
+        else:
+            fallback_provider = None
+        if fallback_provider is not None:
             fallback_stage = dict(stage)
             fallback_stage["provider"] = fallback
             fallback_stage["provider_config"] = fallback_provider
