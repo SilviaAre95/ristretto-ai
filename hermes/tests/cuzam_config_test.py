@@ -61,7 +61,8 @@ class ConfigTests(unittest.TestCase):
     def _with_local_flow(self) -> dict:
         """A custom flow naming the local brain.
 
-        No shipped flow routes a stage to a local provider any more, but the
+        No shipped flow routes a stage to a provider declared `hosting: local`
+        any more, but the
         machinery is still reachable from a user's own config, so it is still
         tested — against a fixture rather than against whatever the shipped
         flows happen to contain.
@@ -90,13 +91,20 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(flow["stages"][0]["provider_config"]["model"], "local-test-model")
 
     def test_no_shipped_flow_gives_a_local_provider_a_mutating_stage(self) -> None:
-        # The premise that a local model writes code was retired 2026-09-23.
-        # Config validation cannot express "not local", so this is where it
-        # is enforced: a flow added later that routes a build to a local
-        # provider fails here rather than in production at 3am.
+        # The premise that a model on this machine writes code was retired
+        # 2026-09-23. Enforced here rather than in validate_config, which now
+        # *could* express it: this checks the shipped flows only, and whether
+        # the rule should bind a user's own flows too is an open question on
+        # `custom-model-flows`. A shipped flow added later that routes a build
+        # to a local provider fails here rather than in production at 3am.
+        #
+        # Reads the declaration. This used to compute local as every provider
+        # carrying a base_url, which was the same set only while the sole such
+        # provider was Ollama on the loopback, and which refused a hosted
+        # open-weight coder a build stage on evidence about this hardware.
         local = {
             name for name, provider in self.config["providers"].items()
-            if provider.get("base_url")
+            if provider.get("hosting") == "local"
         }
         self.assertIn("local-brain", local, "the fixture assumes a local provider exists")
         for flow_name, flow in self.config["flows"].items():
@@ -106,6 +114,216 @@ class ConfigTests(unittest.TestCase):
                         stage["provider"], local,
                         f"{flow_name}.{stage['id']} routes a mutating stage to a local model",
                     )
+
+    def test_a_third_party_provider_may_take_a_mutating_stage(self) -> None:
+        """The point of the split: hosted is not local.
+
+        Cuzam ships no third-party provider — one belongs in the user layer,
+        not in a public repository — so this is the guard's other side proven
+        against a fixture, and it is the case the base_url inference got wrong.
+        """
+        config = copy.deepcopy(self.config)
+        config["providers"]["hosted-coder"] = {
+            "runner": "claude-code",
+            "hosting": "third-party",
+            "base_url": "https://example.invalid",
+            "auth_token_env": "HOSTED_CODER_KEY",
+            "model": "some-open-weight-model",
+        }
+        config["flows"]["hosted-build"] = {
+            "description": "A user flow building on a hosted open-weight model.",
+            "stages": [
+                {
+                    "id": "build",
+                    "role": "build",
+                    "provider": "hosted-coder",
+                    "mutates": True,
+                    "output": "build.md",
+                }
+            ],
+        }
+        validate_config(config)
+        local = {
+            name for name, provider in config["providers"].items()
+            if provider.get("hosting") == "local"
+        }
+        self.assertNotIn("hosted-coder", local)
+
+    def test_a_base_url_provider_must_declare_its_hosting(self) -> None:
+        config = copy.deepcopy(self.config)
+        del config["providers"]["local-brain"]["hosting"]
+        with self.assertRaisesRegex(ConfigError, "declares no hosting"):
+            validate_config(config)
+
+    def test_base_url_from_the_environment_still_needs_hosting(self) -> None:
+        """The indirection is resolved after validation, so it counts here.
+
+        A provider naming only `base_url_env` has no `base_url` at the moment
+        it is checked and acquires one before it runs, which would file it as
+        `vendor` and make it eligible for a mutating stage by the slow route.
+        """
+        config = copy.deepcopy(self.config)
+        config["providers"]["indirect"] = {
+            "runner": "claude-code",
+            "model": "whatever",
+            "base_url_env": "SOME_ENDPOINT",
+        }
+        with self.assertRaisesRegex(ConfigError, "declares no hosting"):
+            validate_config(config)
+
+    def test_unknown_hosting_is_rejected(self) -> None:
+        config = copy.deepcopy(self.config)
+        config["providers"]["local-brain"]["hosting"] = "cloud"
+        with self.assertRaisesRegex(ConfigError, "hosting must be one of"):
+            validate_config(config)
+
+    def test_a_misspelled_provider_setting_is_refused(self) -> None:
+        """`hostng: local` is a vendor provider with an ignored key.
+
+        Which is the classification the declaration exists to refuse, so the
+        spelling has to be checked or the field can be silently absent.
+        """
+        config = copy.deepcopy(self.config)
+        provider = config["providers"]["local-brain"]
+        provider["hostng"] = provider.pop("hosting")
+        with self.assertRaisesRegex(ConfigError, "unknown setting"):
+            validate_config(config)
+
+    def test_vendor_provider_may_not_carry_a_base_url(self) -> None:
+        """Against a fresh provider, and on the specific message.
+
+        Written first by setting `hosting: vendor` on `local-brain`, which
+        passed while proving nothing: that provider carries the `ollama`
+        placeholder, so the placeholder rule fired first, and its message also
+        begins "declares hosting: vendor". The assertion matched the wrong
+        error. A fixture that can only fail one way, and a phrase only this
+        rule produces.
+        """
+        config = copy.deepcopy(self.config)
+        config["providers"]["stray"] = {
+            "runner": "claude-code",
+            "hosting": "vendor",
+            "base_url": "https://example.invalid",
+            "model": "whatever",
+        }
+        with self.assertRaisesRegex(ConfigError, "vendor but configures a base_url"):
+            validate_config(config)
+
+    def test_a_local_or_third_party_provider_needs_a_base_url(self) -> None:
+        config = copy.deepcopy(self.config)
+        config["providers"]["claude"]["hosting"] = "third-party"
+        with self.assertRaisesRegex(ConfigError, "configures no base_url"):
+            validate_config(config)
+
+    def test_third_party_must_name_its_credential(self) -> None:
+        config = copy.deepcopy(self.config)
+        config["providers"]["hosted"] = {
+            "runner": "claude-code",
+            "hosting": "third-party",
+            "base_url": "https://example.invalid",
+            "model": "some-open-weight-model",
+        }
+        with self.assertRaisesRegex(ConfigError, "must name its credential"):
+            validate_config(config)
+
+    def test_a_third_party_provider_without_its_key_is_refused(self) -> None:
+        """A missing key is not a degraded run; it is a credential leak.
+
+        `runner_command` starts from `os.environ.copy()` and sets
+        `ANTHROPIC_AUTH_TOKEN` only when the provider resolved one, so an
+        unresolved credential means the stage reaches someone else's host still
+        carrying whatever Anthropic credentials the operator's environment
+        holds — and Claude Code falls back to its stored OAuth credentials when
+        no token is set.
+        """
+        config = copy.deepcopy(self.config)
+        config["providers"]["hosted"] = {
+            "runner": "claude-code",
+            "hosting": "third-party",
+            "base_url": "https://example.invalid",
+            "auth_token_env": "HOSTED_KEY_NOT_SET",
+            "model": "some-open-weight-model",
+        }
+        validate_config(config)  # the declaration itself is well formed
+        with self.assertRaisesRegex(ConfigError, "no credential resolved"):
+            resolved_provider(config, "hosted", {})
+        # And resolves once the key is actually there.
+        provider = resolved_provider(config, "hosted", {"HOSTED_KEY_NOT_SET": "k"})
+        self.assertEqual(provider["auth_token"], "k")
+
+    def test_a_non_vendor_provider_without_a_resolved_endpoint_is_refused(self) -> None:
+        """Otherwise it runs against the vendor endpoint while declared hosted.
+
+        The `base_url_env` validation rule stops this at config time; without
+        this check the same misfiling happens one step later, when the variable
+        is simply unset at launch.
+        """
+        config = copy.deepcopy(self.config)
+        config["providers"]["indirect"] = {
+            "runner": "claude-code",
+            "hosting": "third-party",
+            "base_url_env": "ENDPOINT_NOT_SET",
+            "auth_token_env": "KEY_NOT_SET",
+            "model": "whatever",
+        }
+        validate_config(config)
+        with self.assertRaisesRegex(ConfigError, "no base_url resolved"):
+            resolved_provider(config, "indirect", {})
+
+    def test_doctor_reports_an_unresolvable_provider_without_crashing(self) -> None:
+        config = copy.deepcopy(self.config)
+        config["providers"]["hosted"] = {
+            "runner": "claude-code",
+            "hosting": "third-party",
+            "base_url": "https://example.invalid",
+            "auth_token_env": "HOSTED_KEY_NOT_SET",
+            "model": "some-open-weight-model",
+        }
+        findings = doctor(config, {}, catalog=lambda url: {"qwen3.6:35b-mlx"})
+        self.assertTrue(
+            [f for f in findings if f.startswith("ERROR provider hosted")], findings
+        )
+        # Every provider is still reported: one broken entry must not truncate
+        # the report. Asserted by coverage rather than by an OK line, because
+        # whether a provider reports OK depends on `claude` being on PATH —
+        # this first asserted `OK provider claude:` and failed on CI, which has
+        # no such binary, for exactly the machine-dependence that the
+        # CUZAM_CONFIG pin in this branch exists to remove.
+        reported = {
+            name for name in config["providers"]
+            if any(f"provider {name}:" in finding for finding in findings)
+        }
+        self.assertEqual(reported, set(config["providers"]), findings)
+
+    def test_a_non_string_provider_key_names_the_fix(self) -> None:
+        """PyYAML reads a bare `no:` as the boolean False.
+
+        Joining that into the error message raised TypeError, so the CLI printed
+        a traceback instead of the fix the message exists to name.
+        """
+        config = copy.deepcopy(self.config)
+        config["providers"]["local-brain"][False] = "bar"
+        with self.assertRaisesRegex(ConfigError, "unknown setting"):
+            validate_config(config)
+
+    def test_the_ollama_placeholder_is_local_only(self) -> None:
+        """A real endpoint reached with the literal string "ollama" returns 401.
+
+        Which reads as a missing credential — `load_env` being an allowlist —
+        and sends you looking in the env file for a key that is not the
+        problem. Caught at validation instead.
+        """
+        config = copy.deepcopy(self.config)
+        config["providers"]["hosted"] = {
+            "runner": "claude-code",
+            "hosting": "third-party",
+            "base_url": "https://example.invalid",
+            "auth_token_env": "HOSTED_KEY",
+            "auth_token": "ollama",
+            "model": "some-open-weight-model",
+        }
+        with self.assertRaisesRegex(ConfigError, "may not use the ollama placeholder"):
+            validate_config(config)
 
     def test_review_is_forced_read_only(self) -> None:
         config = copy.deepcopy(self.config)
@@ -333,20 +551,25 @@ class DoctorLocalModelTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
         config, _ = load_config(ROOT / "cuzam.yaml")
         self.config = copy.deepcopy(config)
-        self.local_models = {
+        # Keyed on base_url, not on hosting: doctor asks the endpoint for its
+        # catalog, and every provider with an endpoint of its own has one to
+        # ask, local or hosted.
+        self.served_models = {
             resolved_provider(self.config, name)["model"]
             for name, provider in self.config["providers"].items()
             if provider.get("base_url")
         }
-        self.assertTrue(self.local_models, "fixture needs at least one local provider")
+        self.assertTrue(
+            self.served_models, "fixture needs at least one provider with its own endpoint"
+        )
 
-    def test_missing_local_model_is_an_error(self) -> None:
+    def test_missing_model_is_an_error(self) -> None:
         findings = doctor(self.config, {}, catalog=lambda url: {"some-other-model"})
         errors = [f for f in findings if f.startswith("ERROR") and "not served" in f]
         self.assertTrue(errors, f"expected a not-served error, got: {findings}")
 
-    def test_served_local_model_is_ok(self) -> None:
-        findings = doctor(self.config, {}, catalog=lambda url: self.local_models)
+    def test_served_model_is_ok(self) -> None:
+        findings = doctor(self.config, {}, catalog=lambda url: self.served_models)
         self.assertFalse([f for f in findings if f.startswith("ERROR")], findings)
         self.assertTrue([f for f in findings if "serving" in f], findings)
 

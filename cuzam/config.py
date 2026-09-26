@@ -20,6 +20,24 @@ from .env import get as env_value
 
 SCHEMA_VERSION = 1
 RUNNERS = {"claude-code", "codex"}
+# Where a provider is served. Declared, never deduced: see _hosting.
+HOSTINGS = {"vendor", "third-party", "local"}
+# Closed, for the same reason `instance` is closed. A provider whose hosting is
+# misspelled is not a provider with a broken declaration — it is a `vendor`
+# provider carrying an ignored key, which is precisely the classification the
+# declaration exists to refuse.
+PROVIDER_KEYS = frozenset({
+    "runner",
+    "hosting",
+    "model",
+    "model_env",
+    "base_url",
+    "base_url_env",
+    "auth_token",
+    "auth_token_env",
+    "context_length",
+    "fallback",
+})
 ROLES = {"plan", "build", "review", "repair", "verify", "pr", "custom"}
 READ_ONLY_ROLES = {"plan", "review", "verify"}
 ENV_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
@@ -316,6 +334,79 @@ def _artifact(value: Any, label: str) -> str:
     return value
 
 
+def _hosting(name: str, provider: Mapping[str, Any]) -> str:
+    """The provider's declared hosting, or a ConfigError naming the fix.
+
+    Hosting used to be inferred from the presence of a `base_url`, which was
+    the same set as "runs on this machine" for exactly as long as the only
+    such provider was Ollama on the loopback. Two different questions were
+    riding on one field. Whether to suppress MCP discovery is a question about
+    the endpoint not being Anthropic's, and a hosted endpoint needs it just as
+    much; whether a provider may take a mutating stage is a question about
+    *this machine's* models, and the evidence behind that refusal was gathered
+    against this hardware. Splitting them means a hosted open-weight coder is
+    no longer refused a build stage by a rule argued from a local model's
+    memory budget.
+
+    Nothing here inspects the host. A check for "is this really local" is right
+    on 127.0.0.1 and wrong — silently, and only on someone else's network — for
+    a private range, a VPN address, an SSH tunnel, or a hostname that resolves
+    differently per machine. A wrong answer would misfile a provider in the
+    expensive direction while looking authoritative. The operator knows where
+    their endpoint is; this records what they said.
+
+    `base_url_env` counts as configuring a base URL even though the value is
+    not here yet. `resolved_provider` fills it from the environment *after*
+    validation, so a provider declaring only the indirection would pass as
+    `vendor` and acquire a base URL before it ran.
+    """
+    # repr, not str: PyYAML reads bare `no:`/`on:`/`off:`/`yes:` as booleans,
+    # and joining those raised TypeError — a traceback in place of the named
+    # fix this message exists to give.
+    unknown = sorted(f"{key!r}" for key in set(provider) - PROVIDER_KEYS)
+    if unknown:
+        raise ConfigError(
+            f"providers.{name}: unknown setting(s) {', '.join(unknown)}; "
+            f"allowed: {', '.join(sorted(PROVIDER_KEYS))}"
+        )
+
+    has_base_url = bool(provider.get("base_url") or provider.get("base_url_env"))
+    hosting = provider.get("hosting")
+    if hosting is None:
+        if has_base_url:
+            raise ConfigError(
+                f"providers.{name} configures a base_url but declares no hosting; "
+                "add hosting: third-party for someone else's hosted endpoint, "
+                "or hosting: local for a model served by this machine"
+            )
+        return "vendor"
+    if hosting not in HOSTINGS:
+        raise ConfigError(
+            f"providers.{name}.hosting must be one of {sorted(HOSTINGS)}"
+        )
+    if hosting == "vendor":
+        if has_base_url:
+            raise ConfigError(
+                f"providers.{name} declares hosting: vendor but configures a "
+                "base_url; vendor means the runner's own endpoint"
+            )
+    elif not has_base_url:
+        raise ConfigError(
+            f"providers.{name} declares hosting: {hosting} but configures no "
+            "base_url; only a vendor provider uses the runner's own endpoint"
+        )
+    if hosting == "third-party" and not provider.get("auth_token_env"):
+        # A hosted endpoint takes a real credential, and a real credential is
+        # never a literal here. Without this the only legal token a third-party
+        # provider could carry was the `ollama` placeholder, which authenticates
+        # nothing and fails as a 401 that reads like a missing key.
+        raise ConfigError(
+            f"providers.{name} declares hosting: third-party and must name its "
+            "credential with auth_token_env"
+        )
+    return hosting
+
+
 def _no_fallback_cycles(providers: Mapping[str, Any]) -> None:
     """Refuse a fallback chain that loops back on itself.
 
@@ -379,10 +470,21 @@ def validate_config(config: Mapping[str, Any]) -> None:
             )
         for key in ("model_env", "base_url_env", "auth_token_env"):
             _environment_field(provider.get(key), f"providers.{name}.{key}")
+        hosting = _hosting(name, provider)
         if provider.get("auth_token") not in (None, "ollama"):
             raise ConfigError(
                 f"providers.{name}.auth_token may only use the non-secret ollama placeholder; "
                 "real credentials must use auth_token_env"
+            )
+        if provider.get("auth_token") is not None and hosting != "local":
+            # The placeholder exists because Ollama's local API demands a token
+            # it never checks. Copied onto a hosted provider it becomes a real
+            # credential that is the literal string "ollama", and the 401 that
+            # follows reads as a missing key — sending you to look in the env
+            # file for something that was never the problem.
+            raise ConfigError(
+                f"providers.{name} declares hosting: {hosting} and may not use the "
+                "ollama placeholder; name a real credential with auth_token_env"
             )
         context_length = provider.get("context_length")
         if context_length is not None and (
@@ -503,7 +605,53 @@ def resolved_provider(
         if env_name and env.get(env_name):
             resolved[field] = env[env_name]
     resolved["name"] = name
+    _require_resolved_endpoint(resolved)
     return resolved
+
+
+def _require_resolved_endpoint(resolved: Mapping[str, Any]) -> None:
+    """A declared non-vendor provider must actually have what it declared.
+
+    Validation checks declarations; this checks what the environment produced
+    from them, and the gap between the two was exploitable in both directions.
+
+    Without the credential check, a `third-party` provider whose key is missing
+    from the environment resolves with no `auth_token`, so `runner_command`
+    never sets `ANTHROPIC_AUTH_TOKEN` — and every runner env starts as
+    `os.environ.copy()`. The stage then runs with `ANTHROPIC_BASE_URL` pointed
+    at someone else's host while still carrying whatever Anthropic credentials
+    the operator's own environment holds, and Claude Code falls back to its
+    stored OAuth credentials when no token is set. A missing key is not a
+    degraded run; it is the operator's subscription credentials sent to a third
+    party, invisibly, because nothing in the command line looks wrong.
+
+    Without the endpoint check, a provider declaring `hosting: third-party`
+    through `base_url_env` alone, with that variable unset at launch, resolves
+    with no `base_url` at all: no `ANTHROPIC_BASE_URL`, no
+    `--strict-mcp-config`, and a stage that runs against the vendor endpoint on
+    the operator's subscription while the config says it does not. That is the
+    misfiling the `base_url_env` validation rule was written to prevent, moved
+    one step past validation.
+
+    Both refuse rather than warn, and refuse at the single point every caller
+    goes through — the runner, the preflight probe and the assistant loop all
+    resolve providers here — so there is no second definition to keep in step.
+    """
+    hosting = resolved.get("hosting") or "vendor"
+    if hosting == "vendor":
+        return
+    name = resolved.get("name")
+    if not resolved.get("base_url"):
+        raise ConfigError(
+            f"provider {name} declares hosting: {hosting} but no base_url resolved; "
+            f"set {resolved.get('base_url_env') or 'base_url'}"
+        )
+    if hosting == "third-party" and not resolved.get("auth_token"):
+        raise ConfigError(
+            f"provider {name} declares hosting: third-party but no credential "
+            f"resolved from {resolved.get('auth_token_env')}; refusing to reach "
+            f"{resolved['base_url']} carrying the environment's own credentials"
+        )
 
 
 def instance_value(
@@ -612,19 +760,35 @@ def resolved_flow(
     return flow
 
 
-def served_models(base_url: str, timeout: float = 2.0) -> set[str] | None:
-    """Model names a local endpoint is serving, or None if it is unreachable.
+def served_models(
+    base_url: str, timeout: float = 2.0, auth_token: str | None = None
+) -> set[str] | None:
+    """Model names an endpoint is serving, or None if it is unreachable.
 
     Accepts both the Ollama-native and OpenAI-compatible listings so this
-    works against any endpoint a provider's base_url may point at.
+    works against any endpoint a provider's base_url may point at — which
+    since 2026-09-26 includes hosted ones, so `doctor` reaches off this machine
+    for a provider declared `third-party`. That is a plain catalog read, and an
+    endpoint that does not publish one is reported as unreachable rather than
+    as a configuration error.
+
+    The token is sent because a hosted catalog needs it. Without it every
+    authenticated `third-party` provider answers 401 on both paths and
+    `doctor` reports "cannot reach" forever — the check would be dead for the
+    one class of provider it was just extended to cover, which is worse than
+    not extending it.
     """
+    headers = {}
+    if auth_token:
+        headers["Authorization"] = f"Bearer {auth_token}"
     for path, key, field in (
         ("/api/tags", "models", "name"),
         ("/v1/models", "data", "id"),
     ):
         url = f"{base_url.rstrip('/')}{path}"
         try:
-            with urllib.request.urlopen(url, timeout=timeout) as response:
+            request = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(request, timeout=timeout) as response:
                 payload = json.load(response)
         except (urllib.error.URLError, OSError, ValueError, json.JSONDecodeError):
             continue
@@ -644,12 +808,21 @@ def doctor(
     catalog: Callable[[str], set[str] | None] | None = None,
 ) -> list[str]:
     env = os.environ if environ is None else environ
+    # A catalog passed by a test takes the url alone; the real one also takes
+    # the provider's token, which a hosted endpoint requires.
     lookup = served_models if catalog is None else catalog
     findings: list[str] = []
     commands = {"claude-code": "claude", "codex": "codex"}
     seen: dict[str, set[str] | None] = {}
     for name in config["providers"]:
-        provider = resolved_provider(config, name, env)
+        try:
+            provider = resolved_provider(config, name, env)
+        except ConfigError as exc:
+            # A provider that cannot be resolved is the finding, and doctor's
+            # job is to report every provider rather than stop at the first
+            # broken one.
+            findings.append(f"ERROR provider {name}: {exc}")
+            continue
         command = commands[provider["runner"]]
         model = provider.get("model")
         base_url = provider.get("base_url")
@@ -662,7 +835,12 @@ def doctor(
             # the host at any time, and without this the flow only finds out
             # mid-run, several stages deep.
             if base_url not in seen:
-                seen[base_url] = lookup(str(base_url))
+                token = provider.get("auth_token")
+                seen[base_url] = (
+                    served_models(str(base_url), auth_token=token)
+                    if catalog is None
+                    else lookup(str(base_url))
+                )
             available = seen[base_url]
             if available is None:
                 findings.append(

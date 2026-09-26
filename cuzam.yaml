@@ -27,6 +27,9 @@ providers:
   # handing the build to a local model is the retired arrangement reappearing
   # unattended. The fallback machinery in runner.py stays, so an installation
   # that wants one can configure it deliberately.
+  # No hosting declared means `vendor`: the runner's own endpoint, reached on
+  # the operator's own subscription. Only a provider configuring a base_url has
+  # to say where it is served.
   claude-opus:
     runner: claude-code
     model: opus
@@ -42,6 +45,11 @@ providers:
   # It is deliberately not given a mutating stage in any shipped flow.
   local-brain:
     runner: claude-code
+    # Served by this machine, and said so rather than deduced from the
+    # base_url below: a hosted provider carries a base_url too, and the rule
+    # keeping a mutating stage away from this one was argued from this
+    # hardware's limits, not from the existence of a custom endpoint.
+    hosting: local
     model: qwen3.6:35b-mlx
     model_env: ZAM_LOCAL_BRAIN_MODEL
     base_url: http://localhost:11434

@@ -422,11 +422,19 @@ def runner_command(
     if runner == "claude-code":
         command = ["claude", "-p"]
         if provider.get("base_url"):
-            # A locally served model needs the MCP *discovery* call suppressed
-            # or the stage never starts: Claude Code fetches MCP configuration
-            # from api.anthropic.com with no timeout, which never returns when
-            # the base URL points at Ollama. That is what burned tier1's whole
-            # hour — 935 bytes of warnings and no request ever made.
+            # Any endpoint that is not the vendor's needs the MCP *discovery*
+            # call suppressed or the stage never starts: Claude Code fetches MCP
+            # configuration from api.anthropic.com with no timeout, which never
+            # returns once the base URL points somewhere else. That is what
+            # burned tier1's whole hour — 935 bytes of warnings and no request
+            # ever made.
+            #
+            # Keyed on the base_url, not on the declared `hosting`, and that is
+            # deliberate: the question here is "is this Anthropic's endpoint",
+            # which a base_url answers on its own. Hosting answers a different
+            # question — whether the model runs on this machine — and only the
+            # mutating-stage rule needs that one. Conflating them is what this
+            # line used to do.
             #
             # --strict-mcp-config is what actually fixes it: use only the
             # config passed on the command line, discover nothing. This used
@@ -446,6 +454,13 @@ def runner_command(
             #
             # --add-dir stays: it costs nothing, and it keeps the repository
             # readable when a provider's own settings would not reach it.
+            #
+            # tier1 and the 2026-09-20 measurement were both local runs, which
+            # is why the reasoning above is written about Ollama on the
+            # loopback. The failure is about the endpoint, not about where it
+            # is: a hosted provider serves no MCP discovery either. That last
+            # step is reasoned, not measured — no shipped provider is hosted,
+            # so no test here exercises it.
             command += ["--strict-mcp-config", "--add-dir", str(cwd)]
             env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
         mode = "acceptEdits" if stage["mutates"] else "plan"
@@ -661,7 +676,8 @@ def preflight_provider(provider: Mapping[str, Any]) -> str:
     command = ["claude", "-p", "--permission-mode", "plan"]
     if provider.get("base_url"):
         # Probe the way the stage will actually run, or the probe tests a
-        # configuration nothing uses — and would fail on every local provider.
+        # configuration nothing uses — and would fail on every provider with an
+        # endpoint of its own, local or hosted.
         # This used to add --bare, which the stage no longer passes; the probe
         # would then have been the only thing running bare, which is the
         # inverse of its purpose.
