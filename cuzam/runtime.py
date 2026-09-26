@@ -63,13 +63,22 @@ def runtime_python(environ: Mapping[str, str] | None = None) -> Path | None:
     under it dies instantly on ModuleNotFoundError while the launch reports
     success, the task stays claimed, and the day-scoped idempotency key
     refuses every retry until midnight.
+
+    It also proves the broker can serve, which importing the runner does not.
+    The runner imports `cuzam.broker` for one constant and the MCP stack is
+    imported inside the broker, so an interpreter missing `mcp` passed this
+    check and then failed every gated mutating stage — at the first permission
+    request rather than at startup, so it read as the model refusing to work.
+    A check this cheap is worth the extra subprocess argument: the alternative
+    is discovering it an hour into a run.
     """
     candidate = runtime_root(environ) / RUNTIME_VENV / "bin" / "python"
     if not candidate.is_file():
         return None
     try:
         proved = subprocess.run(
-            [str(candidate), "-P", "-c", "import cuzam.runner"],
+            [str(candidate), "-P", "-c",
+             "import cuzam.runner, cuzam.broker; cuzam.broker.serveable()"],
             capture_output=True, text=True, check=False, timeout=60,
             cwd="/", env=pinned_env(dict(environ) if environ else None),
         )

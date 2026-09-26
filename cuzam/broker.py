@@ -78,11 +78,43 @@ def _timeout(environ: Mapping[str, str] | None = None) -> int:
     return approvals.DEFAULT_TIMEOUT_SECONDS
 
 
-def main() -> None:  # pragma: no cover - exercised as a live MCP server
+def _mcp() -> tuple[Any, Any, Any, Any, Any]:
+    """The MCP stack, imported on use. The one place it is imported.
+
+    Not at module scope because `cuzam.runner` imports this module for
+    `TOOL_NAME` alone, and pulling anyio and pydantic into that would cost
+    several times what the whole runner import costs today.
+
+    The price of keeping it lazy is that importing this module proves nothing
+    about whether the server can run — and that is not hypothetical. The
+    runtime pin proved `import cuzam.runner`, `mcp` was undeclared in
+    `pyproject.toml`, so `pip install -e .` left a pinned interpreter that
+    imported everything it was asked about and could not start the broker.
+    Claude Code then registered no tools, and the stage died not at startup
+    but at its first permission request, reading as a model failure.
+
+    `serveable()` closes that, and only works while this stays the single
+    import site. Add a name here, not in the caller.
+    """
     import anyio
     import mcp.types as types
-    from mcp.server.lowlevel import Server
+    from mcp.server.lowlevel import NotificationOptions, Server
     from mcp.server.stdio import stdio_server
+
+    return anyio, types, NotificationOptions, Server, stdio_server
+
+
+def serveable() -> None:
+    """Raise unless this interpreter can actually run the server.
+
+    What the runtime pin checks. `import cuzam.broker` succeeding is not the
+    same question and never was.
+    """
+    _mcp()
+
+
+def main() -> None:  # pragma: no cover - exercised as a live MCP server
+    anyio, types, NotificationOptions, Server, stdio_server = _mcp()
 
     server = Server("zam-approve")
 
@@ -117,8 +149,6 @@ def main() -> None:  # pragma: no cover - exercised as a live MCP server
         return [types.TextContent(type="text", text=json.dumps(result))]
 
     async def serve() -> None:
-        from mcp.server.lowlevel import NotificationOptions
-
         # Advertise the tools capability explicitly. Left implicit, Claude Code
         # logs "server does not advertise tools capability - returning empty
         # list" and only finds the tool because it was named on the command

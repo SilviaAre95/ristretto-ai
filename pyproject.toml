@@ -10,7 +10,11 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = {file = "LICENSE"}
 authors = [{name = "Silvia Arellano"}]
-dependencies = ["PyYAML>=6.0,<7.0"]
+# `mcp` is not optional: the approval gate is on by default, and a stage
+# that cannot reach the broker fails at its first permission request.
+# It was undeclared until 2026-09-26, which meant `install-runtime`
+# produced a runtime that could never gate a mutating stage.
+dependencies = ["PyYAML>=6.0,<7.0", "mcp>=1.0"]
 
 [project.optional-dependencies]
 # Read-only fleet view. Optional: the CLI and loop work without it.
