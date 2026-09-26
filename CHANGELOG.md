@@ -12,6 +12,15 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Providers declare where they are served.** A new `hosting` field, one of
+  `vendor` (the runner's own endpoint on the operator's own subscription),
+  `third-party` (someone else's hosted endpoint) or `local` (this machine). It
+  is required whenever a base URL is configured — as `base_url` or as
+  `base_url_env` — and defaults to `vendor` otherwise, so only the ambiguous
+  case has to answer. Nothing inspects the host: a check for "is this really
+  local" is right on a loopback address and wrong, silently and only on someone
+  else's network, for a private range, a VPN address or an SSH tunnel.
+
 - **`cuzam runs`** — every run with the paths to reach it: worktree, branch,
   the log to tail, the runner's pid, and for a classic loop the pid of the
   Claude process it is waiting on. `cuzam runs <issue>` narrows to one and
@@ -36,6 +45,27 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and no process is signalled. `cuzam relaunch` stays the deliberate way back.
 
 ### Changed
+
+- **"Local" is a declaration, not a deduction from `base_url`.** The guard
+  keeping a mutating stage away from a local model computed local as every
+  provider carrying a `base_url`, which was the same set for exactly as long as
+  the only such provider was Ollama on the loopback. It fails in the expensive
+  direction now: a hosted open-weight coder is refused a build stage by a rule
+  whose stated reason — the 2026-09-23 retirement of local coding — was argued
+  from this machine's memory budget and does not apply to it. The runner keeps
+  deciding `--strict-mcp-config` / `--add-dir` /
+  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` on the `base_url`, because that
+  question really is "is this Anthropic's endpoint"; only the comments claiming
+  it was about local serving were wrong.
+- **Provider settings are a closed set,** as `instance` already was. A
+  misspelled `hostng: local` is not a provider with a broken declaration — it is
+  a `vendor` provider carrying an ignored key, eligible for exactly the mutating
+  stage the declaration was written to refuse.
+- **The `ollama` literal `auth_token` placeholder is limited to
+  `hosting: local`.** Copied onto a hosted provider it becomes a real credential
+  that is the literal string `ollama`, and the 401 that follows reads as a
+  missing key — sending you to search the env file for something that was never
+  the problem.
 
 - **One answer to "what is a live run".** There were three and they disagreed,
   and none of them could see a `classic` loop at all — so a healthy
@@ -119,6 +149,23 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   armed and not a reason to retire it.
 
 ### Fixed
+
+- **`make check` read the developer's own configuration.** Several tests reach
+  `load_config()` with no path through `start_flow`, which resolves
+  `$XDG_CONFIG_HOME/cuzam/config.yaml` when it exists — so six tests passed or
+  failed by what was in the personal config of whoever ran them, and passed on
+  CI, which has none, while failing locally on a file CI never sees. The suite
+  now pins `CUZAM_CONFIG` at the shipped `cuzam.yaml`. This is why the
+  contributor instructions asked for a second run with `XDG_CONFIG_HOME` pointed
+  at an empty directory "which is what CI sees"; the ritual existed because the
+  suite was not hermetic, and local and CI are now the same run.
+- **The README advertised three flows that do not exist.** `balanced`, `quality`
+  and `local` were removed with the tier ladder on 2026-09-23, and `classic` was
+  described as falling back to a local model when Claude is unavailable, which
+  was removed at the same time and for the reason the whole premise was. A
+  public repository documented the retired local-coder arrangement as a shipped
+  feature, including a flow in which a model on this machine opens the pull
+  request.
 
 - **`cuzam launch --flow classic` reported success and started nothing.** It
   built `-m cuzam.runner --flow classic`, which exits 2 with "classic is

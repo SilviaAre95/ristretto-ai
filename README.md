@@ -143,6 +143,13 @@ tokens and `SLACK_ALLOWED_USERS` belong in `~/.hermes/.env`, never here.
 Custom cloud providers must reference tokens through `auth_token_env`; literal
 credentials in `cuzam.yaml` are rejected.
 
+A provider that sets a `base_url` must also declare `hosting` — `third-party`
+for someone else's hosted endpoint, `local` for a model served by this machine.
+Omitting it is a configuration error rather than a guess, and nothing inspects
+the URL to decide: the difference matters because no flow gives a mutating
+stage to a provider declared `local`. A provider on the runner's own endpoint
+needs no `base_url` and no declaration.
+
 ## 🪽 Install Hermes assets
 
 After installing and authenticating Hermes Agent — it is
@@ -170,10 +177,15 @@ bash scripts/install-hermes.sh --service
 
 | Flow | Pipeline |
 |---|---|
-| `classic` (default) | Existing Claude `/harness:loop-dev`, with local fallback only when Claude is unavailable. |
-| `balanced` | Claude plan → local build → Codex review → local repair → verify → Claude PR. |
-| `quality` | Claude plan/build/repair → Codex review → verify → Claude PR. |
-| `local` | Local plan/build/review/repair → verify → local PR. |
+| `full` (default) | Plan → build → review → repair → verify → PR. Opus plans and reviews, Sonnet builds and repairs, Haiku opens the PR; the reviewer is never the model that wrote the code. |
+| `short` | Plan → build → verify → PR, for low-risk changes. No review stage, so the deterministic `.cc-verify` gate is the only thing between generated output and the branch. |
+| `classic` | The existing Claude `/harness:loop-dev` path, for work that arrives as chat rather than as a launch. |
+
+Flows are graded by **scrutiny**, not by how little of the run costs money. The
+earlier `balanced`, `quality` and `local` flows graded the latter, with the
+token-heavy build on a model served by this machine; that premise was retired
+on 2026-09-23 after every local build died in the build stage, and no flow
+routes a mutating stage to a provider declared `hosting: local`.
 
 Add custom flows using the validated schema in
 [`docs/features/custom-model-flows.md`](docs/features/custom-model-flows.md).
