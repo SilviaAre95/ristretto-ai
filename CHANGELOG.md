@@ -168,6 +168,13 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   server, and every import still resolves there — so `serveable` checks the
   API surface as well, or the same failure returns one layer further in.
 
+  **Upgrading: re-run `make install-runtime`.** The pin now asks the pinned
+  interpreter a question a runtime installed before this change cannot
+  answer, so until it is reinstalled every launch falls back to the
+  development checkout and says so. That is the intended direction — a
+  check that tolerated the older broker would also tolerate the broken
+  install it exists to catch — but it is a step, not a no-op.
+
 - **A stage pointed at a non-vendor endpoint inherited the operator's own vendor
   credentials.** Requiring the provider's own token to resolve did not help: the
   inherited `ANTHROPIC_API_KEY` rides along beside it and Claude Code sends it as
