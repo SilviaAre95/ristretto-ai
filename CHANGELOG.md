@@ -150,6 +150,31 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`mcp` was never declared as a dependency, so no pinned runtime could gate a
+  stage.** `pyproject.toml` listed only PyYAML, `install-runtime` runs
+  `pip install -e .`, and the approval broker imports its MCP stack inside
+  `main()` — so the interpreter every flow runs under imported the runner
+  happily and crashed the moment Claude Code started the broker. No MCP tools
+  registered, and the stage then failed at its **first permission request**
+  rather than at startup, which reads as the model refusing to work rather
+  than as a broken install. Every staged flow was affected, `full` and `short`
+  included; `classic` was not, because it goes through `run-loop.sh` and never
+  starts a broker. Found by running a flow whose build stage was routed to a
+  third-party provider — the hosting split did not cause it, it was the first
+  thing to exercise the path. `mcp` is now a core dependency, the lazy import
+  has one site behind `broker.serveable()`, and the runtime pin proves the
+  broker can serve rather than only that the runner imports. `mcp` is
+  capped below 2.0: 2.2.0 removed `Server.list_tools` from the low-level
+  server, and every import still resolves there — so `serveable` checks the
+  API surface as well, or the same failure returns one layer further in.
+
+  **Upgrading: re-run `make install-runtime`.** The pin now asks the pinned
+  interpreter a question a runtime installed before this change cannot
+  answer, so until it is reinstalled every launch falls back to the
+  development checkout and says so. That is the intended direction — a
+  check that tolerated the older broker would also tolerate the broken
+  install it exists to catch — but it is a step, not a no-op.
+
 - **A stage pointed at a non-vendor endpoint inherited the operator's own vendor
   credentials.** Requiring the provider's own token to resolve did not help: the
   inherited `ANTHROPIC_API_KEY` rides along beside it and Claude Code sends it as

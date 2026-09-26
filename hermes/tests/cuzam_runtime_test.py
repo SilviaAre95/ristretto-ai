@@ -61,6 +61,32 @@ class RuntimeResolutionTest(unittest.TestCase):
         self.assertNotIn("PYTHONPATH", env)
         self.assertEqual(warning, "")
 
+    def stub(self, body: str) -> Path:
+        """A pinned interpreter whose answers we choose."""
+        venv = self.home / "runtime" / ".venv" / "bin"
+        venv.mkdir(parents=True, exist_ok=True)
+        python = venv / "python"
+        python.write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8")
+        python.chmod(0o755)
+        return python
+
+    def test_an_interpreter_that_cannot_serve_the_broker_is_not_pinned(self) -> None:
+        # The state that shipped: `mcp` undeclared, so `pip install -e .` left a
+        # runtime that imported the runner and could not start the broker. The
+        # old proof asked only about the runner and said yes. Every gated
+        # mutating stage then died at its first permission request — not at
+        # startup — which reads as the model refusing rather than as a broken
+        # install.
+        self.stub('case "$*" in *serveable*) exit 1 ;; *) exit 0 ;; esac')
+
+        self.assertIsNone(runtime.runtime_python(self.env))
+
+    def test_an_interpreter_that_can_serve_the_broker_is_pinned(self) -> None:
+        # The other half: the new check must not reject a working runtime.
+        python = self.stub("exit 0")
+
+        self.assertEqual(runtime.runtime_python(self.env), python)
+
     def test_the_identity_says_it_is_unpinned(self) -> None:
         identity = runtime.runtime_identity(self.env)
 

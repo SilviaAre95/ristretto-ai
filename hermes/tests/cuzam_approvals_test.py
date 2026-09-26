@@ -382,3 +382,28 @@ class DescribeExplainsTest(unittest.TestCase):
 
     def test_nothing_useful_falls_back_to_the_tool_name(self) -> None:
         self.assertEqual(approvals.describe("SomeTool", {}), "SomeTool")
+
+
+class BrokerCanActuallyServeTest(unittest.TestCase):
+    """The dependency check, as a test rather than as a hope."""
+
+    def test_the_mcp_stack_the_server_needs_is_installed(self) -> None:
+        # `serveable` exists because importing this module proves nothing —
+        # the MCP stack is imported inside `_mcp()`, so `import cuzam.broker`
+        # succeeds on an interpreter that cannot start the server. `mcp` was
+        # undeclared in pyproject until 2026-09-26 and the runtime pin's proof
+        # passed anyway; every gated mutating stage then failed at its first
+        # permission request. This fails on any install missing it.
+        broker.serveable()
+
+    def test_an_mcp_major_that_drops_the_api_is_refused(self) -> None:
+        # mcp 2.2.0 removed Server.list_tools. Every import still resolves on
+        # that version, so checking the imports alone reports a healthy broker
+        # that dies on the decorator a moment later.
+        class Server:
+            def __init__(self, name: str) -> None:
+                self.name = name
+
+        with mock.patch.object(broker, "_mcp", return_value=(None, None, None, Server, None)):
+            with self.assertRaisesRegex(RuntimeError, "list_tools"):
+                broker.serveable()
