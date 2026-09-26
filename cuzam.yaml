@@ -19,8 +19,11 @@ instance:
 repositories: {}
 
 providers:
-  # Coding runs on Claude. Opus reasons and reviews, Sonnet builds and repairs,
-  # Haiku writes the PR. The reviewer is never the model that wrote the code.
+  # Every shipped flow codes on Claude. Opus reasons and reviews, Sonnet builds
+  # and repairs, Haiku writes the PR. The reviewer is never the model that wrote
+  # the code. That is a choice about these flows, not the boundary: the boundary
+  # is that no provider declared `hosting: local` takes a mutating stage, and a
+  # `third-party` one may.
   #
   # No fallback is configured on the coding providers. There was one, to
   # local-coder, and it is gone with the premise: a Claude outage silently
@@ -69,8 +72,10 @@ providers:
 # The tier0-tier3 ladder that lived here graded how much Claude a run used,
 # with the token-heavy build on a local coder. That premise was retired on
 # 2026-09-23 after every local build died in the build stage, which empties
-# the axis: with all coding on Claude there is nothing left for a tier to
-# measure. Model choice per stage is now ordinary cost-fitting inside Claude.
+# the axis: with every shipped build on Claude there is nothing left for a tier
+# to measure. Model choice per stage is ordinary cost-fitting inside Claude.
+# A user flow routing a build to a `third-party` provider is a different
+# question, on cost rather than on scrutiny, and is not graded here.
 flows:
   classic:
     description: Existing Claude /loop-dev path.

@@ -14,7 +14,7 @@ Source of truth for what this product **does** and **does not** do. Every code c
 |----|-------|--------|---------|---------------|
 | `slack-gateway` | Slack Gateway | implemented | Zam talks to one allowlisted user in Slack over Socket Mode. | NOT public/multi-user; NOT other chat platforms in V0 |
 | `zam-persona` | Zam Persona | implemented | Assistant identifies and behaves as "Zam", per SOUL.md. | NOT a generic assistant voice; NOT changing identity per session |
-| `local-brain` | Local Brain | implemented | `qwen3.6:35b-mlx` orchestrates chat, briefs and tool decisions locally. Coding runs on Claude. | NOT writing production code on a local model; NOT cloud LLM for orchestration |
+| `local-brain` | Local Brain | implemented | `qwen3.6:35b-mlx` orchestrates chat, briefs and tool decisions locally. No coding on this machine. | NOT writing production code on a local model; NOT cloud LLM for orchestration |
 | `linear-integration` | Linear Integration | implemented | One configured Linear team: MCP to converse and mutate, GraphQL for unattended reads. | NOT acting on other teams; NOT auto-closing issues without instruction |
 | `config-in-repo` | Config In Repo | implemented | Hermes config versioned in repo and symlinked; secrets stay local. | NOT committing secrets; NOT versioning the Hermes engine code or runtime state |
 | `morning-brief` | Morning Brief | implemented | 8am cron posts a prioritized brief to the configured Slack channel. | NOT acting on the board automatically; NOT posting when nothing is new |
