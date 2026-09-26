@@ -92,9 +92,11 @@ class ConfigTests(unittest.TestCase):
 
     def test_no_shipped_flow_gives_a_local_provider_a_mutating_stage(self) -> None:
         # The premise that a model on this machine writes code was retired
-        # 2026-09-23. Config validation cannot express "not local", so this is
-        # where it is enforced: a flow added later that routes a build to a
-        # local provider fails here rather than in production at 3am.
+        # 2026-09-23. Enforced here rather than in validate_config, which now
+        # *could* express it: this checks the shipped flows only, and whether
+        # the rule should bind a user's own flows too is an open question on
+        # `custom-model-flows`. A shipped flow added later that routes a build
+        # to a local provider fails here rather than in production at 3am.
         #
         # Reads the declaration. This used to compute local as every provider
         # carrying a base_url, which was the same set only while the sole such
@@ -222,6 +224,78 @@ class ConfigTests(unittest.TestCase):
             "model": "some-open-weight-model",
         }
         with self.assertRaisesRegex(ConfigError, "must name its credential"):
+            validate_config(config)
+
+    def test_a_third_party_provider_without_its_key_is_refused(self) -> None:
+        """A missing key is not a degraded run; it is a credential leak.
+
+        `runner_command` starts from `os.environ.copy()` and sets
+        `ANTHROPIC_AUTH_TOKEN` only when the provider resolved one, so an
+        unresolved credential means the stage reaches someone else's host still
+        carrying whatever Anthropic credentials the operator's environment
+        holds — and Claude Code falls back to its stored OAuth credentials when
+        no token is set.
+        """
+        config = copy.deepcopy(self.config)
+        config["providers"]["hosted"] = {
+            "runner": "claude-code",
+            "hosting": "third-party",
+            "base_url": "https://example.invalid",
+            "auth_token_env": "HOSTED_KEY_NOT_SET",
+            "model": "some-open-weight-model",
+        }
+        validate_config(config)  # the declaration itself is well formed
+        with self.assertRaisesRegex(ConfigError, "no credential resolved"):
+            resolved_provider(config, "hosted", {})
+        # And resolves once the key is actually there.
+        provider = resolved_provider(config, "hosted", {"HOSTED_KEY_NOT_SET": "k"})
+        self.assertEqual(provider["auth_token"], "k")
+
+    def test_a_non_vendor_provider_without_a_resolved_endpoint_is_refused(self) -> None:
+        """Otherwise it runs against the vendor endpoint while declared hosted.
+
+        The `base_url_env` validation rule stops this at config time; without
+        this check the same misfiling happens one step later, when the variable
+        is simply unset at launch.
+        """
+        config = copy.deepcopy(self.config)
+        config["providers"]["indirect"] = {
+            "runner": "claude-code",
+            "hosting": "third-party",
+            "base_url_env": "ENDPOINT_NOT_SET",
+            "auth_token_env": "KEY_NOT_SET",
+            "model": "whatever",
+        }
+        validate_config(config)
+        with self.assertRaisesRegex(ConfigError, "no base_url resolved"):
+            resolved_provider(config, "indirect", {})
+
+    def test_doctor_reports_an_unresolvable_provider_without_crashing(self) -> None:
+        config = copy.deepcopy(self.config)
+        config["providers"]["hosted"] = {
+            "runner": "claude-code",
+            "hosting": "third-party",
+            "base_url": "https://example.invalid",
+            "auth_token_env": "HOSTED_KEY_NOT_SET",
+            "model": "some-open-weight-model",
+        }
+        findings = doctor(config, {}, catalog=lambda url: {"qwen3.6:35b-mlx"})
+        self.assertTrue(
+            [f for f in findings if f.startswith("ERROR provider hosted")], findings
+        )
+        # Every other provider is still reported: one broken entry must not
+        # truncate the report.
+        self.assertTrue([f for f in findings if f.startswith("OK provider claude:")], findings)
+
+    def test_a_non_string_provider_key_names_the_fix(self) -> None:
+        """PyYAML reads a bare `no:` as the boolean False.
+
+        Joining that into the error message raised TypeError, so the CLI printed
+        a traceback instead of the fix the message exists to name.
+        """
+        config = copy.deepcopy(self.config)
+        config["providers"]["local-brain"][False] = "bar"
+        with self.assertRaisesRegex(ConfigError, "unknown setting"):
             validate_config(config)
 
     def test_the_ollama_placeholder_is_local_only(self) -> None:

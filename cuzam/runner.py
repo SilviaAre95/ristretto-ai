@@ -458,8 +458,9 @@ def runner_command(
             # tier1 and the 2026-09-20 measurement were both local runs, which
             # is why the reasoning above is written about Ollama on the
             # loopback. The failure is about the endpoint, not about where it
-            # is: a hosted provider serves no MCP discovery either. Verified
-            # against a hosted endpoint on 2026-09-26 by preflight_provider.
+            # is: a hosted provider serves no MCP discovery either. That last
+            # step is reasoned, not measured — no shipped provider is hosted,
+            # so no test here exercises it.
             command += ["--strict-mcp-config", "--add-dir", str(cwd)]
             env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
         mode = "acceptEdits" if stage["mutates"] else "plan"

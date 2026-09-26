@@ -146,8 +146,8 @@ credentials in `cuzam.yaml` are rejected.
 A provider that sets a `base_url` must also declare `hosting` — `third-party`
 for someone else's hosted endpoint, `local` for a model served by this machine.
 Omitting it is a configuration error rather than a guess, and nothing inspects
-the URL to decide: the difference matters because no flow gives a mutating
-stage to a provider declared `local`. A provider on the runner's own endpoint
+the URL to decide: the difference matters because no shipped flow gives a
+mutating stage to a provider declared `local`. A provider on the runner's own endpoint
 needs no `base_url` and no declaration.
 
 ## 🪽 Install Hermes assets

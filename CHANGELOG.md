@@ -150,15 +150,40 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A `third-party` provider with an unresolved credential sent the operator's
+  own.** Validation required `auth_token_env` to be *named*, never to resolve.
+  `runner_command` starts every stage from `os.environ.copy()` and sets
+  `ANTHROPIC_AUTH_TOKEN` only when the provider resolved one, so a missing key
+  meant the stage reached someone else's host still carrying whatever Anthropic
+  credentials the environment held — and Claude Code falls back to its stored
+  OAuth credentials when no token is set. Refused at resolution now.
+- **A non-vendor provider whose `base_url_env` was unset ran against the vendor
+  endpoint.** No `ANTHROPIC_BASE_URL`, no `--strict-mcp-config`, and a stage
+  billed to the operator's subscription while the config said third-party — the
+  misfiling the new validation rule prevents, one step past validation. Both
+  checks live in `resolved_provider`, the single point the runner, the preflight
+  probe and the assistant loop all pass through.
+- **`cuzam migrate` could not run on the config it exists to repair.**
+  `main()` validated before dispatching any subcommand, and `migrate --force`
+  then asked `load_config` for the merged view of the very entries it was
+  replacing. It now dispatches first and validates the config it is about to
+  **write** rather than the one it read.
+- **`cuzam doctor` crashed on an unresolvable provider** instead of reporting it,
+  truncating the report at the first broken entry.
+- **`doctor`'s catalog probe sent no credential,** so every authenticated
+  `third-party` provider would have reported "cannot reach" forever — the check
+  dead for the one class it was just extended to cover.
+- **A non-string provider key raised `TypeError`.** PyYAML reads a bare `no:`,
+  `on:`, `off:` or `yes:` as a boolean, and joining that into the error message
+  printed a traceback in place of the named fix.
 - **`make check` read the developer's own configuration.** Several tests reach
   `load_config()` with no path through `start_flow`, which resolves
   `$XDG_CONFIG_HOME/cuzam/config.yaml` when it exists — so six tests passed or
   failed by what was in the personal config of whoever ran them, and passed on
   CI, which has none, while failing locally on a file CI never sees. The suite
-  now pins `CUZAM_CONFIG` at the shipped `cuzam.yaml`. This is why the
-  contributor instructions asked for a second run with `XDG_CONFIG_HOME` pointed
-  at an empty directory "which is what CI sees"; the ritual existed because the
-  suite was not hermetic, and local and CI are now the same run.
+  now pins `CUZAM_CONFIG` at the shipped `cuzam.yaml`, so local and CI are the
+  same run and there is no longer anything to learn from running the suite a
+  second time against an empty `XDG_CONFIG_HOME`.
 - **The README advertised three flows that do not exist.** `balanced`, `quality`
   and `local` were removed with the tier ladder on 2026-09-23, and `classic` was
   described as falling back to a local model when Claude is unavailable, which

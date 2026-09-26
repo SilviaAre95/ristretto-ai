@@ -23,6 +23,9 @@ acceptance_criteria:
   - No shipped flow routes a mutating stage to a provider declared
     `hosting: local`
   - A provider declared `hosting: third-party` may take a mutating stage
+  - A provider declared non-vendor whose endpoint or credential does not
+    resolve is refused, never run against the vendor endpoint or reached with
+    the environment's own credentials
   - Every stage spawn carries a filesystem scope, or the launch is refused
     (pending `filesystem-scoping`, which is `proposed`)
   - A staged flow's effective permissions come from Cuzam, never from a
@@ -124,13 +127,20 @@ only on someone else's network, for a private range, a VPN address, an SSH
 tunnel or a hostname that resolves differently per machine. The operator knows
 where their endpoint is; the config records what they said.
 
-The distinction earns its keep in two places that were previously one. The
-runner passes `--strict-mcp-config`, `--add-dir` and
+The distinction earns its keep in two places that were previously one. A flow
+stage gets `--strict-mcp-config`, `--add-dir` and
 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` for **any** provider that is not the
 vendor's endpoint, because that is about MCP discovery hanging against a
 non-Anthropic host and applies equally to a hosted one. The prohibition on a
 mutating stage, by contrast, is about **this machine's** models specifically —
 see `local-brain` — and applies only to `hosting: local`.
+
+This is the flow runner's behaviour, not every spawn's: the assistant loop sets
+the base URL for the same providers and passes none of the three. Since
+`instance.assistant_provider` points at a local provider, that path runs the
+configuration described here as hanging indefinitely, and does not hang — which
+means the account above is incomplete rather than wrong, and is recorded as an
+open question rather than tidied over.
 
 So there is no longer a way to ask for a *locally served* coding run: no
 shipped flow gives a mutating stage to a provider declared `hosting: local`. A
@@ -139,10 +149,18 @@ for the deterministic verify gate on the run in question, not for the
 configuration schema.
 
 A provider entry in the user layer replaces the shipped entry of that name
-whole rather than merging field by field, so a user file holding its own copy
-of a `base_url` provider must carry `hosting` itself. Validation fails closed
-and names the field; `cuzam doctor`'s drift report is where such a copy shows
-up.
+whole rather than merging field by field, so a user file holding its own copy of
+a `base_url` provider must carry `hosting` itself. Validation fails closed and
+names the field, `cuzam doctor` reports it per provider, and `cuzam migrate`
+shows it as drift against the shipped entry and adopts the shipped version with
+`--adopt --force`.
+
+Declaring an endpoint is not the same as having one. A provider declared
+`third-party` whose credential does not resolve, or whose `base_url_env` is
+unset at launch, is refused at resolution rather than run: the first would reach
+someone else's host carrying whatever credentials the operator's own environment
+holds, and the second would silently run against the vendor endpoint while the
+config said otherwise.
 
 ## Custom flow example
 
@@ -214,6 +232,26 @@ so must name it through `auth_token_env`.
 
 ## Open questions
 
+- Should the local-mutating-stage prohibition bind a user's own flows, not just
+  the shipped ones? It is enforced by a test over `cuzam.yaml`, so a user flow
+  giving `local-brain` a `mutates: true` stage validates cleanly today. Now that
+  hosting is declared, `validate_config` could express it beside the
+  "review stages must be read-only" rule. Against: the shipped config is what
+  this project is responsible for, and an operator who declares a provider local
+  and then asks it to build has said two things and may mean the second.
+- Should the `ollama` placeholder be available to `hosting: third-party`? A
+  credential-free Ollama on a private range or a VPN address is a case
+  `_hosting`'s own docstring names as legitimate, and it is currently
+  unconfigurable without either declaring it `local` — which would be a lie that
+  costs it any mutating stage — or putting the literal string `ollama` in an
+  environment variable.
+- Why does the assistant loop not need what every flow stage needs? It sets
+  `ANTHROPIC_BASE_URL` for a provider with its own endpoint and passes none of
+  `--strict-mcp-config`, `--add-dir` or
+  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, yet `instance.assistant_provider`
+  points at a local provider and that path does not hang. Either the hang needs
+  a narrower description than "any non-vendor endpoint" or the assistant loop is
+  one Claude Code release away from the failure that cost `tier1` an hour.
 - Should a future schema version support conditional repair stages based on a
   machine-readable review result?
 - Which local API should the menu-bar editor use to queue and monitor flows?

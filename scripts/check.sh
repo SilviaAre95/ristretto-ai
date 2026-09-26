@@ -12,12 +12,11 @@ fi
 # The suite reads the shipped config, never the developer's own. Several tests
 # reach `load_config()` with no path through `start_flow`, which resolves
 # $XDG_CONFIG_HOME/cuzam/config.yaml when it exists — so their result depended
-# on the personal config file of whoever ran them, and they passed on CI (which
-# has none) while failing locally on a config CI never sees. That is why this
-# file's instructions used to say to run the suite a second time with
-# XDG_CONFIG_HOME pointed at an empty directory "which is what CI sees": the
-# ritual existed because the suite was not hermetic. CUZAM_CONFIG wins over XDG
-# discovery, so setting it here makes local and CI the same run.
+# on the personal config file of whoever ran them, and they passed on CI, which
+# has none, while failing locally on a config CI never sees. CUZAM_CONFIG wins
+# over XDG discovery, so setting it here makes local and CI the same run, and
+# removes the reason to run the suite a second time against an empty
+# XDG_CONFIG_HOME to find out what CI would say.
 #
 # Tests that mean to exercise layering pass an explicit path and are unaffected.
 #
