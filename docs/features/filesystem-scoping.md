@@ -84,7 +84,8 @@ for, one prompt at a time, was the whole home directory.
 
 **A credential a stage needs arrives as environment on the process that needs
 it, not as a path inside the scope.** That covers the publishing credential and
-the git identity, and the runner already does it for locally served providers.
+the git identity, and the runner already does it for any provider with an
+endpoint of its own — local or third-party.
 A stage cannot then be handed a directory that happens to contain a credential,
 which is what keeps the cases below from each needing their own reasoning.
 
