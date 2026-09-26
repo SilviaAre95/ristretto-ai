@@ -3,7 +3,7 @@ id: filesystem-scoping
 title: Filesystem Scoping
 status: proposed  # proposed | in-progress | implemented | deprecated
 created_at: 2026-09-25
-last_modified: 2026-09-25
+last_modified: 2026-09-26
 owner: project
 depends_on: [autonomous-coding, custom-model-flows, approval-loop, event-spine]
 acceptance_criteria:
@@ -31,7 +31,9 @@ acceptance_criteria:
   - A denial that kills a stage is diagnosable from the run's log without
     rerunning it, and the spawn's output format is unchanged
 non_goals:
-  - NOT scoping network access — a stage that can reach the API can exfiltrate
+  - NOT scoping network access — a stage that can reach its model endpoint can
+    send it whatever it has already read, and that endpoint is no longer
+    always the operator's own vendor
   - NOT a replacement for the approval gate, which decides writes and commands
   - NOT enforcement inside Hermes, which stays on its own side of the line
   - NOT scoping `cuzam chat`, which is allowed no file tools at all
@@ -525,6 +527,16 @@ rule stays: a flow is only as good as the issue's context being present.
   anything it has already read. A filesystem boundary that claims to stop
   exfiltration would be claiming something it cannot do. Bounding what can be
   read in the first place is the whole of the control.
+
+  That argument was written when every stage reached Anthropic, so "can send it
+  to the model API" named a destination the operator had already accepted and
+  the sentence carried no cost. Since `custom-model-flows` let a provider
+  declare `hosting: third-party`, the destination is a configuration choice, and
+  a stage's reachable set is the material that reaches *whoever the operator
+  pointed it at*. The control does not change — bounding what can be read is
+  still the whole of it — but it is now doing a second job the original
+  reasoning did not ask of it, and what a non-vendor stage is handed deliberately
+  is enumerated in `custom-model-flows` rather than left to this non-goal.
 - **Replacing the approval gate.** Scoping decides what is *reachable*; the
   gate decides what happens to it. Both, or neither is worth much: a scope with
   no gate permits any command inside it, and a gate with no scope is what

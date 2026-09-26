@@ -151,6 +151,38 @@ provider declared `third-party` may take one. Whether it should is a question
 for the deterministic verify gate on the run in question, not for the
 configuration schema.
 
+### What a non-vendor stage is handed
+
+Declaring where a provider is served answers where the stage's *tokens* go. It
+says nothing about what goes with them, and that is a separate thing to know
+before a flow routes a mutating stage somewhere other than the vendor.
+
+A stage gets three things. Its worktree, which for a coding stage is the point.
+Its environment, minus the vendor credentials `VENDOR_CREDENTIAL_ENV` subtracts.
+And `context.md`, which the runner prepends to **every** stage's inputs, build
+included — deliberately, because the stage that went hunting through the
+operator's notes was the build stage and not the plan.
+
+So `context.md` is the part worth stating plainly, since it is the only one that
+carries material from outside the repository:
+
+- The tracker issue's title and description, up to 6000 characters, whenever
+  Linear is reachable.
+- Up to three vault notes, clipped to 4000 characters each, selected by
+  **exact issue key as a case-insensitive substring** — `XARI-124` matches a
+  note that writes `xari-124` and does not match one merely about the same
+  subject.
+
+That selection rule is narrow enough to be answered in advance: which notes a
+given issue would carry is a property of the issue key, so an operator can know
+what a run would send before starting it rather than after. It is not a control
+— it is a fact that makes one unnecessary for issues no note names.
+
+`context.md` is written into the run's artifact directory, so a stage can read
+it whether or not its prompt lists it. Withholding it from a stage's `inputs`
+is therefore not a boundary; a boundary would have to be not writing the
+material in the first place.
+
 A provider entry in the user layer replaces the shipped entry of that name
 whole rather than merging field by field, so a user file holding its own copy of
 a `base_url` provider must carry `hosting` itself. Validation fails closed and
@@ -249,6 +281,15 @@ so must name it through `auth_token_env`.
   schema PR. Three review findings in a row landed on this boundary, each one
   inside the previous fix, which is the evidence that the boundary is in the
   wrong place rather than merely incomplete.
+- **Should the vault half of `context.md` be withheld from a flow that contains
+  a non-vendor stage?** The excerpts exist so the build stage does not go
+  hunting, and that is the stage most likely to be the non-vendor one, so
+  withholding them takes the context away from exactly the stage it was written
+  for and makes a poor result ambiguous between the model and the missing
+  material. Left undecided on 2026-09-26 in favour of the cheaper answer for a
+  first run: choose an issue no vault note names, which is checkable up front.
+  That scales to one experiment, not to a habit, and the question comes back the
+  first time someone wants a hosted build on an issue the notes discuss.
 - Should the local-mutating-stage prohibition bind a user's own flows, not just
   the shipped ones? It is enforced by a test over `cuzam.yaml`, so a user flow
   giving `local-brain` a `mutates: true` stage validates cleanly today. Now that

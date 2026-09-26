@@ -22,7 +22,7 @@ non_goals:
 
 ## Summary
 
-Orchestrator reasoning defaults to local `qwen3.6:35b-mlx` through Ollama, keeping chat, briefs, and tool decisions on the user's machine. **Coding runs on Claude.** The dividing line is bounded transformation — summarise, extract, classify, rank, reformat, where the output shape is known and a wrong answer is cheap and visible — against unbounded judgement, where subtle wrongness compounds silently. `ZAM_LOCAL_BRAIN_MODEL` overrides the brain.
+Orchestrator reasoning defaults to local `qwen3.6:35b-mlx` through Ollama, keeping chat, briefs, and tool decisions on the user's machine. **Coding does not run on this machine's models.** It runs on Claude, or on another provider the operator has declared `hosting: third-party` — the boundary is where the model is served, not which vendor serves it. The dividing line is bounded transformation — summarise, extract, classify, rank, reformat, where the output shape is known and a wrong answer is cheap and visible — against unbounded judgement, where subtle wrongness compounds silently. `ZAM_LOCAL_BRAIN_MODEL` overrides the brain.
 
 ## Behavior
 
