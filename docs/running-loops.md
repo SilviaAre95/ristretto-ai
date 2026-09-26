@@ -157,11 +157,15 @@ search.
 
 Whether a stage can reach the tracker *live* is not something this project
 decides, and the earlier claim that it cannot was wrong twice over.
-`--strict-mcp-config` is passed only to locally served providers, so a stage on a
-cloud provider — which is every stage of the shipped `full` and `short` — runs
-with MCP discovery, plugins and your user settings on. If you have a tracker MCP
-server configured, a `build` stage can call it. What `context.md` buys is that it
-does not have to, and that the flow works the same when you have not.
+`--strict-mcp-config` is passed only to a provider with an endpoint of its own,
+so a stage on the vendor's endpoint — which is every stage of the shipped `full`
+and `short` — runs with MCP discovery, plugins and your user settings on. It is
+keyed on the presence of a `base_url`, not on a provider's declared `hosting`,
+because the question it answers is "is this Anthropic's endpoint" rather than
+"does this run on this machine"; a `third-party` provider gets it too. If you
+have a tracker MCP server configured, a `build` stage can call it. What
+`context.md` buys is that it does not have to, and that the flow works the
+same when you have not.
 
 So the rule below is unchanged, and holds most strongly for `classic`, which has
 only the repository.

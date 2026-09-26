@@ -406,9 +406,11 @@ API.
 
 ### Models
 
-Coding runs on Claude. Everything else runs on a local model. The dividing line
-is bounded transformation against unbounded judgement, not important against
-unimportant.
+Coding does not run on this machine's models. Everything else does. The
+dividing line is bounded transformation against unbounded judgement, not
+important against unimportant, and it is drawn at where a model is served
+rather than at which vendor serves it — so coding is Claude, or a provider
+the operator has declared `hosting: third-party`.
 
 A consequence worth stating plainly: the hardware floor — a large-memory Apple
 Silicon machine — existed because local models were going to write the code.
