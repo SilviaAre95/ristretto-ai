@@ -26,6 +26,9 @@ acceptance_criteria:
   - A provider declared non-vendor whose endpoint or credential does not
     resolve is refused, never run against the vendor endpoint or reached with
     the environment's own credentials
+  - A stage pointed at a non-vendor endpoint does not inherit the operator's
+    own vendor credentials
+  - Diagnosing a provider never puts a credential on a cleartext link
   - Every stage spawn carries a filesystem scope, or the launch is refused
     (pending `filesystem-scoping`, which is `proposed`)
   - A staged flow's effective permissions come from Cuzam, never from a
@@ -232,6 +235,20 @@ so must name it through `auth_token_env`.
 
 ## Open questions
 
+- **Should a non-vendor child environment be built from an allowlist rather than
+  by subtraction?** It is a denylist today: `VENDOR_CREDENTIAL_ENV` names the
+  Anthropic credentials to remove before a stage reaches someone else's
+  endpoint. That list has to track Claude Code's authentication precedence by
+  hand, and a release reading a new variable reopens the hole with nothing to
+  notice it. Subtracting known-bad names from an inherited environment cannot be
+  made correct against a client this project does not control. The reason it is
+  a denylist anyway is that the child needs a working environment — on the
+  developing machine `node` resolves through a Hermes profile, so `PATH` is
+  load-bearing — and a wrong allowlist fails stages in ways that read as model
+  problems. That is its own change with its own testing, not a tail-end fix to a
+  schema PR. Three review findings in a row landed on this boundary, each one
+  inside the previous fix, which is the evidence that the boundary is in the
+  wrong place rather than merely incomplete.
 - Should the local-mutating-stage prohibition bind a user's own flows, not just
   the shipped ones? It is enforced by a test over `cuzam.yaml`, so a user flow
   giving `local-brain` a `mutates: true` stage validates cleanly today. Now that

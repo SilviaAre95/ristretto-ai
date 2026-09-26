@@ -345,6 +345,16 @@ def _migrate(args: Any) -> int:
         print(f"nothing to migrate: {target} does not exist")
         return 0
     packaged = packaged_config_path()
+    if packaged.is_file() and target.resolve() == packaged.resolve():
+        # Against the shipped file every provider and flow is "identical to the
+        # shipped version", so the rewrite drops all of them along with
+        # schema_version and leaves only the user keys — an installation broken
+        # until `git restore`. Reachable with no --config whenever CUZAM_CONFIG
+        # points at the shipped file, which is the pattern scripts/check.sh sets
+        # for the test suite.
+        print(f"refusing to migrate the shipped configuration: {target}")
+        print("migrate rewrites a user config; this is the project layer.")
+        return 2
     stored = read_yaml(target)
     pinned = pinned_project_keys(stored, read_yaml(packaged) if packaged.is_file() else {})
     kept = {
@@ -375,8 +385,6 @@ def _migrate(args: Any) -> int:
     if not args.force:
         print("\nRe-run with --force to rewrite. A backup is written alongside.")
         return 0
-    backup = target.with_suffix(f"{target.suffix}.bak")
-    backup.write_text(target.read_text(encoding="utf-8"), encoding="utf-8")
     # Merged here rather than through load_config, which validates. What needs
     # to be valid is the config this is about to write; the one it read is by
     # assumption the broken thing being repaired, and asking for its merged
@@ -391,7 +399,14 @@ def _migrate(args: Any) -> int:
                 shipped = (packaged_raw.get(key) or {}).get(name)
                 if shipped is not None:
                     merged.setdefault(key, {})[name] = shipped
+    # Validated before the backup exists: a --force run that fails validation
+    # used to write a stray .bak and change nothing else.
     validate_config(merged)
+    backup = target.with_suffix(f"{target.suffix}.bak")
+    backup.write_text(target.read_text(encoding="utf-8"), encoding="utf-8")
+    # write_user_config chmods the config 0600; a backup of it left at the
+    # default umask is a wider-permissioned copy of the same content.
+    backup.chmod(0o600)
     write_user_config(merged, target)
     print(f"rewrote {target} (backup: {backup})")
     return 0

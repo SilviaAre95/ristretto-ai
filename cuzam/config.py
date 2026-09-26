@@ -22,6 +22,25 @@ SCHEMA_VERSION = 1
 RUNNERS = {"claude-code", "codex"}
 # Where a provider is served. Declared, never deduced: see _hosting.
 HOSTINGS = {"vendor", "third-party", "local"}
+# Credential variables Claude Code will authenticate with, removed from a stage
+# pointed at a non-vendor endpoint. This is a DENYLIST and therefore a stopgap:
+# it has to track Claude Code's auth precedence by hand, and a release that
+# reads a new name reopens the hole silently. The correct shape is to build a
+# non-vendor child environment from an allowlist instead of subtracting known
+# names from an inherited one — recorded as an open question on
+# `custom-model-flows`, and deliberately not attempted here because the child
+# needs a working environment (on this machine `node` lives inside a Hermes
+# profile, so PATH is load-bearing) and getting that wrong fails stages in ways
+# that read as model problems.
+#
+# ANTHROPIC_AUTH_TOKEN is on the list even though a third-party provider sets
+# it straight afterwards: a `local` provider may legitimately set none, and
+# inheriting the operator's would then reach the local endpoint.
+VENDOR_CREDENTIAL_ENV = (
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+)
 # Closed, for the same reason `instance` is closed. A provider whose hosting is
 # misspelled is not a provider with a broken declaration — it is a `vendor`
 # provider carrying an ignored key, which is precisely the classification the
@@ -477,14 +496,22 @@ def validate_config(config: Mapping[str, Any]) -> None:
                 "real credentials must use auth_token_env"
             )
         if provider.get("auth_token") is not None and hosting != "local":
+            # "declares hosting: vendor" would be a lie when hosting defaulted:
+            # the fix is to drop auth_token, not to edit a line that is absent.
+            declared = (
+                f"declares hosting: {hosting}"
+                if provider.get("hosting") is not None
+                else "is a vendor provider"
+            )
             # The placeholder exists because Ollama's local API demands a token
             # it never checks. Copied onto a hosted provider it becomes a real
             # credential that is the literal string "ollama", and the 401 that
             # follows reads as a missing key — sending you to look in the env
             # file for something that was never the problem.
             raise ConfigError(
-                f"providers.{name} declares hosting: {hosting} and may not use the "
-                "ollama placeholder; name a real credential with auth_token_env"
+                f"providers.{name} {declared} and may not use the ollama "
+                "placeholder; drop auth_token, or name a real credential with "
+                "auth_token_env"
             )
         context_length = provider.get("context_length")
         if context_length is not None and (
@@ -607,6 +634,33 @@ def resolved_provider(
     resolved["name"] = name
     _require_resolved_endpoint(resolved)
     return resolved
+
+
+def provider_env(
+    provider: Mapping[str, Any], base: Mapping[str, str] | None = None
+) -> dict[str, str]:
+    """A child environment for one provider: inherited, minus what must not travel.
+
+    Every spawn used to build this inline — the flow runner, the preflight probe
+    and the assistant loop each copied `os.environ` and set the base URL and
+    token on top. Three copies of one rule, and the rule was incomplete in all
+    three: pointing `ANTHROPIC_BASE_URL` at someone else's host while leaving
+    the operator's `ANTHROPIC_API_KEY` in place sends that key to them as an
+    `x-api-key` header. Requiring the provider's own credential to resolve does
+    not help, because the inherited one rides along beside it.
+
+    So the removal happens once, here, and every caller goes through it.
+    """
+    env = dict(os.environ if base is None else base)
+    hosting = provider.get("hosting") or "vendor"
+    if hosting != "vendor":
+        for name in VENDOR_CREDENTIAL_ENV:
+            env.pop(name, None)
+    if provider.get("base_url"):
+        env["ANTHROPIC_BASE_URL"] = str(provider["base_url"])
+    if provider.get("auth_token"):
+        env["ANTHROPIC_AUTH_TOKEN"] = str(provider["auth_token"])
+    return env
 
 
 def _require_resolved_endpoint(resolved: Mapping[str, Any]) -> None:
@@ -760,8 +814,16 @@ def resolved_flow(
     return flow
 
 
+# 2s was a loopback budget. A hosted catalog on a slow link would report
+# "cannot reach", which reads as a misconfiguration rather than as a slow link.
+LOCAL_CATALOG_TIMEOUT = 2.0
+REMOTE_CATALOG_TIMEOUT = 10.0
+
+
 def served_models(
-    base_url: str, timeout: float = 2.0, auth_token: str | None = None
+    base_url: str,
+    timeout: float = LOCAL_CATALOG_TIMEOUT,
+    auth_token: str | None = None,
 ) -> set[str] | None:
     """Model names an endpoint is serving, or None if it is unreachable.
 
@@ -779,7 +841,12 @@ def served_models(
     not extending it.
     """
     headers = {}
-    if auth_token:
+    if auth_token and base_url.lower().startswith("https://"):
+        # TLS only. Before the token was added here `doctor` sent no credential
+        # anywhere, so attaching one to an http:// catalog read would put a real
+        # key on the wire in cleartext to diagnose a configuration. A local
+        # endpoint needs no token anyway: the only credential a `local` provider
+        # may carry is the non-secret `ollama` placeholder.
         headers["Authorization"] = f"Bearer {auth_token}"
     for path, key, field in (
         ("/api/tags", "models", "name"),
@@ -808,9 +875,6 @@ def doctor(
     catalog: Callable[[str], set[str] | None] | None = None,
 ) -> list[str]:
     env = os.environ if environ is None else environ
-    # A catalog passed by a test takes the url alone; the real one also takes
-    # the provider's token, which a hosted endpoint requires.
-    lookup = served_models if catalog is None else catalog
     findings: list[str] = []
     commands = {"claude-code": "claude", "codex": "codex"}
     seen: dict[str, set[str] | None] = {}
@@ -835,12 +899,23 @@ def doctor(
             # the host at any time, and without this the flow only finds out
             # mid-run, several stages deep.
             if base_url not in seen:
-                token = provider.get("auth_token")
-                seen[base_url] = (
-                    served_models(str(base_url), auth_token=token)
-                    if catalog is None
-                    else lookup(str(base_url))
-                )
+                # One dispatch. A test's catalog takes the url alone; the real
+                # lookup also needs the token and a timeout suited to the hop,
+                # and holding those in a second call site meant a later edit to
+                # one spelling could silently stop sending the credential.
+                if catalog is None:
+                    hosting = provider.get("hosting") or "vendor"
+                    seen[base_url] = served_models(
+                        str(base_url),
+                        timeout=(
+                            LOCAL_CATALOG_TIMEOUT
+                            if hosting == "local"
+                            else REMOTE_CATALOG_TIMEOUT
+                        ),
+                        auth_token=provider.get("auth_token"),
+                    )
+                else:
+                    seen[base_url] = catalog(str(base_url))
             available = seen[base_url]
             if available is None:
                 findings.append(

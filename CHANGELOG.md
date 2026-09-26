@@ -150,6 +150,32 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A stage pointed at a non-vendor endpoint inherited the operator's own vendor
+  credentials.** Requiring the provider's own token to resolve did not help: the
+  inherited `ANTHROPIC_API_KEY` rides along beside it and Claude Code sends it as
+  an `x-api-key` header to whatever `ANTHROPIC_BASE_URL` names. The flow runner,
+  the preflight probe and the assistant loop each built that environment inline,
+  three copies of one incomplete rule; they now share `provider_env`, which
+  removes `VENDOR_CREDENTIAL_ENV` for any non-`vendor` provider. **This is a
+  denylist and a stopgap** — see the open question on `custom-model-flows` about
+  building the child environment from an allowlist instead.
+- **`cuzam doctor` could put a credential on a cleartext link.** The catalog
+  probe's new `Authorization` header is attached only to an `https://` endpoint.
+  Before this branch `doctor` sent no credential anywhere.
+- **`cuzam migrate` could destroy the shipped configuration.** Run against
+  `cuzam.yaml` itself, every provider and flow is "identical to the shipped
+  version", so the rewrite dropped all of them along with `schema_version` and
+  left an installation that cannot load. Reachable with no `--config` whenever
+  `CUZAM_CONFIG` points at the shipped file — the pattern `scripts/check.sh` now
+  sets for the test suite.
+- **A failed `migrate --force` left a stray backup,** and the backup was written
+  at the default umask beside a config deliberately chmodded `0600`. It now
+  validates first, then backs up, then chmods the backup.
+- **An unresolvable fallback killed a run instead of reporting the primary's
+  failure.** `resolved_provider` can refuse now, and the mid-run fallback path
+  did not guard it the way the preflight path does.
+- **`make test` was still reading the developer's own configuration.** Only
+  `make check` was pinned.
 - **A `third-party` provider with an unresolved credential sent the operator's
   own.** Validation required `auth_token_env` to be *named*, never to resolve.
   `runner_command` starts every stage from `os.environ.copy()` and sets

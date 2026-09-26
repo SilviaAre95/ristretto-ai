@@ -22,6 +22,10 @@ migrate:
 update:
 	bash scripts/update.sh
 
+# CUZAM_CONFIG for the same reason scripts/check.sh sets it: several tests
+# reach load_config() with no path and would otherwise read the developer's own
+# configuration.
+test: export CUZAM_CONFIG=$(CURDIR)/cuzam.yaml
 test:
 	.venv/bin/python -m unittest hermes/tests/cuzam_config_test.py
 	.venv/bin/python -m unittest discover -s tests

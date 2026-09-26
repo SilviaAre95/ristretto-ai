@@ -19,7 +19,14 @@ from typing import Any, Callable, Mapping
 
 from . import __version__, approvals, broker, context as flow_context, events, runs
 from .seam import DEV_CONFIG, VERIFY_GATE
-from .config import ConfigError, load_config, load_env, resolved_flow, resolved_provider
+from .config import (
+    ConfigError,
+    load_config,
+    load_env,
+    provider_env,
+    resolved_flow,
+    resolved_provider,
+)
 
 
 SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -416,7 +423,7 @@ def runner_command(
     output: Path,
     gated: bool = True,
 ) -> tuple[list[str], dict[str, str], str]:
-    env = os.environ.copy()
+    env = provider_env(provider)
     model = provider.get("model")
     runner = provider["runner"]
     if runner == "claude-code":
@@ -488,10 +495,9 @@ def runner_command(
             ]
         if model:
             command += ["--model", str(model)]
-        if provider.get("base_url"):
-            env["ANTHROPIC_BASE_URL"] = str(provider["base_url"])
-        if provider.get("auth_token"):
-            env["ANTHROPIC_AUTH_TOKEN"] = str(provider["auth_token"])
+        # ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN come from provider_env,
+        # which is also what strips the operator's own credentials for a
+        # non-vendor endpoint.
         if provider.get("context_length"):
             # The runner does not know local model names and assumes a 200k
             # window for them, compacting long stages far earlier than the
@@ -668,11 +674,7 @@ def preflight_provider(provider: Mapping[str, Any]) -> str:
         # spend tokens to test a failure mode never observed there.
         return ""
     model = str(provider.get("model") or "")
-    env = os.environ.copy()
-    if provider.get("base_url"):
-        env["ANTHROPIC_BASE_URL"] = str(provider["base_url"])
-    if provider.get("auth_token"):
-        env["ANTHROPIC_AUTH_TOKEN"] = str(provider["auth_token"])
+    env = provider_env(provider)
     command = ["claude", "-p", "--permission-mode", "plan"]
     if provider.get("base_url"):
         # Probe the way the stage will actually run, or the probe tests a
@@ -1216,7 +1218,23 @@ def run_stage(
         fallback = provider.get("fallback")
         log_text = text or (log.read_text(encoding="utf-8") if log.exists() else "")
         if fallback and UNAVAILABLE.search(log_text):
-            fallback_provider = resolved_provider(config, fallback)
+            try:
+                fallback_provider = resolved_provider(config, fallback)
+            except ConfigError as exc:
+                # Same rule as the preflight path: an unresolvable fallback is
+                # no fallback. resolved_provider can refuse now — a third-party
+                # standby whose key is unset — and letting that propagate kills
+                # the run at exit 2 several stages in rather than reporting the
+                # primary's failure.
+                print(
+                    f"stage {stage['id']}: {provider['name']} unavailable and "
+                    f"fallback {fallback} cannot be resolved: {exc}",
+                    file=sys.stderr,
+                )
+                fallback_provider = None
+        else:
+            fallback_provider = None
+        if fallback_provider is not None:
             fallback_stage = dict(stage)
             fallback_stage["provider"] = fallback
             fallback_stage["provider_config"] = fallback_provider

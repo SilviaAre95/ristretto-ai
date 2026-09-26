@@ -25,6 +25,7 @@ from cuzam.config import (
     load_config,
     repository_path,
     resolved_flow,
+    provider_env,
     resolved_provider,
     served_models,
     pinned_project_keys,
@@ -304,6 +305,96 @@ class ConfigTests(unittest.TestCase):
         config = copy.deepcopy(self.config)
         config["providers"]["local-brain"][False] = "bar"
         with self.assertRaisesRegex(ConfigError, "unknown setting"):
+            validate_config(config)
+
+    def _hosted(self, **extra: object) -> dict:
+        config = copy.deepcopy(self.config)
+        config["providers"]["hosted"] = {
+            "runner": "claude-code",
+            "hosting": "third-party",
+            "base_url": "https://example.invalid",
+            "auth_token_env": "HOSTED_KEY",
+            "model": "some-open-weight-model",
+            **extra,
+        }
+        return config
+
+    def test_a_non_vendor_stage_does_not_inherit_the_operators_credentials(self) -> None:
+        """Requiring the provider's own token does not stop the operator's.
+
+        The token resolving is what round one checked. It does not help: the
+        inherited `ANTHROPIC_API_KEY` rides along beside it and Claude Code
+        sends it as an `x-api-key` header to whatever `ANTHROPIC_BASE_URL`
+        names.
+        """
+        config = self._hosted()
+        ambient = {
+            "PATH": "/usr/bin",
+            "ANTHROPIC_API_KEY": "sk-ant-operator",
+            "CLAUDE_CODE_OAUTH_TOKEN": "oauth-operator",
+            "HOSTED_KEY": "their-key",
+        }
+        provider = resolved_provider(config, "hosted", ambient)
+        env = provider_env(provider, ambient)
+        self.assertEqual(env["ANTHROPIC_BASE_URL"], "https://example.invalid")
+        self.assertEqual(env["ANTHROPIC_AUTH_TOKEN"], "their-key")
+        self.assertNotIn("ANTHROPIC_API_KEY", env)
+        self.assertNotIn("CLAUDE_CODE_OAUTH_TOKEN", env)
+        self.assertEqual(env["PATH"], "/usr/bin", "unrelated variables must survive")
+
+    def test_a_local_stage_does_not_inherit_them_either(self) -> None:
+        # A local provider may set no token at all, and inheriting the
+        # operator's would then reach the local endpoint.
+        ambient = {"PATH": "/usr/bin", "ANTHROPIC_API_KEY": "sk-ant-operator"}
+        provider = resolved_provider(self.config, "local-brain", ambient)
+        env = provider_env(provider, ambient)
+        self.assertNotIn("ANTHROPIC_API_KEY", env)
+
+    def test_a_vendor_stage_keeps_the_operators_credentials(self) -> None:
+        # The vendor endpoint is where they belong; stripping them there would
+        # unauthenticate every ordinary run.
+        ambient = {"PATH": "/usr/bin", "ANTHROPIC_API_KEY": "sk-ant-operator"}
+        provider = resolved_provider(self.config, "claude", ambient)
+        env = provider_env(provider, ambient)
+        self.assertEqual(env["ANTHROPIC_API_KEY"], "sk-ant-operator")
+        self.assertNotIn("ANTHROPIC_BASE_URL", env)
+
+    def test_the_catalog_credential_needs_tls(self) -> None:
+        """Diagnosing a configuration must not put a key on a cleartext link.
+
+        Before the token was attached here, `doctor` sent no credential
+        anywhere.
+        """
+        sent: list[dict] = []
+
+        class Response:
+            def __enter__(self):
+                return io.BytesIO(b'{"models": []}')
+
+            def __exit__(self, *exc):
+                return False
+
+        def fake_urlopen(request, timeout=None):
+            sent.append(dict(request.headers))
+            return Response()
+
+        with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            served_models("http://plain.invalid", auth_token="secret")
+            served_models("https://tls.invalid", auth_token="secret")
+        plain, tls = sent[0], sent[-1]
+        self.assertNotIn("Authorization", plain, plain)
+        self.assertIn("Authorization", tls, tls)
+
+    def test_an_undeclared_provider_is_not_told_to_edit_a_declaration(self) -> None:
+        # hosting defaulted, so "declares hosting: vendor" names a line that is
+        # not in the file. The fix is to drop auth_token.
+        config = copy.deepcopy(self.config)
+        config["providers"]["stray"] = {
+            "runner": "claude-code",
+            "model": "whatever",
+            "auth_token": "ollama",
+        }
+        with self.assertRaisesRegex(ConfigError, "is a vendor provider"):
             validate_config(config)
 
     def test_the_ollama_placeholder_is_local_only(self) -> None:
@@ -878,6 +969,97 @@ class ConfigLayerTests(unittest.TestCase):
         import yaml
 
         self.target.write_text(yaml.safe_dump(data), encoding="utf-8")
+
+    def _migrate(self, *flags: str) -> tuple[int, str]:
+        """Run the migrate subcommand against this test's target config."""
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = cli_main(["--config", str(self.target), "migrate", *flags])
+        return code, out.getvalue()
+
+    def _stale_provider_copy(self) -> None:
+        """A user file holding a shipped provider from before `hosting` existed.
+
+        The migration case this branch creates: valid until now, and refused by
+        validation from now on.
+        """
+        stale = copy.deepcopy(self.project["providers"]["local-brain"])
+        stale.pop("hosting", None)
+        self._write(
+            {
+                "schema_version": 1,
+                "instance": {"linear_team": "DEMO"},
+                "repositories": {},
+                "providers": {"local-brain": stale},
+            }
+        )
+
+    def test_migrate_runs_on_a_config_that_fails_validation(self) -> None:
+        """The whole point: it is the remedy for exactly this file.
+
+        `main()` used to validate before dispatching any subcommand, so the one
+        tool for a stale copy could not run on a stale copy.
+        """
+        self._stale_provider_copy()
+        with self.assertRaises(ConfigError):
+            load_config(self.target)
+        code, output = self._migrate()
+        self.assertEqual(code, 0, output)
+        self.assertIn("local-brain", output)
+
+    def test_migrate_adopt_force_repairs_the_stale_copy(self) -> None:
+        self._stale_provider_copy()
+        code, output = self._migrate("--adopt", "--force")
+        self.assertEqual(code, 0, output)
+        # And the result loads, which is what it exists to achieve.
+        merged, _ = load_config(self.target)
+        self.assertEqual(merged["providers"]["local-brain"]["hosting"], "local")
+
+    def test_migrate_validates_what_it_writes_not_what_it_read(self) -> None:
+        """A --force run whose result would be invalid changes nothing.
+
+        Without --adopt the stale entry is kept, so the rewrite would store a
+        config that cannot load. It must refuse before touching anything — and
+        in particular before leaving a backup behind.
+        """
+        self._stale_provider_copy()
+        before = self.target.read_text(encoding="utf-8")
+        code, output = self._migrate("--force")
+        self.assertEqual(code, 2, output)
+        self.assertEqual(self.target.read_text(encoding="utf-8"), before)
+        self.assertFalse(
+            self.target.with_suffix(".yaml.bak").exists(),
+            "a failed migration must not leave a stray backup",
+        )
+
+    def test_migrate_refuses_to_rewrite_the_shipped_configuration(self) -> None:
+        """Against the shipped file every entry is "identical to shipped".
+
+        So the rewrite drops providers, flows and schema_version and leaves an
+        installation that cannot load. Reachable with no --config whenever
+        CUZAM_CONFIG points at the shipped file.
+        """
+        shipped = Path(self.target.parent) / "cuzam.yaml"
+        shipped.write_text((ROOT / "cuzam.yaml").read_text(encoding="utf-8"), encoding="utf-8")
+        out = io.StringIO()
+        with mock.patch("cuzam.config.packaged_config_path", return_value=shipped), \
+             contextlib.redirect_stdout(out):
+            code = cli_main(["--config", str(shipped), "migrate", "--force"])
+        self.assertEqual(code, 2, out.getvalue())
+        self.assertIn("refusing to migrate the shipped configuration", out.getvalue())
+        # Untouched: still the file it was.
+        self.assertEqual(
+            shipped.read_text(encoding="utf-8"),
+            (ROOT / "cuzam.yaml").read_text(encoding="utf-8"),
+        )
+
+    def test_the_migration_backup_is_not_wider_than_the_config(self) -> None:
+        self._stale_provider_copy()
+        code, output = self._migrate("--adopt", "--force")
+        self.assertEqual(code, 0, output)
+        backup = self.target.with_suffix(".yaml.bak")
+        self.assertTrue(backup.exists(), output)
+        self.assertEqual(backup.stat().st_mode & 0o777, 0o600)
 
     def test_user_file_needs_only_machine_settings(self) -> None:
         self._write(
