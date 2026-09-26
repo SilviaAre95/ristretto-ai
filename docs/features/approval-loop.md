@@ -65,6 +65,12 @@ An unattended run (`--unattended`, or the checkbox on the launch form) omits
 the gate altogether, because a prompt nobody will answer stalls for the full
 timeout and then fails closed.
 
+So `unattended` today means strictly *fewer* controls, not tighter ones: no
+broker, no `--allowedTools`, no permission prompt tool. `filesystem-scoping`
+does not join that. Its scope is the same whether or not anyone is awake, which
+is what makes the missing gate survivable: what an unattended run reads is
+bounded by the kernel rather than by an answer nobody is there to give.
+
 ## Waiting for you does not spend the stage budget
 
 A stage's budget measures working time. The clock stops while a permission
@@ -115,8 +121,11 @@ classified after the fact:
   word (`grep`, `which`, `ls`). Claude Code matches a prefix, so the compound
   form reaches the gate by design; adding more command names to
   `READ_ONLY_TOOLS` would not have matched any of them.
-- **One was a Read outside the worktree.** Scoping reads to the project would
-  not have covered it either.
+- **One was a Read outside the worktree**, so no allowlist entry would have
+  covered it. Scoping reads would not have *removed* that prompt either — it
+  would have denied the read outright, which is a different and better
+  outcome, and is what `filesystem-scoping` proposes. The prompt count is not
+  what scoping is for.
 
 So the allowlist was not the cause. What the requests have in common is that
 the stage was searching the operator's notes for context on its issue — and the

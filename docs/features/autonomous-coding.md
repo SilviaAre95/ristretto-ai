@@ -13,11 +13,15 @@ acceptance_criteria:
   - Every risky step passes the approval loop
   - Notifies the user in Slack with the real PR URL
   - After merge, hands off to deployment tracking when configured
+  - Refuses to start when the run's filesystem scope cannot be applied
+    (pending `filesystem-scoping`, which is `proposed`)
 non_goals:
   - NOT auto-merging
   - NOT acting on employer systems without confirmed authorization
   - NOT running before the approval loop is proven
   - NOT executed inside any agent turn — the launcher spawns the flow directly
+  - NOT reading outside its declared filesystem scope, once
+    `filesystem-scoping` ships; until then a run can read what the operator can
 ---
 
 # Autonomous Coding

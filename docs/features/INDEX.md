@@ -26,8 +26,8 @@ Source of truth for what this product **does** and **does not** do. Every code c
 | `event-spine` | Event Spine | in-progress | Pipeline events in Cuzam's own log; `preflight` proves a repo is loop-capable; `gc` reclaims finished worktrees. | NOT writing into Hermes' schema; NOT owning a UI; NOT removing worktrees with uncommitted work |
 | `fleet-view` | Fleet View | in-progress | One liveness module; dashboard and `cuzam runs` render it. Dead runs shown, never touched. | NOT public ingress; NOT acting on a dead run; NOT a second definition of a live run |
 | `flow-enforcement` | Flow Enforcement | implemented | A loop task cannot be completed unless its loop actually ran. | NOT gating non-loop tasks; NOT relying on the event log; NOT blocking edits, only completion |
-
 | `doorbell` | Doorbell | implemented | Pipeline milestones reach Slack with a link into the fleet view. | NOT notifying on progress; NOT a daemon; NOT retrying a failed send |
+| `filesystem-scoping` | Filesystem Scoping | proposed | Every stage runs under an OS-enforced path scope; launch refuses without one. | NOT scoping network access; NOT replacing the approval gate |
 
 <!-- Append new rows above this comment. Keep the summary column ≤ 15 words. -->
 
