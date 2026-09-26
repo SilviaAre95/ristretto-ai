@@ -283,9 +283,17 @@ class ConfigTests(unittest.TestCase):
         self.assertTrue(
             [f for f in findings if f.startswith("ERROR provider hosted")], findings
         )
-        # Every other provider is still reported: one broken entry must not
-        # truncate the report.
-        self.assertTrue([f for f in findings if f.startswith("OK provider claude:")], findings)
+        # Every provider is still reported: one broken entry must not truncate
+        # the report. Asserted by coverage rather than by an OK line, because
+        # whether a provider reports OK depends on `claude` being on PATH —
+        # this first asserted `OK provider claude:` and failed on CI, which has
+        # no such binary, for exactly the machine-dependence that the
+        # CUZAM_CONFIG pin in this branch exists to remove.
+        reported = {
+            name for name in config["providers"]
+            if any(f"provider {name}:" in finding for finding in findings)
+        }
+        self.assertEqual(reported, set(config["providers"]), findings)
 
     def test_a_non_string_provider_key_names_the_fix(self) -> None:
         """PyYAML reads a bare `no:` as the boolean False.
