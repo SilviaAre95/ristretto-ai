@@ -549,11 +549,11 @@ class StageDenyFloorTests(unittest.TestCase):
     nothing. Measured on 2.1.283 with a canary file and a prompt that actually
     calls the Read tool:
 
-        Read(~/.denyprobe/**)            denied the read
-        Read(//Users/me/.denyprobe/**)   denied the read
-        Read(/Users/me/.denyprobe/**)    READ SUCCEEDED — silently inert
-        Read(**/.denyprobe/**)           READ SUCCEEDED — `**` is rooted at the
-                                         project directory, not at /
+        Read(~/.probe/**)          denied the read
+        Read(//<abs>/.probe/**)    denied the read  (note the leading //)
+        Read(/<abs>/.probe/**)     READ SUCCEEDED — silently inert
+        Read(**/.probe/**)         READ SUCCEEDED — `**` is rooted at the
+                                   project directory, not at /
 
     So a bare absolute path is a rule that looks right in a diff, passes any
     test asserting it is present, and denies nothing. An earlier draft of this
