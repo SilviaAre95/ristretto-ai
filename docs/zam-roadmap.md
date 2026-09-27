@@ -134,7 +134,9 @@ Answer it — in Slack or to the face — and have it act.
   the endpoint hands back, so every turn there is a fresh conversation. The
   endpoint takes a `session` and so does `loop.ask`, which is why this reads as
   working from the Python side alone — it was described that way in this file
-  until the claim was checked against the two clients on 2026-09-27.
+  until the claim was checked against the two clients on 2026-09-27. Wiring
+  them up waits on issue #80: a first turn that fails currently poisons the
+  session a name maps to, and in Slack that wedges a channel for good.
 - ~~Launch-from-Slack~~ ✅ done (`!zam-start`) — the deterministic half of the
   reply. What remains below is the conversational half.
 - **Decided: v1 runs on Claude, built provider-configurable.** The loop's hard

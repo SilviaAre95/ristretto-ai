@@ -12,9 +12,8 @@ acceptance_criteria:
   - The provider is read from configuration, never hardcoded, so the switch to
     a local provider is a configuration change and not a code change
   - A named conversation continues across turns, so a surface can keep a
-    thread without tracking a session id itself
-  - A caller that supplies a session id resumes that conversation rather than
-    colliding with it
+    thread without tracking a session id itself, once its first turn has
+    succeeded - the failure case is issue #80
   - The loop answers from its tools rather than from the model's guess - the
     fleet, and the vault, are read through tools
   - `propose_merge` records a pending approval naming one fixed PR number and
@@ -139,6 +138,21 @@ turn that wedges ends on a timeout for the same reason.
       loop holds a useful conversation, calls the right tool, and gets the
       arguments right is unmeasured. That is a different problem from unbuilt
       and it is the reason this is `in-progress` rather than `implemented`.
+- [ ] **The session lifecycle is broken in two places, one of them live —
+      issue #80.**
+      Whether a session exists is inferred from where its id came from, never
+      recorded, and both faces follow from that. (a) `_session_for` writes the
+      name→session mapping *before* the turn runs, so a first turn that fails
+      leaves the name pointing at a session Claude never created; every later
+      turn `--resume`s nothing and nothing prunes the store. In Slack the name
+      is the channel id, so **one failed `!zam` wedges that channel
+      permanently**. (b) A caller-supplied `session` is treated as new and
+      collides on `--session-id`; dormant only because no client sends one
+      back. The one-line flip was tried and reverted — it moves the break onto
+      failed first turns, because `ask` returns an id for a turn that never
+      established one. This wants one lifecycle fix: record a session as usable
+      only once a turn has established it, and recover when a resume finds
+      nothing. Deliberately out of scope for the map correction.
 - [ ] **Should the four surfaces share one thread?** Today two of them have no
       thread at all. The dashboard and the face need a conversation key before
       sharing one is even a question; the CLI and Slack have keys and hold

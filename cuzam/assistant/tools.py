@@ -110,11 +110,17 @@ def propose_merge(project: str = "", issue: str = "") -> dict[str, Any]:
         )
     except (OSError, subprocess.SubprocessError) as exc:
         return {"ok": False, "message": f"I couldn't reach GitHub: {exc}"}
+    # A non-zero gh is a tool failure, not an answer about GitHub: unauthenticated,
+    # off PATH in the gateway process, offline, or a repo with no GitHub remote all
+    # land here, and reporting "no open PR" for any of them states a falsehood as
+    # fact. launch.open_pull_request carries this same guard.
+    if found.returncode != 0:
+        detail = (found.stderr or "").strip().splitlines()
+        return {"ok": False, "message": f"I couldn't ask GitHub: {' '.join(detail[-2:]) or 'gh failed'}"}
     # `--jq '.[0]'` prints the literal "null" when no PR matched, not an empty
     # line, so a bare `if not line` never fired and `pr["number"]` raised a
-    # TypeError exactly where this message was meant to be returned. `launch.py`
-    # guards the same gh/--jq shape; see open_pull_request and the cases pinned
-    # in cuzam_launch_direct_test.py.
+    # TypeError exactly where this message was meant to be returned. The cases
+    # are pinned in cuzam_launch_direct_test.py.
     line = (found.stdout or "").strip()
     import json as _json
     try:
@@ -124,6 +130,14 @@ def propose_merge(project: str = "", issue: str = "") -> dict[str, Any]:
     if not isinstance(pr, dict) or not pr.get("number"):
         return {"ok": False, "message": f"No open PR for {issue} (branch {branch}). Has the run finished?"}
     slug = _repo_slug(repo)
+    # record_merge builds request_id as f"merge-{slug}-{number}" and upserts on
+    # it, so an empty slug makes "merge--123" — which collides with PR 123 in
+    # every other repository and silently replaces whichever approval was
+    # pending. It is also unmergeable by the approver, who has no repo to act
+    # on. Refusing keeps the docstring's promise that what gets merged cannot
+    # change between the proposal and the approval.
+    if not slug:
+        return {"ok": False, "message": f"I couldn't read {project}'s GitHub remote, so I can't queue a merge I could name exactly."}
     record = actions.record_merge(issue, slug, pr["number"], branch, project=project)
     return {
         "ok": True,

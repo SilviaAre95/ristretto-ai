@@ -7,8 +7,9 @@ last_modified: 2026-09-27
 owner: project
 depends_on: []
 acceptance_criteria:
-  - The Hermes orchestrator path — morning brief, Slack chat, its tool calls —
-    runs through the local model
+  - The Hermes orchestrator path runs through the local model - the morning
+    brief, and the Hermes agent's own replies to DMs and mentions, with their
+    tool calls. NOT the `!zam` command, which is `zam-assistant`
   - $0 marginal cost on the Hermes orchestrator path
   - No cloud LLM call for the Hermes orchestrator path
   - No model served by this machine writes to a repository
@@ -50,7 +51,7 @@ No model served by this machine writes to a repository, and none stands between 
 
 ## Out of scope
 
-- NOT cloud LLM for the Hermes orchestrator path in V0: no OpenAI/Anthropic/etc. calls are made for the morning brief, Slack chat, or their tool calls; this is deliberate to keep marginal cost at $0. It was written when that was the only orchestration path in the product. It no longer is, and narrowing it is the honest repair — the alternative reading, that `zam-assistant` violates a shipped non-goal, describes a contradiction nobody chose.
+- NOT cloud LLM for the Hermes orchestrator path in V0: no OpenAI/Anthropic/etc. calls are made for the morning brief, the Hermes agent's own replies to DMs and mentions, or their tool calls. **The `!zam` command is not this path** — it is a plugin on the same Slack gateway that shells `cuzam chat` into `zam-assistant`, so one Slack surface carries both a local path and a cloud one, and only the first is described here. this is deliberate to keep marginal cost at $0. It was written when that was the only orchestration path in the product. It no longer is, and narrowing it is the honest repair — the alternative reading, that `zam-assistant` violates a shipped non-goal, describes a contradiction nobody chose.
 - NOT a claim about `zam-assistant`: that loop runs on whatever `instance.assistant_provider` names, Claude when unset, and its own spec carries the boundary. Nothing here licenses giving this machine's models a coding stage; that prohibition is unchanged and unrelated.
 - NOT writing production code: retired 2026-09-23. The original premise was that a local coder would do the token-heavy build while Claude supervised. Every attempt died in the build stage, so the `local-coder` provider and the `tier1`–`tier3` flows are gone and no shipped flow routes a build, repair or PR stage to a provider declared `hosting: local`. The judgement was about quality, measured on this machine's models; it is not a judgement about hosted open-weight models, which `custom-model-flows` allows a flow to give a mutating stage and which nothing here has tested.
 - NOT reviewing or verifying generated code: verifier blind spots rise as the generator improves, so nothing served by this machine goes between generated output and the repository.

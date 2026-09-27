@@ -1,6 +1,6 @@
 """Talk to Zam from Slack.
 
-The loop was reachable only from the dashboard and the CLI until now.
+One of the four surfaces that reach Zam's loop, and the only one on a phone.
 The vision is talking to Zam on the go, so this reaches the same loop from
 the one surface you have on a phone — and keeps the thread: a Slack channel is
 one continuous conversation, because the CLI is told the channel is the
