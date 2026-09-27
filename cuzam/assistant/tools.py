@@ -27,12 +27,17 @@ import json
 from typing import Any
 
 
+# How many runs a tool result renders. The counts are never capped; see below.
+MAX_RUNS_SHOWN = 20
+
+
 def fleet_status() -> dict[str, Any]:
     """A compact summary of every run Zam knows about.
 
     Read-only and cheap: assembled from the board and the event log, the same
     source the dashboard uses. Deliberately small — a tool result that fills
-    the context window is a tool nobody can afford to call.
+    the context window is a tool nobody can afford to call — but small in the
+    list it renders, never in the counts, which are for the whole fleet.
     """
     try:
         from .. import runs as fleet_data
@@ -41,7 +46,16 @@ def fleet_status() -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 - a tool must answer, not raise
         return {"error": f"could not read the fleet: {exc}", "runs": []}
 
-    summary = [
+    # Counted over the WHOLE fleet, never over the rendered slice. The cap
+    # below exists because a tool result that fills the context window is a
+    # tool nobody can afford to call — an argument about a list of runs, not
+    # about three integers. Counting the slice made `live: 0` out of
+    # `total: 48` reachable with a live run sitting at position 25: confidently
+    # wrong about the one thing "what is running?" asks.
+    def _tally(health: str) -> int:
+        return sum(1 for r in runs if r.health == health)
+
+    shown = [
         {
             "issue": r.issue_key or r.task_id,
             "project": r.project,
@@ -49,21 +63,27 @@ def fleet_status() -> dict[str, Any]:
             "health": r.health,
             "stage": r.stage,
         }
-        for r in runs[:20]
+        for r in runs[:MAX_RUNS_SHOWN]
     ]
-    live = [r for r in summary if r["health"] == "running"]
-    # Counted, not folded into "not live". A fleet where everything died
-    # otherwise reports `live: 0` out of N with nothing saying why, and the
-    # assistant is left to notice it run by run.
-    dead = [r for r in summary if r["health"] == "dead"]
-    stalled = [r for r in summary if r["health"] == "stalled"]
-    return {
+    payload = {
         "total": len(runs),
-        "live": len(live),
-        "dead": len(dead),
-        "stalled": len(stalled),
-        "runs": summary,
+        # dead is counted, not folded into "not live". A fleet where everything
+        # died otherwise reports `live: 0` out of N with nothing saying why, and
+        # the assistant is left to notice it run by run.
+        "live": _tally("running"),
+        "dead": _tally("dead"),
+        "stalled": _tally("stalled"),
+        "runs": shown,
     }
+    if len(runs) > len(shown):
+        # Said out loud, so the model does not describe the slice as though it
+        # were the fleet. Without this the counts and the list disagree and
+        # nothing explains why.
+        payload["runs_truncated"] = (
+            f"showing the {len(shown)} most recent of {len(runs)} runs; "
+            "the counts above are for all of them"
+        )
+    return payload
 
 
 def search_memory(query: str = "") -> dict[str, Any]:

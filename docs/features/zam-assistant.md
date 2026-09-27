@@ -12,8 +12,21 @@ acceptance_criteria:
   - The provider is read from configuration, never hardcoded, so the switch to
     a local provider is a configuration change and not a code change
   - A named conversation continues across turns, so a surface can keep a
-    thread without tracking a session id itself, once its first turn has
-    succeeded - the failure case is issue #80
+    thread without tracking a session id itself
+  - A session is recorded only once a turn has established it, so a turn that
+    fails leaves no thread behind and no conversation is wedged by it
+  - A session id is handed back only on success, never for a turn that may not
+    have created one
+  - A stored session the provider does not have recovers on the next turn
+    rather than failing that conversation for good
+  - The loop runs in a working directory it chooses, never the caller's, so an
+    answer does not depend on where the command was typed
+  - The user's memory is only what the vault tools return - the loop never
+    answers a memory question from context it happened to inherit
+  - Only the tool server this repository ships is reachable; no MCP server is
+    picked up from the environment
+  - Fleet counts describe the whole fleet even when the rendered list is
+    capped, and say so when it is
   - The loop answers from its tools rather than from the model's guess - the
     fleet, and the vault, are read through tools
   - `propose_merge` records a pending approval naming one fixed PR number and
@@ -133,26 +146,16 @@ turn that wedges ends on a timeout for the same reason.
 
 ## Open questions
 
-- [ ] **It has never been dogfooded.** Every claim above is about what the
-      code does, not about whether the assistant is any good. Whether the
-      loop holds a useful conversation, calls the right tool, and gets the
-      arguments right is unmeasured. That is a different problem from unbuilt
-      and it is the reason this is `in-progress` rather than `implemented`.
-- [ ] **The session lifecycle is broken in two places, one of them live —
-      issue #80.**
-      Whether a session exists is inferred from where its id came from, never
-      recorded, and both faces follow from that. (a) `_session_for` writes the
-      name→session mapping *before* the turn runs, so a first turn that fails
-      leaves the name pointing at a session Claude never created; every later
-      turn `--resume`s nothing and nothing prunes the store. In Slack the name
-      is the channel id, so **one failed `!zam` wedges that channel
-      permanently**. (b) A caller-supplied `session` is treated as new and
-      collides on `--session-id`; dormant only because no client sends one
-      back. The one-line flip was tried and reverted — it moves the break onto
-      failed first turns, because `ask` returns an id for a turn that never
-      established one. This wants one lifecycle fix: record a session as usable
-      only once a turn has established it, and recover when a resume finds
-      nothing. Deliberately out of scope for the map correction.
+- [ ] **Partly dogfooded, 2026-09-27.** The read paths were driven for the
+      first time and they work: asked what was running it called
+      `fleet_status`, answered accurately, and kept board status (`triage`)
+      distinct from health (`stalled`). Asked what it remembered about a
+      project it called `search_memory` and `read_note` and answered from the
+      vault, naming the notes. **`launch_run` is still unexercised** — the one
+      tool that does outward work, and the third intent ("describe new work",
+      scaffold an issue, then dispatch) has no tool at all. Still
+      `in-progress` for that reason, not for the loop's mechanics.
+      The session got three defects out of one hour: #80, #81, #82.
 - [ ] **Should the four surfaces share one thread?** Today two of them have no
       thread at all. The dashboard and the face need a conversation key before
       sharing one is even a question; the CLI and Slack have keys and hold
