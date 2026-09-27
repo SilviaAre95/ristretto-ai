@@ -34,10 +34,21 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the list in bash would be a second place holding one fact.
 
   Measured against the CLI rather than assumed, and it changed the rules:
-  `Read(~/x/**)` denies, `Read(//abs/x/**)` denies, and `Read(/abs/x/**)` is
-  accepted and **denies nothing**. `**` is rooted at the project directory. A
-  test pins the form, because a rule of the inert shape reads correctly in a
-  diff and passes any test that only checks it is present.
+  `Read(~/x/**)`, `Read(//abs/x/**)` and bare relative forms all deny, while
+  `Read(/abs/x/**)` is accepted and **denies nothing**. `**` is rooted at the
+  project directory. A test pins the form, because a rule of the inert shape
+  reads correctly in a diff and passes any test that only checks it is present.
+
+  The two state homes are *resolved* rather than written down, because both are
+  configurable — `~/.cuzam` and `~/.hermes` as literals would deny two empty
+  directories on a machine that moves them while the real stores stayed
+  readable. Reads into `~/.hermes` are narrowed to `.env` and the databases
+  rather than blanket, which keeps the decision that made its source and
+  configuration readable; writes to either store are denied outright. And
+  `.env.*` wholesale is deliberately not mirrored from the committed settings,
+  because the one `.env.*` file normally committed is the template a stage
+  adding a secret has to update, and a deny is terminal — the stage could not
+  even ask, and would ship the declaration undocumented.
 
 - **Providers declare where they are served.** A new `hosting` field, one of
   `vendor` (the runner's own endpoint on the operator's own subscription),

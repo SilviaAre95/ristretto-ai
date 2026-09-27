@@ -21,6 +21,7 @@ from . import __version__, approvals, broker, context as flow_context, events, r
 from .seam import DEV_CONFIG, VERIFY_GATE
 from .config import (
     ConfigError,
+    hermes_home,
     load_config,
     load_env,
     provider_env,
@@ -423,28 +424,53 @@ STAGE_DENY = (
     # `~/.claude/.credentials.json` would break authentication for every cloud
     # stage and for `classic`. A named residual exposure, not an oversight.
     #
-    # The shapes matter and were measured, not assumed. `~/` is honoured; a
-    # bare absolute path is accepted and matches nothing; and `**` is rooted at
-    # the project directory, so the two `.env` rules cover the worktree being
-    # worked in rather than every `.env` on the machine. Hermes' own `.env` is
-    # covered by the tree rule below instead.
+    # `~/.gitconfig` is denied although the spec notes that removing it takes
+    # the commit identity with it. That cost is about the *kernel* profile: a
+    # deny here binds the Read tool, while `git` is a subprocess that reads the
+    # file regardless. So the identity survives and the enumeration does not.
+    #
+    # The rule shapes were measured, not assumed. `~/` is honoured, a
+    # `//`-prefixed absolute path is honoured, a bare relative path is
+    # honoured, and a BARE ABSOLUTE path is accepted and matches nothing. `**`
+    # is rooted at the project directory, so a `**/` rule is about the
+    # repository being worked in and never about the rest of the machine —
+    # which is why the two state homes are resolved in `machine_denials`
+    # instead of written here.
     "Read(~/.ssh/**)",
     "Read(~/.aws/**)",
     "Read(~/.gnupg/**)",
+    "Read(~/.gitconfig)",
+    "Read(~/.netrc)",
+    "Read(~/.npmrc)",
     "Read(~/.config/gh/**)",
+    "Read(~/.config/gcloud/**)",
+    "Read(~/.docker/config.json)",
+    # The worktree's own secrets.
+    #
+    # `.env.*` wholesale is deliberately NOT mirrored from the committed file,
+    # and the superset test carries the exception with this reason. The only
+    # `.env.*` file normally *committed* is the template — this repository
+    # tracks `hermes/.env.example` and `getting-started.md` tells you to copy
+    # from it — so a blanket rule protects nothing that exists in a worktree
+    # while blocking the one file a stage adding a secret has to update. A deny
+    # is terminal, so such a stage could not even ask; it would ship the
+    # declaration undocumented instead.
     "Read(**/.env)",
-    "Read(**/.env.*)",
+    "Read(**/.env.local)",
+    "Read(**/.env.*.local)",
     "Edit(.env)",
-    "Edit(.env.*)",
-    # Cuzam's and Hermes' own state. A run has no business reading the event
-    # store it is being recorded in, and `~/.hermes/.env` is where every
-    # secret on this machine actually lives.
-    "Read(~/.cuzam/**)",
-    "Edit(~/.cuzam/**)",
-    "Read(~/.hermes/**)",
-    "Edit(~/.hermes/**)",
+    "Edit(.env.local)",
+    "Edit(.env.*.local)",
     # Commands, at parity with the committed file. Each reason applies at least
     # as strongly to a stage nobody is watching.
+    #
+    # Prefix matches, which is a limit rather than a quibble: `rm -fr`,
+    # `rm -r -f`, `chmod 0777` and `git push origin +main` are the same acts
+    # spelled differently and none is matched. It bites exactly in the case
+    # this floor is for — a target repo allowing `Bash(rm:*)` — where
+    # `rm -rf build` is blocked and `rm -fr build` is not. Enumerating
+    # spellings is a game this list cannot win, so the honest claim is that
+    # these raise the cost of the obvious form and the kernel bounds the act.
     "Bash(sudo:*)",
     "Bash(rm -rf:*)",
     "Bash(chmod 777:*)",
@@ -458,7 +484,49 @@ STAGE_DENY = (
 )
 
 
-def stage_settings() -> dict[str, Any]:
+def machine_denials(environ: Mapping[str, str] | None = None) -> tuple[str, ...]:
+    """Deny rules for the two state homes, resolved rather than assumed.
+
+    Both are configurable — `events.state_home()` honours `CUZAM_STATE_HOME`
+    and `hermes_home()` honours `CUZAM_HERMES_HOME`, its legacy spelling and
+    `HERMES_HOME` — so writing `~/.cuzam` and `~/.hermes` into the list would
+    deny two empty directories on any machine that configures them, while the
+    real stores stayed readable and every test still reported the floor as
+    present. This repository has already paid for that shape twice, in
+    `runs.py` and in `dash/control.py`, both of which say so where it happened.
+
+    `//`-prefixed, because a resolved path is absolute and a bare absolute path
+    is the inert form. Measured: `Read(//abs/x/**)`, `Read(//abs/x/**/*.db)`
+    and `Read(//abs/x/.env)` all deny; `Read(/abs/x/**)` does not.
+
+    Reads are narrowed rather than blanket, and that is a decision on the
+    record: Hermes' source, configuration and scripts were made deliberately
+    readable on 2026-09-24, with `.env`, the databases and credentials denied.
+    A blanket tree deny would contradict it — and unlike an allow that is
+    merely absent, a deny cannot escalate to a prompt, so a `plan` stage
+    investigating a kanban record would be refused outright and would route
+    around it with the allowlisted `cat`. Writes are denied wholesale, which
+    that decision says nothing against: a coding stage has no business writing
+    into either store, and the approvals database is one of them.
+    """
+    rules: list[str] = []
+    for root in (str(events.state_home(environ)), str(hermes_home(environ))):
+        absolute = "//" + root.lstrip("/")
+        rules += [
+            f"Read({absolute}/.env)",
+            f"Read({absolute}/*.db)",
+            f"Read({absolute}/**/*.db)",
+            f"Edit({absolute}/**)",
+        ]
+    # Deduplicated, order kept: the two homes coincide on a machine that points
+    # them at one directory, and a repeated rule is noise in the payload.
+    seen: dict[str, None] = {}
+    for rule in rules:
+        seen.setdefault(rule, None)
+    return tuple(seen)
+
+
+def stage_settings(environ: Mapping[str, str] | None = None) -> dict[str, Any]:
     """The `--settings` payload for one stage.
 
     An inline JSON string rather than a file, and that is load-bearing for the
@@ -466,7 +534,7 @@ def stage_settings() -> dict[str, Any]:
     spec denies, so a file payload would fail every stage at startup once the
     sandbox exists.
     """
-    return {"permissions": {"deny": list(STAGE_DENY)}}
+    return {"permissions": {"deny": [*STAGE_DENY, *machine_denials(environ)]}}
 
 
 def attended(task_id: str) -> bool:
@@ -801,7 +869,17 @@ def preflight_provider(provider: Mapping[str, Any]) -> str:
     # --model last because it is single-valued: it terminates any variadic
     # option before it and leaves the prompt as the final argument, which is
     # the same ordering rule runner_command has to obey.
-    command += ["--strict-mcp-config", "--no-session-persistence"]
+    # The floor reaches the probe too. Plan mode refuses edits but leaves Read
+    # and Grep, and this is the cheapest place the payload gets exercised at
+    # all: a stage that dies on it dies an hour into a run, while the probe
+    # answers in seconds. It is also what makes the claim in
+    # `test_the_model_credential_is_not_denied` true rather than aspirational —
+    # a rule that broke authentication surfaces here, as "did not answer",
+    # before any launch proceeds.
+    command += [
+        "--settings", json.dumps(stage_settings()),
+        "--strict-mcp-config", "--no-session-persistence",
+    ]
     if model:
         command += ["--model", model]
     command.append(PREFLIGHT_PROMPT)

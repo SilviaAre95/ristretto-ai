@@ -400,12 +400,39 @@ pure tightening with nothing given up, which is what lets it go first:
 
 **And a rule form that has to be pinned rather than assumed.** Measured against
 2.1.283 with a canary file and a prompt that actually calls the Read tool:
-`Read(~/x/**)` denies, `Read(//abs/x/**)` denies, and **`Read(/abs/x/**)`
-succeeds** — accepted, and matching nothing. `**` is rooted at the project
-directory, so `Read(**/x/**)` does not reach outside it either. A rule of the
-inert shape looks correct in a diff and passes any test asserting it is
-present, so the acceptance criterion above is about the *form* of the rule and
+`Read(~/x/**)`, `Read(//abs/x/**)`, `Read(//abs/x/.env)`,
+`Read(//abs/x/**/*.db)` and bare relative forms like `Read(.env)` and
+`Read(.git/**)` all deny. **`Read(/abs/x/**)` succeeds** — accepted, and
+matching nothing. And `**` is rooted at the project directory, so
+`Read(**/x/**)` does not reach outside it either. A rule of the inert shape
+looks correct in a diff and passes any test asserting it is present, so the
+acceptance criterion above is about the *form* of the rule and
 `test_no_rule_is_a_bare_absolute_path` enforces it.
+
+**Which is why the state homes are resolved, not written down.** Both are
+configurable, so `~/.cuzam` and `~/.hermes` in a rule would deny two empty
+directories on a machine that moves them while the real stores stayed
+readable — and every test would still report the floor as present. `runs.py`
+and `dash/control.py` both carry comments about paying for that exact shape.
+
+**Reads into `~/.hermes` are narrowed rather than blanket**, because the
+opposite would contradict a decision already taken: Hermes' source,
+configuration and scripts are deliberately readable as of 2026-09-24, with
+`.env`, the databases and credentials denied. A deny cannot escalate to a
+prompt, so a blanket tree rule would refuse a `plan` stage investigating a
+kanban record outright, and it would route around it with the allowlisted
+`cat`. Writes into either store are denied wholesale, which that decision says
+nothing against.
+
+**Three limits the rules look like they cover and do not.** A read through
+`cat` is bounded by nothing here, so the `Read` rules raise the cost of a read
+and do not prevent one — the audit trail is what they actually buy, since a
+denied Read is visible where an allowlisted `cat` is not. The `Bash` rules are
+prefix matches, so `rm -fr`, `chmod 0777` and `git push origin +main` are the
+same acts unmatched. And `.env.*` wholesale is not mirrored from the committed
+settings: the only `.env.*` file normally committed is the template a stage
+adding a secret has to update, and a deny is terminal, so the stage could not
+even ask.
 
 **Named gap: `classic` gets no floor.** It is spawned through `run-loop.sh`,
 which deliberately cannot read the config, so a floor there would be a second
@@ -656,12 +683,6 @@ rule stays: a flow is only as good as the issue's context being present.
       profile, where "granted" still has to name a mode. The vault is not a git
       repository, so a write there has nothing to revert to; that is an
       argument about which mode, not about whether.
-- [ ] **Whether the OS layer grants the vault read-write or read-only.** The
-      owner decided on 2026-09-26 that a stage may write to the vault, which
-      settles the deny floor — it carries no vault rule — but not the kernel
-      profile, where "granted" still has to name a mode. The vault is not a git
-      repository, so a write there has nothing to revert to; that is an
-      argument about which mode, not about whether.
 - [ ] **How the publishing credential resolves is unverified.** The remote is
       HTTPS and no shipped code runs `git push` or `gh pr create` — the model
       does, so `gh` resolves its own token and git resolves a credential helper.
@@ -725,12 +746,22 @@ Not contractual. Where the boundary would land, given what is there today:
   `(worktree, repo, role, project scope)`; nothing else spells a sandbox rule.
   Same discipline as `runs.run_dir()`, which was three places that had drifted.
 - **Four spawn sites exist**, and three need the wrapper:
-  `cuzam/runner.py:411` (`runner_command`, every staged stage),
-  `hermes/skills/loop-runner/scripts/run-loop.sh:308` (classic, which owns the
-  S-3 permission pin), and `cuzam/runner.py:661` (the provider preflight probe,
-  which already runs in a scratch directory and is the cheapest place to prove
-  the wrapper works). The fourth, `cuzam/assistant/loop.py:86`, is out of scope
-  above.
+  `cuzam/runner.py` `runner_command` (every staged stage),
+  `hermes/skills/loop-runner/scripts/run-loop.sh` (classic, which owns the
+  S-3 permission pin), and `cuzam/runner.py` `preflight_provider` (the provider
+  preflight probe, which already runs in a scratch directory and is the
+  cheapest place to prove the wrapper works). The fourth,
+  `cuzam/assistant/loop.py` `_command`, is out of scope above.
+
+  By name rather than by line, deliberately: these pointers were already stale
+  by three lines once, and the deny floor moved both `runner.py` sites by about
+  a hundred. A citation that drifts silently is worse than one that has to be
+  grepped.
+
+  **The deny floor covers two of the three.** `runner_command` and the
+  preflight probe carry `--settings`; classic carries nothing, for the reason
+  given above — `run-loop.sh` cannot read the config, and a copy of the list in
+  bash would be a second place holding one fact.
 - **Classic cannot read the config**, deliberately — it is bash and the
   launcher owns the spawn shape. So the profile path reaches it the way
   everything else does, as argv from `launch.classic_command`, and
@@ -748,5 +779,5 @@ Not contractual. Where the boundary would land, given what is there today:
   this spec in three places: it claims nothing in a flow can read the issue
   tracker, that the stage prompt carries the issue key and nothing else, and
   that local stages run under `--bare`. `context.py` reaches Linear and the
-  vault, `runner.py:274` prepends `context.md` to every stage's inputs, and
+  vault, `runner.py` prepends `context.md` to every stage's inputs, and
   `--bare` is no longer passed anywhere. Correcting it belongs with this change.
