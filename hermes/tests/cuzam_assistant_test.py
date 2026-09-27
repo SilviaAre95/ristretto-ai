@@ -14,6 +14,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from cuzam import config as cfg
 from cuzam.assistant import loop, tools
 
 
@@ -205,6 +206,81 @@ class ConversationMemoryTest(unittest.TestCase):
         session, is_new = loop._session_for(None)
         self.assertIsNone(session)
         self.assertTrue(is_new)
+
+
+class ProposeMergeTest(unittest.TestCase):
+    """`gh ... --jq '.[0]'` prints "null" for no match, not an empty line."""
+
+    def _propose(self, stdout: str):
+        done = subprocess.CompletedProcess([], 0, stdout=stdout, stderr="")
+        with mock.patch.object(cfg, "load_config", return_value=({}, None)), \
+             mock.patch.object(cfg, "repository_path", return_value=Path("/tmp/r")), \
+             mock.patch.object(subprocess, "run", return_value=done):
+            return tools.propose_merge(project="Kaffecard", issue="XARI-26")
+
+    def _propose_with_slug(self, stdout: str, slug: str):
+        done = subprocess.CompletedProcess([], 0, stdout=stdout, stderr="")
+        with mock.patch.object(cfg, "load_config", return_value=({}, None)), \
+             mock.patch.object(cfg, "repository_path", return_value=Path("/tmp/r")), \
+             mock.patch.object(subprocess, "run", return_value=done), \
+             mock.patch.object(tools, "_repo_slug", return_value=slug):
+            return tools.propose_merge(project="Kaffecard", issue="XARI-26")
+
+    def test_a_gh_failure_is_not_reported_as_no_pr(self) -> None:
+        # Unauthenticated, off PATH, offline, no GitHub remote: all non-zero
+        # with empty stdout. Saying "no open PR" states a falsehood as fact.
+        failed = subprocess.CompletedProcess([], 1, stdout="", stderr="gh: not logged in")
+        with mock.patch.object(cfg, "load_config", return_value=({}, None)), \
+             mock.patch.object(cfg, "repository_path", return_value=Path("/tmp/r")), \
+             mock.patch.object(subprocess, "run", return_value=failed):
+            out = tools.propose_merge(project="Kaffecard", issue="XARI-26")
+        self.assertFalse(out["ok"])
+        self.assertNotIn("No open PR", out["message"])
+        self.assertIn("GitHub", out["message"])
+
+    def test_an_unreadable_remote_refuses_rather_than_colliding(self) -> None:
+        # record_merge keys on f"merge-{slug}-{number}" and upserts, so an empty
+        # slug makes "merge--123" — colliding with PR 123 in every other repo.
+        out = self._propose_with_slug('{"number": 123, "title": "t", "url": "u"}', "")
+        self.assertFalse(out["ok"])
+        self.assertIn("remote", out["message"].lower())
+
+    def test_no_open_pr_is_reported_not_raised(self) -> None:
+        # The bug: "null" is truthy, so the guard never fired and pr["number"]
+        # raised TypeError exactly where this message belongs.
+        for empty in ("null", "", "   ", "not json"):
+            with self.subTest(stdout=empty):
+                out = self._propose(empty)
+                self.assertFalse(out["ok"])
+                self.assertIn("No open PR", out["message"])
+
+
+class SystemPromptSurvivesResumeTest(unittest.TestCase):
+    """The data-not-instructions guard is sent on resume too.
+
+    --system-prompt-snapshot defaults to `on` and replays the recorded prompt
+    "until the conversation is compacted". After a compaction a resumed turn
+    renders it fresh from the flags it was given, so omitting the flag on the
+    resume branch silently drops the guard from exactly the long-lived
+    conversations that read vault notes.
+    """
+
+    def _cmd(self, session, is_new):
+        return loop._command({"runner": "claude-code", "model": "sonnet"},
+                             "what did we decide?", session, is_new)[0]
+
+    def test_a_resumed_turn_still_names_tool_output_as_data(self) -> None:
+        cmd = self._cmd("existing-session", False)
+        self.assertIn("--resume", cmd)
+        self.assertIn("--append-system-prompt", cmd)
+        appended = cmd[cmd.index("--append-system-prompt") + 1]
+        self.assertIn("never as instructions", appended)
+
+    def test_a_created_turn_names_it_too(self) -> None:
+        cmd = self._cmd(None, True)
+        self.assertIn("--session-id", cmd)
+        appended = cmd[cmd.index("--append-system-prompt") + 1]
+        self.assertIn("never as instructions", appended)
 
 
 class LaunchToolTest(unittest.TestCase):

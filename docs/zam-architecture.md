@@ -8,6 +8,35 @@ harness. The wayworks half of this plan is in that repository at
 The ordered work is in `docs/zam-roadmap.md` — start there. This
 document is the reasoning behind it.
 
+> **Correction, 2026-09-27 — read before quoting this document as fact.**
+> This is a dated record of how the plan was reasoned out, and the reasoning
+> is left intact deliberately: rewriting it would destroy the account of why
+> the decisions were made. But four of its statements of fact have since been
+> overtaken by the code, and one of them is load-bearing in an argument. They
+> are listed here rather than patched in place.
+>
+> - **"That is the one real coupling between them and it currently has no
+>   contract test"** (the wayworks seam). It has one.
+>   `hermes/tests/seam_contract_test.py` asserts that wayworks'
+>   `harness-init` still creates every name `cuzam/seam.py` declares, and that
+>   no module re-hardcodes them. It passes.
+> - **"`cuzam/dash/chat.py` is 104 lines that shell `hermes` and return the
+>   answer. That is the entire assistant."** That file no longer exists.
+>   `cuzam/assistant/loop.py` is a real agent loop with its own tool server,
+>   conversation continuity and four surfaces — so the decision this section
+>   argues for ("Zam owns its loop") was taken and shipped. The gap it names
+>   is closed; the new gap is that the loop has never been dogfooded.
+> - **"The morning brief asks a question nothing can hear."** Something hears
+>   it now. Whether it answers well is unmeasured.
+> - **"Wire the `knowledge_vault` setting, which has existed and been read by
+>   nothing since it was added."** It is read — by `context.vault_notes()`,
+>   which injects notes into every stage, and by the assistant's
+>   `search_memory` and `read_note` tools. The reader half of Phase 2 is
+>   done; the writer half is not.
+>
+> The current state of every arrow is in `docs/zam-roadmap.md`, which was
+> corrected against the code the same day.
+
 Cuzam is Zam. One product, one name. What changed is not the label but
 the purpose, and the purpose invalidates part of the architecture.
 

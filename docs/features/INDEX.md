@@ -14,7 +14,7 @@ Source of truth for what this product **does** and **does not** do. Every code c
 |----|-------|--------|---------|---------------|
 | `slack-gateway` | Slack Gateway | implemented | Zam talks to one allowlisted user in Slack over Socket Mode. | NOT public/multi-user; NOT other chat platforms in V0 |
 | `zam-persona` | Zam Persona | implemented | Assistant identifies and behaves as "Zam", per SOUL.md. | NOT a generic assistant voice; NOT changing identity per session |
-| `local-brain` | Local Brain | implemented | `qwen3.6:35b-mlx` orchestrates chat, briefs and tool decisions locally. No coding on this machine. | NOT writing production code on a local model; NOT cloud LLM for orchestration |
+| `local-brain` | Local Brain | implemented | `qwen3.6:35b-mlx` orchestrates the Hermes path — brief, Slack chat — locally. No coding on this machine. | NOT writing production code on a local model; NOT cloud LLM for the Hermes orchestrator path |
 | `linear-integration` | Linear Integration | implemented | One configured Linear team: MCP to converse and mutate, GraphQL for unattended reads. | NOT acting on other teams; NOT auto-closing issues without instruction |
 | `config-in-repo` | Config In Repo | implemented | Hermes config versioned in repo and symlinked; secrets stay local. | NOT committing secrets; NOT versioning the Hermes engine code or runtime state |
 | `morning-brief` | Morning Brief | implemented | 8am cron posts a prioritized brief to the configured Slack channel. | NOT acting on the board automatically; NOT posting when nothing is new |
@@ -28,6 +28,7 @@ Source of truth for what this product **does** and **does not** do. Every code c
 | `flow-enforcement` | Flow Enforcement | implemented | A loop task cannot be completed unless its loop actually ran. | NOT gating non-loop tasks; NOT relying on the event log; NOT blocking edits, only completion |
 | `doorbell` | Doorbell | implemented | Pipeline milestones reach Slack with a link into the fleet view. | NOT notifying on progress; NOT a daemon; NOT retrying a failed send |
 | `filesystem-scoping` | Filesystem Scoping | in-progress | Staged stages carry a Cuzam-supplied deny floor; the OS-enforced scope is not built. | NOT scoping network access; NOT replacing the approval gate |
+| `zam-assistant` | Zam Assistant Loop | in-progress | One configured provider, Zam's own tools, a conversation four surfaces reach. Never dogfooded. | NOT merging or deploying on its own say-so; NOT a coding tier |
 
 <!-- Append new rows above this comment. Keep the summary column ≤ 15 words. -->
 

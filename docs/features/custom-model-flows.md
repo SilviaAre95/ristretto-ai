@@ -3,7 +3,7 @@ id: custom-model-flows
 title: Custom Model Flows
 status: in-progress  # proposed | in-progress | implemented | deprecated
 created_at: 2026-07-18
-last_modified: 2026-09-26
+last_modified: 2026-09-27
 owner: project
 depends_on: [autonomous-coding]
 acceptance_criteria:
@@ -139,11 +139,15 @@ mutating stage, by contrast, is about **this machine's** models specifically —
 see `local-brain` — and applies only to `hosting: local`.
 
 This is the flow runner's behaviour, not every spawn's: the assistant loop sets
-the base URL for the same providers and passes none of the three. Since
-`instance.assistant_provider` points at a local provider, that path runs the
-configuration described here as hanging indefinitely, and does not hang — which
-means the account above is incomplete rather than wrong, and is recorded as an
-open question rather than tidied over.
+the base URL for the same providers and passes none of the three. Whether that
+path runs the configuration described here as hanging depends on what
+`instance.assistant_provider` names, and the shipped `cuzam.yaml` does not set
+it — so the default is `claude`, the vendor endpoint, where no base URL is
+overridden and the question does not arise. It arises only on a machine that
+has pointed the key at a non-vendor provider. Where that has been done the path
+has not been observed to hang, which makes the account above incomplete rather
+than wrong; but the shipped default does not exercise it, so this is recorded
+as an open question rather than tidied over.
 
 So there is no longer a way to ask for a *locally served* coding run: no
 shipped flow gives a mutating stage to a provider declared `hosting: local`. A
@@ -306,10 +310,14 @@ so must name it through `auth_token_env`.
 - Why does the assistant loop not need what every flow stage needs? It sets
   `ANTHROPIC_BASE_URL` for a provider with its own endpoint and passes none of
   `--strict-mcp-config`, `--add-dir` or
-  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, yet `instance.assistant_provider`
-  points at a local provider and that path does not hang. Either the hang needs
-  a narrower description than "any non-vendor endpoint" or the assistant loop is
-  one Claude Code release away from the failure that cost `tier1` an hour.
+  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`. The shipped default hides this:
+  `instance.assistant_provider` is unset, so the loop runs on `claude`, the
+  vendor endpoint, and never reaches the configuration described as hanging.
+  Point the key at a non-vendor provider and it does — and where that has been
+  tried it has not hung. So either the hang needs a narrower description than
+  "any non-vendor endpoint", or the assistant loop is one Claude Code release
+  away from the failure that cost `tier1` an hour, and the shipped default is
+  what has been keeping the question quiet rather than an answer to it.
 - Should a future schema version support conditional repair stages based on a
   machine-readable review result?
 - Which local API should the menu-bar editor use to queue and monitor flows?

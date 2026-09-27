@@ -1,15 +1,22 @@
 """Talk to Zam from Slack.
 
-The loop reads the fleet and the vault, but until now only on the dashboard.
+One of the four surfaces that reach Zam's loop, and the only one on a phone.
 The vision is talking to Zam on the go, so this reaches the same loop from
 the one surface you have on a phone — and keeps the thread: a Slack channel is
 one continuous conversation, because the CLI is told the channel is the
 conversation key.
 
 Unlike the deterministic commands (approve, launch), this DOES route to a
-model — it is a conversation. But it is Zam's own read-only loop: it can look
-at the fleet and the vault and answer, and it has no tool that changes
-anything. Acting still goes through the gate, separately.
+model — it is a conversation.
+
+It reaches Zam's whole loop, not a read-only slice of it. That is worth
+saying plainly, because this docstring used to claim the opposite: the loop
+allowlists every tool it has for every surface, so from Slack the model can
+also propose a merge (gated — it records an approval and cannot merge) and
+start a coding run (not gated — it executes, ending at a pull request).
+`slack-gateway` bounds who can reach this to one allowlisted user, which is
+what makes it acceptable; it is not made acceptable by the tools being
+harmless, because two of them are not.
 """
 
 from __future__ import annotations
@@ -53,6 +60,9 @@ def register(ctx) -> None:
     ctx.register_command(
         "zam",
         handler=ask,
-        description="Talk to Zam: !zam <question> — reads the fleet and your vault.",
+        description=(
+            "Talk to Zam: !zam <question> — reads the fleet and your vault, "
+            "and can start a run or queue a PR for your approval."
+        ),
         args_hint="<question>",
     )
