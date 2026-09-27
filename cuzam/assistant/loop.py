@@ -82,9 +82,16 @@ def _command(provider: Mapping[str, Any], prompt: str, session: str | None, is_n
 
     env = provider_env(provider)
     # default, not plan: plan mode blocks tool execution, and the whole point
-    # is that Zam calls its read tools. Safe here because v1 exposes only
-    # read-only tools and each is allowlisted below; mutating tools, when they
-    # come, route through the approval gate instead.
+    # is that Zam calls its tools. This once read "safe because v1 exposes only
+    # read-only tools"; that stopped being true when launch_run and
+    # propose_merge were added, so the real justification, per tool:
+    #   - the reads (fleet, vault) are allowlisted and answer directly
+    #   - propose_merge records a pending approval and cannot merge
+    #   - launch_run does act, and is allowlisted deliberately: it ends at a
+    #     pull request a human reviews, and launch.launch carries its own
+    #     guards (valid issue key, committed verify gate, busy-fleet refusal)
+    # The gate is not the permission mode; it is what each tool is allowed to
+    # do. A tool that could merge or deploy must never be allowlisted here.
     #
     # Persistence stays ON — continuity is the point of a conversation, and
     # --resume needs a persisted session. A fresh conversation gets a new

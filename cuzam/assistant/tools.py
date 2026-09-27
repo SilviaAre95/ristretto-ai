@@ -2,12 +2,18 @@
 
 The loop is `claude -p` driven with this as an MCP server — the same mechanism
 the approval broker uses, so no new auth and no new dependency. This is the
-one place Zam's capabilities are declared; the loop grants a subset of them
-per surface.
+one place Zam's capabilities are declared, and every surface gets all of them:
+`loop._command` allowlists the whole table, so adding an entry here grants it
+to the CLI, the dashboard, the face and Slack in one go. There is no
+per-surface subset, and anything that needs one has to build it.
 
-v1 holds a single read-only tool: the fleet. It exists to prove the loop
-mechanics — can we drive claude with our tools and get a reliable call —
-before the mutating tools (launch, approve) arrive behind the approval gate.
+v1 began as a single read-only tool — the fleet — to prove the loop mechanics
+before anything mutating arrived. It has five now, and two of them act:
+`launch_run` starts a coding run directly, and `propose_merge` writes a
+pending approval. So "the tools are read-only" is no longer the thing keeping
+this safe. What keeps it safe is stated per tool and differs per tool: reads
+answer directly, merge is proposed and gated, and launch executes because it
+ends at a pull request a human reviews. Deploy is not reachable at all.
 
 Two contract facts, learned the hard way in broker.py and kept here:
 the server must advertise its tools capability explicitly, and every reply is
@@ -156,7 +162,11 @@ def launch_run(project: str = "", issue: str = "", flow: str = "", unattended: b
     return {"ok": outcome.ok, "message": outcome.message, "task_id": outcome.task_id}
 
 
-# The tool table. v1 is read-only: read the fleet, and read the second brain.
+# The tool table — the one place Zam's capabilities are declared. Three read
+# (the fleet, and the second brain), one proposes and gates (merge), one acts
+# (launch). Adding a mutating tool here grants it to every surface at once, so
+# say in the description what it does and does not do: the description is what
+# the model reads before deciding to call it.
 # Each entry is (description, callable, schema-properties).
 TOOLS: dict[str, tuple[str, Any, dict]] = {
     "fleet_status": (
