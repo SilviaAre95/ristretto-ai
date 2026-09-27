@@ -16,7 +16,15 @@ PASS=0; FAIL=0
 t() { if eval "$2"; then echo "ok  - $1"; PASS=$((PASS+1)); else echo "FAIL - $1"; FAIL=$((FAIL+1)); fi; }
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-TMP="$(mktemp -d "${TMPDIR:-/tmp}/cuzam-migrate-test.XXXXXX")"
+# `pwd -P` and not just mktemp's answer. On macOS $TMPDIR is /var/folders/...,
+# and the migration resolves its own repository with `cd "$(dirname ...)/.." &&
+# pwd`, which reports /private/var — so the two would be different strings for
+# one directory. That is harmless for the fixture as it stands and a trap for
+# the next step added to it: the managed-link branches compare `readlink`
+# output against "$repo/hermes/skills/loop-runner" and "$repo/.venv/bin/...",
+# so a fixture built with the unresolved path takes the "link we did not write"
+# branch while appearing to cover the managed one.
+TMP="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/cuzam-migrate-test.XXXXXX")" && pwd -P)"
 trap 'rm -rf "$TMP"' EXIT
 
 # The migration is run from a COPY of scripts/, and that is the only reason
@@ -61,18 +69,28 @@ SCRIPT="$REPO/scripts/migrate-cuzam.sh"
 # busy one, with nothing to say which happened. The quiet-machine assertion
 # cannot catch that, because it passes identically either way.
 PROBED="$TMP/probe-consulted"
+STUB="$REPO/scripts/live-runs.sh"
+# `rm -f` first, every time, and the reason is the accident in the paragraph
+# above rather than tidiness. `>` follows a symlink, and `cp -R` copies a
+# symlink AS a symlink — so the day scripts/live-runs.sh becomes one in the
+# checkout, or someone makes this fixture cheaper with `cp -Rs`, the redirect
+# truncates a tracked file in the developer's working tree again. Unlinking
+# first cannot do that, and the assertion below makes the property checked
+# rather than merely intended.
+write_stub() {
+  rm -f "$STUB"
+  printf '%s' "$1" > "$STUB"
+  chmod +x "$STUB"
+}
 quiet_machine() {
-  printf '#!/usr/bin/env bash\n: > "%s"\nexit 1\n' "$PROBED" \
-    > "$REPO/scripts/live-runs.sh"
-  chmod +x "$REPO/scripts/live-runs.sh"
+  write_stub "$(printf '#!/usr/bin/env bash\n: > "%s"\nexit 1\n' "$PROBED")"
 }
 live_run() {
-  printf '#!/usr/bin/env bash\n: > "%s"\n%s\nexit 0\n' "$PROBED" \
-    'echo "4242 bash /x/loop-runner/scripts/run-loop.sh t_live000 ABC-1 --flow classic"' \
-    > "$REPO/scripts/live-runs.sh"
-  chmod +x "$REPO/scripts/live-runs.sh"
+  write_stub "$(printf '#!/usr/bin/env bash\n: > "%s"\n%s\nexit 0\n' "$PROBED" \
+    'echo "4242 bash /x/loop-runner/scripts/run-loop.sh t_live000 ABC-1 --flow classic"')"
 }
 quiet_machine
+t "the stub is a real file, not a link" "[ -f '$STUB' ] && [ ! -L '$STUB' ]"
 
 HH="$TMP/hermes"
 OLD_STATE="$TMP/.ristretto"
