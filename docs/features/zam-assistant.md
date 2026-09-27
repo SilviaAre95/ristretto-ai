@@ -156,6 +156,15 @@ turn that wedges ends on a timeout for the same reason.
       scaffold an issue, then dispatch) has no tool at all. Still
       `in-progress` for that reason, not for the loop's mechanics.
       The session got three defects out of one hour: #80, #81, #82.
+      **Its refusals were probed on 2026-09-27 and all hold**: no project,
+      an unconfigured project, a malformed issue key, an empty issue, and a
+      path-traversal-shaped project name each came back as a refusal with a
+      message that tells the model what to do, and none reached a dispatch.
+      The guard order in `launch.launch` puts every refusal — config, repo and
+      issue-key validation, preflight, the busy-fleet check — ahead of
+      `pin_branch_to_base`, which is the first side effect. The happy path was
+      deliberately not driven: it creates a worktree, takes a claim and spends
+      a tier, which is not a thing to do to find out what happens.
 - [ ] **Should the four surfaces share one thread?** Today two of them have no
       thread at all. The dashboard and the face need a conversation key before
       sharing one is even a question; the CLI and Slack have keys and hold
