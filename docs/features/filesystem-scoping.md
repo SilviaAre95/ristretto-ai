@@ -1,7 +1,7 @@
 ---
 id: filesystem-scoping
 title: Filesystem Scoping
-status: proposed  # proposed | in-progress | implemented | deprecated
+status: in-progress  # proposed | in-progress | implemented | deprecated
 created_at: 2026-09-25
 last_modified: 2026-09-26
 owner: project
@@ -22,6 +22,11 @@ acceptance_criteria:
     committed in the repository being worked on
   - The settings Cuzam supplies deny at least what the discovered settings they
     displace denied
+  - Every `claude` stage carries a deny floor supplied by Cuzam, so a
+    `permissions.allow` committed in the repository being worked on cannot
+    widen the session past it
+  - No path rule is a bare absolute path, which Claude Code accepts and then
+    matches nothing with
   - No credential is reachable as a path in any stage's scope; model and
     publishing credentials arrive as environment
   - No stage's scope contains a credential directory; the ability to push and
@@ -196,9 +201,14 @@ A stage's scope is built from these parts, and everything not in them is denied.
   failed push;
 - whatever the project declares, below.
 
-**Denied, explicitly, and this is the point:** the rest of `$HOME`, the
-operator's vault, the state home, the primary checkout's working tree, and every
-sibling worktree. And every credential directory — `~/.ssh`, `~/.config/gh`,
+**Denied, explicitly, and this is the point:** the rest of `$HOME`, the state
+home, the primary checkout's working tree, and every sibling worktree.
+
+The operator's vault is **not** denied. That was decided on 2026-09-26 against
+the draft in front of it: a stage may write there, and the vault update a run
+makes when work ships is wanted. The shipped deny floor therefore carries no
+vault rule, and whether the OS layer grants it read-write or read-only is an
+open question below rather than settled here. And every credential directory — `~/.ssh`, `~/.config/gh`,
 `~/.gitconfig` and `~/.claude/.credentials.json` are outside a `pr` stage's
 scope as much as a `plan` stage's.
 
@@ -368,7 +378,41 @@ enforcement boundary in the way a matched rule is not. What is genuinely lost is
 whatever the operator's own hooks were doing, and if that matters, the answer is
 a hook set Cuzam ships and tests — named work, not an assumption.
 
-**The two layers arrive in that order, and classic keeps its flag set.** The
+**A deny floor arrives before either layer, and it has shipped.** `--settings`
+alone, carrying `permissions.deny` only, on every `claude` stage a staged flow
+spawns. It is not a layer in the sense above — `cat` is on `READ_ONLY_TOOLS` by
+design and walks under it exactly as the layering argument says — but it is a
+pure tightening with nothing given up, which is what lets it go first:
+
+- `--settings` is *additive* ("load additional settings from"), and a deny rule
+  beats an allow rule whichever source it came from. So the floor holds against
+  a target repository's committed settings without displacing them, and the
+  criterion about displacement is satisfied in advance rather than retired.
+- `--restricted` is what drops discovered settings, and the answer this spec
+  gives for the hooks a stage then loses is the OS layer. Passing it before the
+  kernel layer exists would trade away the only hard enforcement boundary a
+  stage has to buy file-tool confinement the kernel is meant to provide.
+- The broker rework is not a prerequisite of it. A permission rule governs the
+  agent's tool calls, not an MCP subprocess's own file I/O, so denying the state
+  home in `--settings` cannot stop the broker opening `approvals.db`. Which is
+  also why the floor does **not** close the round-2 `sqlite3` hole: that is a
+  Bash call, and only the kernel is below Bash.
+
+**And a rule form that has to be pinned rather than assumed.** Measured against
+2.1.283 with a canary file and a prompt that actually calls the Read tool:
+`Read(~/x/**)` denies, `Read(//abs/x/**)` denies, and **`Read(/abs/x/**)`
+succeeds** — accepted, and matching nothing. `**` is rooted at the project
+directory, so `Read(**/x/**)` does not reach outside it either. A rule of the
+inert shape looks correct in a diff and passes any test asserting it is
+present, so the acceptance criterion above is about the *form* of the rule and
+`test_no_rule_is_a_bare_absolute_path` enforces it.
+
+**Named gap: `classic` gets no floor.** It is spawned through `run-loop.sh`,
+which deliberately cannot read the config, so a floor there would be a second
+copy of the list in bash — the two-places-one-fact shape that has already cost
+this repo a defect. It waits for the OS layer.
+
+**Then the two layers arrive in that order, and classic keeps its flag set.** The
 OS layer goes on all three spawn sites at once, because it is the layer that
 closes the hole. `--restricted` and `--settings` go on staged stages only;
 `classic`'s argv gains the profile path and nothing else.
@@ -606,6 +650,18 @@ rule stays: a flow is only as good as the issue's context being present.
       context assembly reaches `classic` first, or scoping lands on staged flows
       first. Sequencing decision, and the one that most affects whether this is
       an improvement on day one.
+- [ ] **Whether the OS layer grants the vault read-write or read-only.** The
+      owner decided on 2026-09-26 that a stage may write to the vault, which
+      settles the deny floor — it carries no vault rule — but not the kernel
+      profile, where "granted" still has to name a mode. The vault is not a git
+      repository, so a write there has nothing to revert to; that is an
+      argument about which mode, not about whether.
+- [ ] **Whether the OS layer grants the vault read-write or read-only.** The
+      owner decided on 2026-09-26 that a stage may write to the vault, which
+      settles the deny floor — it carries no vault rule — but not the kernel
+      profile, where "granted" still has to name a mode. The vault is not a git
+      repository, so a write there has nothing to revert to; that is an
+      argument about which mode, not about whether.
 - [ ] **How the publishing credential resolves is unverified.** The remote is
       HTTPS and no shipped code runs `git push` or `gh pr create` — the model
       does, so `gh` resolves its own token and git resolves a credential helper.

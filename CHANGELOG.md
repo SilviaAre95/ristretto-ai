@@ -12,6 +12,33 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Every coding stage now carries a deny floor Cuzam supplies.** A staged
+  `claude` stage is started with `--settings` holding a `permissions.deny` list:
+  credential directories, `.env` files in the worktree, Cuzam's and Hermes'
+  state homes, `sudo`, `rm -rf`, `chmod 777`, force-push, `git reset --hard`,
+  and edits to `.git`. Until now the repository being worked on decided its own
+  session's permissions — Claude Code discovers `.claude/settings.json` from the
+  checkout, so a target repo could ship a wide `permissions.allow` and widen the
+  session Cuzam started. `--settings` is additive and a deny rule beats an allow
+  rule from any source, so the floor holds without displacing anything the
+  target repo set. A denied call is also refused outright instead of queued at
+  the permission broker, so a stage no longer spends the hour waiting on
+  approvals that were only ever going to be refusals.
+
+  Three limits, stated because the rules look like they might cover them.
+  `cat` is on the read-only allowlist by design, so a read through Bash is not
+  bounded by any of this — only the kernel is, which is what
+  `docs/features/filesystem-scoping.md` is for and it is not built. The
+  approvals store is reachable the same way. And `classic` gets no floor,
+  because `run-loop.sh` deliberately cannot read the configuration and a copy of
+  the list in bash would be a second place holding one fact.
+
+  Measured against the CLI rather than assumed, and it changed the rules:
+  `Read(~/x/**)` denies, `Read(//abs/x/**)` denies, and `Read(/abs/x/**)` is
+  accepted and **denies nothing**. `**` is rooted at the project directory. A
+  test pins the form, because a rule of the inert shape reads correctly in a
+  diff and passes any test that only checks it is present.
+
 - **Providers declare where they are served.** A new `hosting` field, one of
   `vendor` (the runner's own endpoint on the operator's own subscription),
   `third-party` (someone else's hosted endpoint) or `local` (this machine). It

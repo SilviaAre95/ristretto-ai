@@ -6,6 +6,7 @@ from __future__ import annotations
 import contextlib
 import copy
 import io
+import json
 import os
 import subprocess
 import tempfile
@@ -34,6 +35,8 @@ from cuzam.config import (
 )
 from cuzam.runner import (
     FlowError,
+    STAGE_DENY,
+    stage_settings,
     heartbeat,
     report_outcome,
     artifact_dir,
@@ -536,6 +539,127 @@ class ConfigTests(unittest.TestCase):
             configured, _ = load_config(target)
             self.assertEqual(configured["instance"]["linear_team"], "DEMO")
             self.assertEqual(configured["repositories"]["Example"], "/tmp/example")
+
+
+class StageDenyFloorTests(unittest.TestCase):
+    """The deny floor every `claude` stage carries.
+
+    Verified against the real CLI before these were written, because the
+    interesting failure here is a rule that is accepted and then matches
+    nothing. Measured on 2.1.283 with a canary file and a prompt that actually
+    calls the Read tool:
+
+        Read(~/.denyprobe/**)            denied the read
+        Read(//Users/me/.denyprobe/**)   denied the read
+        Read(/Users/me/.denyprobe/**)    READ SUCCEEDED — silently inert
+        Read(**/.denyprobe/**)           READ SUCCEEDED — `**` is rooted at the
+                                         project directory, not at /
+
+    So a bare absolute path is a rule that looks right in a diff, passes any
+    test asserting it is present, and denies nothing. An earlier draft of this
+    change built the vault rule that exact way. `test_no_rule_is_a_bare_absolute_path`
+    is the assertion that would have caught it.
+    """
+
+    def test_every_claude_stage_carries_the_settings_payload(self) -> None:
+        provider = {"runner": "claude-code", "model": "m"}
+        for mutates in (True, False):
+            for gated in (True, False):
+                command, _, _ = runner_command(
+                    provider, {"mutates": mutates}, "prompt",
+                    Path("/tmp"), Path("/tmp/out.md"), gated,
+                )
+                self.assertIn("--settings", command)
+                payload = json.loads(command[command.index("--settings") + 1])
+                self.assertEqual(payload["permissions"]["deny"], list(STAGE_DENY))
+
+    def test_the_payload_is_inline_json_not_a_path(self) -> None:
+        """A file would have to live somewhere a scoped stage can read.
+
+        Both natural locations are denied by filesystem-scoping, so a file
+        payload would fail every stage at startup once the sandbox exists.
+        """
+        command, _, _ = runner_command(
+            {"runner": "claude-code"}, {"mutates": True}, "prompt",
+            Path("/tmp"), Path("/tmp/out.md"),
+        )
+        value = command[command.index("--settings") + 1]
+        self.assertTrue(value.startswith("{"), value)
+
+    def test_settings_precedes_the_variadic_flags(self) -> None:
+        """--mcp-config and --allowedTools swallow whatever follows them.
+
+        The existing rule is that the single-valued --permission-prompt-tool
+        terminates both. --settings is single-valued too, so it has to sit
+        ahead of them rather than between.
+        """
+        command, _, _ = runner_command(
+            {"runner": "claude-code"}, {"mutates": True}, "prompt",
+            Path("/tmp"), Path("/tmp/out.md"), True,
+        )
+        self.assertLess(command.index("--settings"), command.index("--allowedTools"))
+        self.assertLess(command.index("--settings"), command.index("--mcp-config"))
+
+    def test_the_prompt_is_still_last(self) -> None:
+        command, _, _ = runner_command(
+            {"runner": "claude-code"}, {"mutates": True}, "the prompt",
+            Path("/tmp"), Path("/tmp/out.md"), True,
+        )
+        self.assertEqual(command[-1], "the prompt")
+
+    def test_no_rule_is_a_bare_absolute_path(self) -> None:
+        """A rule that matches nothing is worse than no rule.
+
+        See the class docstring: `Read(/abs/**)` is accepted and inert. Only
+        `~/`-relative, `//`-prefixed absolute, or project-relative patterns
+        actually match, so anything starting with a single `/` is a defect.
+        """
+        for rule in STAGE_DENY:
+            inner = rule[rule.index("(") + 1 : rule.rindex(")")]
+            if rule.startswith("Bash("):
+                continue
+            self.assertFalse(
+                inner.startswith("/") and not inner.startswith("//"),
+                f"{rule} is a bare absolute path, which Claude Code accepts "
+                f"and then ignores; use ~/ or a // prefix",
+            )
+
+    def test_the_floor_is_at_least_the_committed_settings(self) -> None:
+        """filesystem-scoping: deny at least what the discovered settings denied.
+
+        Read out of `.claude/settings.json` rather than copied here, so the
+        criterion keeps holding when that file gains a rule. `--restricted` is
+        not passed yet, so nothing is displaced today — this is what makes it
+        safe to pass it later.
+        """
+        committed = json.loads((ROOT / ".claude" / "settings.json").read_text())
+        missing = set(committed["permissions"]["deny"]) - set(STAGE_DENY)
+        self.assertEqual(
+            missing, set(),
+            f"the committed settings deny these and the stage floor does not: "
+            f"{sorted(missing)}",
+        )
+
+    def test_the_model_credential_is_not_denied(self) -> None:
+        """The one stated exception, and a test because breaking it is silent.
+
+        This project runs on Claude Code's OAuth session with no API key.
+        Denying the credential file breaks authentication for every cloud
+        stage, and the preflight probe would then report "did not answer" and
+        fail-closed would refuse every launch on the machine.
+        """
+        for rule in STAGE_DENY:
+            self.assertNotIn(".credentials.json", rule)
+            self.assertNotIn("~/.claude/", rule)
+
+    def test_codex_stages_get_no_settings_flag(self) -> None:
+        """It is a claude flag. codex is sandboxed by -s instead."""
+        command, _, runner = runner_command(
+            {"runner": "codex"}, {"mutates": True}, "prompt",
+            Path("/tmp"), Path("/tmp/out.md"),
+        )
+        self.assertEqual(runner, "codex")
+        self.assertNotIn("--settings", command)
 
 
 class RunnerCommandTests(unittest.TestCase):

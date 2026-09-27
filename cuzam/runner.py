@@ -370,6 +370,105 @@ READ_ONLY_TOOLS = (
 )
 
 
+# The permission rules every `claude` stage carries, whatever any settings file
+# on the machine or in the repository being worked on says.
+#
+# This is Claude Code's own matching, not the kernel, so it is not the
+# filesystem scope docs/features/filesystem-scoping.md specifies — `cat` is on
+# READ_ONLY_TOOLS by design and a subprocess is invisible to every rule here,
+# which is why that spec puts the load on an OS sandbox. Two things still make
+# it worth having on its own, ahead of that work.
+#
+# It is a floor a target repository cannot raise. Claude Code discovers
+# `.claude/settings.json` from the checkout, so until now the repository being
+# worked on decided its own session's permissions — it could ship a wide
+# `permissions.allow` and widen the session Cuzam started. `--settings` is
+# additive (its own help says "load additional settings from"), and a deny rule
+# beats an allow rule whichever source it came from, so these hold without
+# displacing anything.
+#
+# And a denied call is refused outright rather than queued at the broker, so a
+# stage stops spending the operator's hour waiting on approvals that were only
+# ever going to be refusals. One build stage spent 57 of its 60 minutes at
+# permission prompts, one prompt at a time.
+#
+# Deliberately at least as strict as this repository's own committed
+# `.claude/settings.json`. That matters for later rather than now: `--restricted`
+# *does* displace project and local settings, so when it arrives this floor
+# already satisfies filesystem-scoping's "the settings Cuzam supplies deny at
+# least what the discovered settings they displace denied".
+#
+# `--restricted` is not passed here, and that is a decision. It drops discovered
+# settings; hooks come from settings; and the spec's answer for the hooks a
+# stage then loses is the OS layer, which is not built. Passing it now would
+# trade away the only hard enforcement boundary a stage has to buy file-tool
+# confinement the kernel is meant to provide.
+#
+# Two things this does NOT do, stated because the rules look like they might.
+# It does not stop a stage reaching the approvals store through Bash — a
+# permission rule governs the agent's tool calls, and `sqlite3` on
+# `approvals.db` is a Bash call this list does not name. And it does not cover
+# `classic`, which is spawned through run-loop.sh; a floor there would be a
+# second copy of this list in bash, which is the two-places-one-fact shape this
+# repo has already been bitten by. Both wait for the OS layer.
+STAGE_DENY = (
+    # Credentials and identity. The principle filesystem-scoping states is that
+    # a credential a stage needs arrives as environment on the process that
+    # needs it, never as a readable path.
+    #
+    # The model credential is that spec's one stated exception and is NOT
+    # denied here. This project deliberately runs on Claude Code's own OAuth
+    # session with no API key — a test pins that as the reason a Claude
+    # provider must never get `--bare` — so denying
+    # `~/.claude/.credentials.json` would break authentication for every cloud
+    # stage and for `classic`. A named residual exposure, not an oversight.
+    #
+    # The shapes matter and were measured, not assumed. `~/` is honoured; a
+    # bare absolute path is accepted and matches nothing; and `**` is rooted at
+    # the project directory, so the two `.env` rules cover the worktree being
+    # worked in rather than every `.env` on the machine. Hermes' own `.env` is
+    # covered by the tree rule below instead.
+    "Read(~/.ssh/**)",
+    "Read(~/.aws/**)",
+    "Read(~/.gnupg/**)",
+    "Read(~/.config/gh/**)",
+    "Read(**/.env)",
+    "Read(**/.env.*)",
+    "Edit(.env)",
+    "Edit(.env.*)",
+    # Cuzam's and Hermes' own state. A run has no business reading the event
+    # store it is being recorded in, and `~/.hermes/.env` is where every
+    # secret on this machine actually lives.
+    "Read(~/.cuzam/**)",
+    "Edit(~/.cuzam/**)",
+    "Read(~/.hermes/**)",
+    "Edit(~/.hermes/**)",
+    # Commands, at parity with the committed file. Each reason applies at least
+    # as strongly to a stage nobody is watching.
+    "Bash(sudo:*)",
+    "Bash(rm -rf:*)",
+    "Bash(chmod 777:*)",
+    "Bash(git push --force:*)",
+    "Bash(git push -f:*)",
+    "Bash(git reset --hard:*)",
+    # Rewriting history, or arranging for code to run as the operator later.
+    # `.git/hooks` and `core.hooksPath` are why this one is not merely tidiness.
+    # The flow's whole contract is a feature branch and a pull request.
+    "Edit(.git/**)",
+)
+
+
+def stage_settings() -> dict[str, Any]:
+    """The `--settings` payload for one stage.
+
+    An inline JSON string rather than a file, and that is load-bearing for the
+    OS layer this precedes: both natural places to put a file are paths that
+    spec denies, so a file payload would fail every stage at startup once the
+    sandbox exists.
+    """
+    return {"permissions": {"deny": list(STAGE_DENY)}}
+
+
 def attended(task_id: str) -> bool:
     """Whether a person is expected to answer this run's approval prompts.
 
@@ -470,6 +569,14 @@ def runner_command(
             # so no test here exercises it.
             command += ["--strict-mcp-config", "--add-dir", str(cwd)]
             env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
+        # Ahead of the permission mode, because it is the rule the mode operates
+        # inside. --settings is single-valued, so it is safe anywhere before the
+        # prompt, unlike the variadic flags below.
+        #
+        # On every claude stage, not only the gated ones. A read-only stage is
+        # the one that goes looking, and a reviewer reading ~/.ssh is not a
+        # reviewer reviewing.
+        command += ["--settings", json.dumps(stage_settings())]
         mode = "acceptEdits" if stage["mutates"] else "plan"
         command += ["--permission-mode", mode, "--no-session-persistence"]
         if stage["mutates"] and gated:
