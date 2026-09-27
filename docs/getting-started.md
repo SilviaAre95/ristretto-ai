@@ -89,32 +89,6 @@ ollama pull qwen3.6:35b-mlx             # orchestrator brain (required)
 
 Override the brain with `ZAM_LOCAL_BRAIN_MODEL` in `~/.hermes/.env`.
 
-## Where secrets are read from
-
-Two files, in this order, and **the first one to set a name wins**:
-
-| Order | File | What it is for |
-|---|---|---|
-| 1 | `~/.config/cuzam/env` | Cuzam's own override slot, beside its config. Optional, and nothing creates it for you. |
-| 2 | `~/.hermes/.env` | Where secrets normally live. This is the one the rest of this guide means. |
-
-Anything already exported in the environment beats both, so a value passed on
-the command line is never overridden by a file.
-
-Worth knowing precisely because of the ordering: a stale value in
-`~/.config/cuzam/env` **silently beats** the one in `~/.hermes/.env`, and the
-symptom is a 401 that looks exactly like a bad credential. If a token you have
-just corrected in `~/.hermes/.env` still fails, check whether the other file
-sets the same name. Use the override slot when you want a value that differs
-from Hermes' copy — a separate Linear key, say — and otherwise leave it absent.
-
-Only the names this installation declares are read from either file: every
-`*_env` value in the instance and provider configuration, plus
-`LINEAR_API_KEY`. A name that no `*_env` declares is never loaded, and the
-symptom of that is also a 401. Both files hold other projects' credentials, and
-a flow hands its whole environment to a process running generated code, so
-loading either wholesale is not an option.
-
 ## 4. Create your Slack app
 
 1. Go to <https://api.slack.com/apps> → **Create New App** → **From an app
@@ -169,6 +143,41 @@ make doctor
 
 Then message the bot in your home channel and confirm a reply, a Linear tool
 call, and a morning-brief dry run.
+
+## Where secrets are read from
+
+Two files, in this order, and **the first one to set a name wins**:
+
+| Order | File | What it is for |
+|---|---|---|
+| 1 | `<config dir>/env` | Cuzam's own override slot, beside its config. Optional, and nothing creates it for you. |
+| 2 | `~/.hermes/.env` | Where secrets normally live. This is the one the rest of this guide means. |
+
+`<config dir>` is `~/.config/cuzam` by default, but it follows the config file:
+`CUZAM_CONFIG` names it outright, and `XDG_CONFIG_HOME` moves it. On a machine
+that sets either, the override slot is somewhere else, so resolve it rather than
+assuming — `python -c 'from cuzam.config import user_env_path;
+print(user_env_path())'` prints the path actually read.
+
+Any **non-empty** value already exported beats both files. The wording matters:
+the guard is a truthiness check, so an intentionally blank export does *not*
+win and the file's value is loaded over it. `LINEAR_API_KEY= cuzam launch` is
+the usual way to say "ignore the stored key", and it does not do that.
+
+Worth knowing precisely because of the ordering: a stale value in
+`~/.config/cuzam/env` **silently beats** the one in `~/.hermes/.env`, and the
+symptom is a 401 that looks exactly like a bad credential. If a token you have
+just corrected in `~/.hermes/.env` still fails, check whether the override slot
+sets the same name — at the path resolved above, not necessarily
+`~/.config/cuzam/env`. Use the override slot when you want a value that differs
+from Hermes' copy — a separate Linear key, say — and otherwise leave it absent.
+
+Only the names this installation declares are read from either file: every
+`*_env` value in the instance and provider configuration, plus
+`LINEAR_API_KEY`. A name that no `*_env` declares is never loaded, and the
+symptom of that is also a 401. Both files hold other projects' credentials, and
+a flow hands its whole environment to a process running generated code, so
+loading either wholesale is not an option.
 
 ## Caveats worth knowing
 

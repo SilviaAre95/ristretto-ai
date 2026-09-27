@@ -113,39 +113,36 @@ def user_env_path(environ: Mapping[str, str] | None = None) -> Path:
     return user_config_path(environ).parent / "env"
 
 
-# The environment variables `install-hermes.sh` and `link-loop-runner.sh`
-# resolve, in their order. Python honoured only the last of the three, so the
-# installer and the package disagreed about where Hermes lives on any machine
-# that set one of the others — and a path built on the wrong answer fails as
-# "not installed" rather than as a misconfiguration.
-#
-# `HERMES_HOME` is Hermes' own variable and is not going anywhere. The
-# `RISTRETTO_*` spelling is a rename shim and reaches this through `env_value`
-# like every other one, so it announces its own deprecation — it used to be
-# read straight from the environment, which made it the only `RISTRETTO_*` read
-# in the package that said nothing and carried no 0.3.0 marker. **Drop the
-# legacy spelling in 0.3.0**, with the rest of them; when that happens this
-# becomes `env.get("CUZAM_HERMES_HOME")` falling back to `HERMES_HOME`, and
-# nothing else here changes.
-#
-# The failure that makes the silence matter: after 0.3.0 an install still
-# exporting only `RISTRETTO_HERMES_HOME` resolves Hermes to `~/.hermes` and
-# fails as "not installed" — the exact shape the paragraph above describes,
-# with no deprecation notice ever having been printed.
-HERMES_HOME_VARS = ("CUZAM_HERMES_HOME", "RISTRETTO_HERMES_HOME", "HERMES_HOME")
-
-
 def hermes_home(environ: Mapping[str, str] | None = None) -> Path:
     """Where Hermes keeps its own state, resolved the way the installers do.
 
-    `env_value` rather than a bare lookup for the renamed pair, so the legacy
-    spelling announces its own deprecation (drop it in 0.3.0). That also puts
-    the empty-string case on `env.py`'s documented semantics: exporting
-    `CUZAM_HERMES_HOME=""` means "use the default" and is not then overridden
-    by a stale `RISTRETTO_HERMES_HOME` in the same environment. The shell
-    scripts use `${CUZAM_HERMES_HOME:-${RISTRETTO_HERMES_HOME:-...}}`, which
-    falls through on empty, so the two disagree in that one corner — and the
-    Python semantics are the documented ones.
+    The three names, in the installers' order: `CUZAM_HERMES_HOME`, then its
+    pre-rename spelling, then `HERMES_HOME`. `install-hermes.sh`,
+    `link-loop-runner.sh` and `template-drift.sh` resolve exactly these, and
+    Python honoured only the last of them once — so the installer and the
+    package disagreed about where Hermes lives on any machine that set one of
+    the others, and a path built on the wrong answer fails as "not installed"
+    rather than as a misconfiguration. **Changing the set here means changing it
+    in those three scripts too.** It used to be stated as a module constant
+    beside this function, which read as the authoritative version of that
+    contract while nothing consulted it — so editing the constant changed
+    nothing at all, which is the same silent disagreement one level up.
+
+    `env_value` for the renamed pair, so the legacy spelling announces its own
+    deprecation; **drop it in 0.3.0**, at which point this is `env.get` on the
+    new name with `HERMES_HOME` behind it and nothing else changes here.
+    `HERMES_HOME` is Hermes' own name, so it goes through neither.
+
+    One deliberate divergence from those scripts, and it has a cost worth
+    naming. `${A:-${B:-...}}` falls through on an empty value; `env.get` treats
+    an empty `CUZAM_HERMES_HOME` as *set*, because exporting it empty to mean
+    "use the default" should not then be overridden by a stale
+    `RISTRETTO_HERMES_HOME` beside it. So on an environment holding an empty
+    new name AND a populated old one, the shells resolve the old path and this
+    resolves `~/.hermes` — and the symptom is `dash/control.py` failing to find
+    `zam-stop.sh` and reporting "not installed". The old name on its own, which
+    is what the shim exists for, works in both. `env.py`'s semantics are the
+    documented ones and this follows them rather than the shell's.
     """
     env = os.environ if environ is None else environ
     renamed = str(env_value("CUZAM_HERMES_HOME", "", env) or "").strip()

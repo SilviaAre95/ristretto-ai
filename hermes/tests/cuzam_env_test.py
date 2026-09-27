@@ -94,7 +94,6 @@ class HermesHomeTest(unittest.TestCase):
 
     def setUp(self) -> None:
         env._announced.clear()
-        self._printed: list[str] = []
 
     def _capture(self) -> contextlib.AbstractContextManager:
         return contextlib.redirect_stderr(io.StringIO())

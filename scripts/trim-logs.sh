@@ -16,8 +16,8 @@ set -euo pipefail
 # Drop them in 0.3.0.
 logs="${CUZAM_LOG_DIR:-${RISTRETTO_LOG_DIR:-$HOME/.hermes/logs}}"
 # Past this, a log is no longer something a person reads.
-max_bytes="${CUZAM_LOG_MAX_BYTES:-${RISTRETTO_LOG_MAX_BYTES:-20971520}}"   # 20 MiB
-keep_lines="${CUZAM_LOG_KEEP_LINES:-${RISTRETTO_LOG_KEEP_LINES:-5000}}"
+max_bytes="${CUZAM_LOG_MAX_BYTES:-${RISTRETTO_LOG_MAX_BYTES:-20971520}}"   # 20 MiB; drop in 0.3.0
+keep_lines="${CUZAM_LOG_KEEP_LINES:-${RISTRETTO_LOG_KEEP_LINES:-5000}}"  # drop in 0.3.0
 
 [ -d "$logs" ] || { echo "trim-logs: no log directory at $logs" >&2; exit 0; }
 
