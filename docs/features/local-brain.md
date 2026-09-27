@@ -3,16 +3,18 @@ id: local-brain
 title: Local Brain
 status: implemented  # proposed | in-progress | implemented | deprecated
 created_at: 2026-07-05
-last_modified: 2026-09-26
+last_modified: 2026-09-27
 owner: project
 depends_on: []
 acceptance_criteria:
-  - Brief/chat/tool-calls run through the local model
-  - $0 marginal cost
-  - No cloud LLM call for orchestration
+  - The Hermes orchestrator path — morning brief, Slack chat, its tool calls —
+    runs through the local model
+  - $0 marginal cost on the Hermes orchestrator path
+  - No cloud LLM call for the Hermes orchestrator path
   - No model served by this machine writes to a repository
 non_goals:
-  - NOT cloud LLM for orchestration in V0
+  - NOT cloud LLM for the Hermes orchestrator path in V0
+  - NOT a claim about `zam-assistant`, whose loop is cloud by default
   - NOT writing production code: no model served by this machine takes a coding
     stage
   - NOT reviewing or verifying generated code: nor a review or verify stage
@@ -23,6 +25,18 @@ non_goals:
 ## Summary
 
 Orchestrator reasoning defaults to local `qwen3.6:35b-mlx` through Ollama, keeping chat, briefs, and tool decisions on the user's machine. **Coding does not run on this machine's models.** It runs on Claude, or on another provider the operator has declared `hosting: third-party` — the boundary is where the model is served, not which vendor serves it. The dividing line is bounded transformation — summarise, extract, classify, rank, reformat, where the output shape is known and a wrong answer is cheap and visible — against unbounded judgement, where subtle wrongness compounds silently. `ZAM_LOCAL_BRAIN_MODEL` overrides the brain.
+
+**This describes the Hermes orchestrator path, and since `zam-assistant`
+shipped it is no longer the only one.** Zam's own agent loop is a second
+orchestrator, and it is cloud by default: `instance.assistant_provider` is
+unset in the shipped `cuzam.yaml`, so `cuzam/assistant/loop.py` falls back to
+`claude`. That was decided deliberately and the reasoning is in
+`docs/zam-roadmap.md` — the loop's hard skill is reliable tool-calling, which
+is where this machine's models are weakest and a wrong call has no reviewer to
+catch it. The key exists so the switch to local is one line, and the sequencing
+recorded there is to make that switch once the loop is correct. Until then the
+honest claim is that orchestration *can* run entirely local, not that it does:
+these criteria bind the Hermes path, and `zam-assistant` carries its own.
 
 ## Behavior
 
@@ -36,12 +50,19 @@ No model served by this machine writes to a repository, and none stands between 
 
 ## Out of scope
 
-- NOT cloud LLM for orchestration in V0: no OpenAI/Anthropic/etc. API calls are made for the chat/brief/tool-call loop; this is deliberate to keep marginal cost at $0.
+- NOT cloud LLM for the Hermes orchestrator path in V0: no OpenAI/Anthropic/etc. calls are made for the morning brief, Slack chat, or their tool calls; this is deliberate to keep marginal cost at $0. It was written when that was the only orchestration path in the product. It no longer is, and narrowing it is the honest repair — the alternative reading, that `zam-assistant` violates a shipped non-goal, describes a contradiction nobody chose.
+- NOT a claim about `zam-assistant`: that loop runs on whatever `instance.assistant_provider` names, Claude when unset, and its own spec carries the boundary. Nothing here licenses giving this machine's models a coding stage; that prohibition is unchanged and unrelated.
 - NOT writing production code: retired 2026-09-23. The original premise was that a local coder would do the token-heavy build while Claude supervised. Every attempt died in the build stage, so the `local-coder` provider and the `tier1`–`tier3` flows are gone and no shipped flow routes a build, repair or PR stage to a provider declared `hosting: local`. The judgement was about quality, measured on this machine's models; it is not a judgement about hosted open-weight models, which `custom-model-flows` allows a flow to give a mutating stage and which nothing here has tested.
 - NOT reviewing or verifying generated code: verifier blind spots rise as the generator improves, so nothing served by this machine goes between generated output and the repository.
 
 ## Open questions
 
+- When does `zam-assistant` switch to `local-brain`? The roadmap's sequencing
+  is ship on Claude, get the loop correct, then swap and find out what breaks,
+  and it names never dogfooding local as how the privacy pitch quietly rots.
+  The trigger is unstated, so it is nobody's next action. The loop has not been
+  dogfooded on Claude yet, so the question is not yet ripe — but it should be
+  answered before `zam-assistant` reaches `implemented`, not after.
 - May a model served by this machine write something that is not code — release
   notes, a changelog entry, a PR description? The boundary enforced today is
   coarser than the one argued for: the acceptance criterion says a local model
