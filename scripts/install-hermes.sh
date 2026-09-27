@@ -4,6 +4,10 @@
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Three names in the installers' order, and cuzam/config.py's hermes_home()
+# resolves the same three — a contract worth knowing about before editing
+# either. HERMES_HOME is Hermes' own and stays; RISTRETTO_HERMES_HOME is the
+# rename shim. Drop the middle one in 0.3.0.
 hermes_home="${CUZAM_HERMES_HOME:-${RISTRETTO_HERMES_HOME:-${HERMES_HOME:-$HOME/.hermes}}}"
 install_service=0
 

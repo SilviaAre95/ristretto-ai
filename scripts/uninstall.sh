@@ -4,6 +4,9 @@
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Both RISTRETTO_* fallbacks are pre-rename names. They matter here for the
+# same reason as in the installer: an uninstall that resolves the wrong
+# directory reports success and removes nothing. Drop in 0.3.0.
 config_dir="${CUZAM_CONFIG_DIR:-${RISTRETTO_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/cuzam}}"
 bin_dir="${CUZAM_BIN_DIR:-${RISTRETTO_BIN_DIR:-$HOME/.local/bin}}"
 link="$bin_dir/cuzam"

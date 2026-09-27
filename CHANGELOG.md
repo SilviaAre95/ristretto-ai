@@ -362,13 +362,18 @@ first. Once, in this order:
 
 ```
 git switch main && git pull
-make migrate          # moves state, unlinks the old names, relabels launchd
+make migrate-cuzam    # moves state, unlinks the old names, relabels launchd
 make install-runtime  # rebuilds ~/.cuzam/runtime; the old one is deleted, never moved
 make update
 ```
 
-`make migrate` is idempotent and refuses while a run is live. Three things it
-cannot do for you:
+`make migrate-cuzam`, not `make migrate`, and not `cuzam migrate`. The target
+is named after its script because `cuzam migrate` is a different command that
+shares only the verb — it reports and adopts config-layer drift between the
+shipped configuration and your copy, and it does not rename anything.
+
+`make migrate-cuzam` is idempotent and refuses while a run is live. Three
+things it cannot do for you:
 
 - **The microphone grant.** The voice app's bundle id changed
   (`com.ristretto.nemo` -> `com.cuzam.zam`), which revokes its TCC grant.

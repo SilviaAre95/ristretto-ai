@@ -11,6 +11,9 @@
 # that no longer appears anywhere.
 set -euo pipefail
 
+# All three RISTRETTO_* fallbacks below are pre-rename names, read for one
+# release so a cron entry exported before 2026-09-24 keeps its limits.
+# Drop them in 0.3.0.
 logs="${CUZAM_LOG_DIR:-${RISTRETTO_LOG_DIR:-$HOME/.hermes/logs}}"
 # Past this, a log is no longer something a person reads.
 max_bytes="${CUZAM_LOG_MAX_BYTES:-${RISTRETTO_LOG_MAX_BYTES:-20971520}}"   # 20 MiB

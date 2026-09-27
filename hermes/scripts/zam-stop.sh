@@ -19,6 +19,8 @@ export PATH="$HOME/.local/bin:$PATH"
 # ~/.hermes, which is wrong on any install that sets one of these — and the
 # liveness guard failing that way is silent, which is the failure it exists to
 # prevent.
+# RISTRETTO_HERMES_HOME is the rename shim; HERMES_HOME is Hermes' own and
+# stays. Drop the middle one in 0.3.0.
 HERMES_DIR="${CUZAM_HERMES_HOME:-${RISTRETTO_HERMES_HOME:-${HERMES_HOME:-$HOME/.hermes}}}"
 
 # 1. Release the claim so the dispatcher does NOT re-dispatch while we stop it.

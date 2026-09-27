@@ -15,7 +15,7 @@ The uploadable manifest lives at `slack/cuzam-slack-manifest.json`.
 1. Go to <https://api.slack.com/apps> → **Create New App** → **From an app manifest**.
 2. Pick a personal workspace.
 3. Paste the JSON below (or upload `hermes-slack-manifest.json`).
-4. Store tokens and `SLACK_ALLOWED_USERS` only in `~/.hermes/.env`, then invite the bot to the configured channels.
+4. Store tokens and `SLACK_ALLOWED_USERS` in `~/.hermes/.env` — never in the repository — then invite the bot to the configured channels. `~/.config/cuzam/env` is read before it and wins on any name it sets; see `getting-started.md` § "Where secrets are read from".
 
 ## Manifest
 

@@ -5,6 +5,7 @@
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# RISTRETTO_* is the pre-rename spelling, read for one release. Drop in 0.3.0.
 private_root="${CUZAM_PRIVATE_ROOT_COMMIT:-${RISTRETTO_PRIVATE_ROOT_COMMIT:-4ebdb7a3919a48cba84bf39ccd424fcdd9221210}}"
 
 if ! git -C "$repo" cat-file -e "${private_root}^{commit}" 2>/dev/null; then

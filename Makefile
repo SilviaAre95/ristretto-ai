@@ -1,4 +1,4 @@
-.PHONY: setup install install-runtime install-hermes install-push-guard install-dash-service migrate update test check public-check doctor
+.PHONY: setup install install-runtime install-hermes install-push-guard install-dash-service migrate-cuzam update test check public-check doctor
 
 setup:
 	bash scripts/setup-dev.sh
@@ -15,8 +15,17 @@ install-hermes: install
 install-push-guard:
 	bash scripts/install-private-push-guard.sh
 
-# One-time, for the 0.2.0 -> Cuzam rename. Idempotent; see CHANGELOG.md.
-migrate:
+# One-time, for the Ristretto -> Cuzam rename of everything outside the
+# checkout: the state home, the user config, the Hermes plugins and scripts,
+# the worker profile, the doorbell cron job and the launchd label. Idempotent,
+# and it refuses while a run is live. See the upgrade notes in CHANGELOG.md.
+#
+# Named after the script rather than `migrate`, because `cuzam migrate` is a
+# different command that shares only the verb: that one reports and adopts
+# config-layer drift between the shipped configuration and the user's copy, and
+# it is the one an upgrader would find first. The rename is the one they
+# actually have to run, so the two must not be guessable for each other.
+migrate-cuzam:
 	bash scripts/migrate-cuzam.sh
 
 update:

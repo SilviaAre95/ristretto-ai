@@ -7,6 +7,8 @@
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# RISTRETTO_HERMES_HOME is the rename shim; HERMES_HOME is Hermes' own name
+# and stays. Drop the middle one in 0.3.0.
 hermes_home="${CUZAM_HERMES_HOME:-${RISTRETTO_HERMES_HOME:-${HERMES_HOME:-$HOME/.hermes}}}"
 seeds="$hermes_home/.template-seeds"
 templates="SOUL.md config.yaml"

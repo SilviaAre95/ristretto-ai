@@ -21,6 +21,8 @@
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Both RISTRETTO_* fallbacks here are pre-rename names, read for one
+# release. Drop them in 0.3.0. HERMES_HOME is Hermes' own and stays.
 hermes_home="${CUZAM_HERMES_HOME:-${RISTRETTO_HERMES_HOME:-${HERMES_HOME:-$HOME/.hermes}}}"
 # eval so a configured ~ expands the way events.state_home() expands it, the
 # same reason install-runtime.sh does it.

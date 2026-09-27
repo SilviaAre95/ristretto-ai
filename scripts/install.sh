@@ -3,6 +3,9 @@
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The RISTRETTO_* spellings below are pre-rename names, read for one release
+# so an environment exported before 2026-09-24 keeps working. Drop them all
+# in 0.3.0 — including CUZAM_SKIP_SETUP's fallback further down.
 config_dir="${CUZAM_CONFIG_DIR:-${RISTRETTO_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/cuzam}}"
 bin_dir="${CUZAM_BIN_DIR:-${RISTRETTO_BIN_DIR:-$HOME/.local/bin}}"
 config="$config_dir/config.yaml"

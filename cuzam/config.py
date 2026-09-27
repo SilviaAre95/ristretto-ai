@@ -118,16 +118,43 @@ def user_env_path(environ: Mapping[str, str] | None = None) -> Path:
 # installer and the package disagreed about where Hermes lives on any machine
 # that set one of the others — and a path built on the wrong answer fails as
 # "not installed" rather than as a misconfiguration.
+#
+# `HERMES_HOME` is Hermes' own variable and is not going anywhere. The
+# `RISTRETTO_*` spelling is a rename shim and reaches this through `env_value`
+# like every other one, so it announces its own deprecation — it used to be
+# read straight from the environment, which made it the only `RISTRETTO_*` read
+# in the package that said nothing and carried no 0.3.0 marker. **Drop the
+# legacy spelling in 0.3.0**, with the rest of them; when that happens this
+# becomes `env.get("CUZAM_HERMES_HOME")` falling back to `HERMES_HOME`, and
+# nothing else here changes.
+#
+# The failure that makes the silence matter: after 0.3.0 an install still
+# exporting only `RISTRETTO_HERMES_HOME` resolves Hermes to `~/.hermes` and
+# fails as "not installed" — the exact shape the paragraph above describes,
+# with no deprecation notice ever having been printed.
 HERMES_HOME_VARS = ("CUZAM_HERMES_HOME", "RISTRETTO_HERMES_HOME", "HERMES_HOME")
 
 
 def hermes_home(environ: Mapping[str, str] | None = None) -> Path:
-    """Where Hermes keeps its own state, resolved the way the installers do."""
+    """Where Hermes keeps its own state, resolved the way the installers do.
+
+    `env_value` rather than a bare lookup for the renamed pair, so the legacy
+    spelling announces its own deprecation (drop it in 0.3.0). That also puts
+    the empty-string case on `env.py`'s documented semantics: exporting
+    `CUZAM_HERMES_HOME=""` means "use the default" and is not then overridden
+    by a stale `RISTRETTO_HERMES_HOME` in the same environment. The shell
+    scripts use `${CUZAM_HERMES_HOME:-${RISTRETTO_HERMES_HOME:-...}}`, which
+    falls through on empty, so the two disagree in that one corner — and the
+    Python semantics are the documented ones.
+    """
     env = os.environ if environ is None else environ
-    for name in HERMES_HOME_VARS:
-        value = str(env.get(name) or "").strip()
-        if value:
-            return Path(value).expanduser()
+    renamed = str(env_value("CUZAM_HERMES_HOME", "", env) or "").strip()
+    if renamed:
+        return Path(renamed).expanduser()
+    # Hermes' own name, so no shim and no notice.
+    own = str(env.get("HERMES_HOME") or "").strip()
+    if own:
+        return Path(own).expanduser()
     return Path.home() / ".hermes"
 
 

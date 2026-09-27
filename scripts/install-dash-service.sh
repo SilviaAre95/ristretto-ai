@@ -15,6 +15,8 @@ set -euo pipefail
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 label="com.cuzam.dash"
 plist="$HOME/Library/LaunchAgents/$label.plist"
+# RISTRETTO_* is the pre-rename spelling, read for one release so a shell
+# profile or plist exported before 2026-09-24 keeps working. Drop in 0.3.0.
 port="${CUZAM_DASH_PORT:-${RISTRETTO_DASH_PORT:-8787}}"
 logs="$HOME/Library/Logs"
 

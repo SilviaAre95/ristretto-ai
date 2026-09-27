@@ -15,6 +15,10 @@ repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # eval so a configured ~ expands the way events.state_home() expands it with
 # .expanduser(); without it the script builds ./~/... while every launch looks
 # under $HOME and reports itself unpinned forever.
+# RISTRETTO_STATE_HOME is the pre-rename spelling. Reading it matters more
+# here than elsewhere: unread, it resolves to a state home that exists and
+# is empty, so the runtime would be rebuilt beside the real one rather than
+# over it. Drop in 0.3.0.
 eval runtime="${CUZAM_STATE_HOME:-${RISTRETTO_STATE_HOME:-$HOME/.cuzam}}/runtime"
 base="${1:-main}"
 

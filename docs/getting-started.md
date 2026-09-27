@@ -2,9 +2,10 @@
 
 This guide takes you from a fresh clone to a working Zam instance on your own
 machine, talking in your own Slack workspace and tracking your own Linear
-team. Nothing connects to anyone else's infrastructure: secrets live only in
+team. Nothing connects to anyone else's infrastructure: secrets live in
 your `~/.hermes/.env`, and non-secret settings live in
-`~/.config/cuzam/config.yaml`.
+`~/.config/cuzam/config.yaml`. There is one more secrets file, read before
+that one — see [Where secrets are read from](#where-secrets-are-read-from).
 
 ## What you need
 
@@ -88,6 +89,32 @@ ollama pull qwen3.6:35b-mlx             # orchestrator brain (required)
 
 Override the brain with `ZAM_LOCAL_BRAIN_MODEL` in `~/.hermes/.env`.
 
+## Where secrets are read from
+
+Two files, in this order, and **the first one to set a name wins**:
+
+| Order | File | What it is for |
+|---|---|---|
+| 1 | `~/.config/cuzam/env` | Cuzam's own override slot, beside its config. Optional, and nothing creates it for you. |
+| 2 | `~/.hermes/.env` | Where secrets normally live. This is the one the rest of this guide means. |
+
+Anything already exported in the environment beats both, so a value passed on
+the command line is never overridden by a file.
+
+Worth knowing precisely because of the ordering: a stale value in
+`~/.config/cuzam/env` **silently beats** the one in `~/.hermes/.env`, and the
+symptom is a 401 that looks exactly like a bad credential. If a token you have
+just corrected in `~/.hermes/.env` still fails, check whether the other file
+sets the same name. Use the override slot when you want a value that differs
+from Hermes' copy — a separate Linear key, say — and otherwise leave it absent.
+
+Only the names this installation declares are read from either file: every
+`*_env` value in the instance and provider configuration, plus
+`LINEAR_API_KEY`. A name that no `*_env` declares is never loaded, and the
+symptom of that is also a 401. Both files hold other projects' credentials, and
+a flow hands its whole environment to a process running generated code, so
+loading either wholesale is not an option.
+
 ## 4. Create your Slack app
 
 1. Go to <https://api.slack.com/apps> → **Create New App** → **From an app
@@ -95,7 +122,9 @@ Override the brain with `ZAM_LOCAL_BRAIN_MODEL` in `~/.hermes/.env`.
    [`03-slack-manifest.md`](03-slack-manifest.md)).
 2. Copy only the variables you need from `hermes/.env.example` into
    `~/.hermes/.env` — tokens and `SLACK_ALLOWED_USERS` (the allowlist of user
-   IDs Zam will obey) belong there and nowhere else.
+   IDs Zam will obey) belong there. See
+   [Where secrets are read from](#where-secrets-are-read-from) for the override
+   slot that takes precedence over it.
 3. Invite the bot to each channel it will use, via the channel's
    **Integrations → Add apps** tab. The "Add people" dialog does not show
    bots, and an uninvited bot fails silently with `not_in_channel`.
