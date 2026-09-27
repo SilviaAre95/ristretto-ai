@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # The rename migration, against a fake install.
 #
-# Two properties matter more than the individual moves. It must be safe to
-# run twice, because the first run can fail halfway on a real machine; and it
-# must never remove a link this project did not write, because the whole
-# reason the migration exists is that the installers' guards refuse to guess.
+# Three properties matter more than the individual moves. It must refuse
+# while a coding run is live, because every step below is hostile to a run in
+# flight; it must be safe to run twice, because the first run can fail halfway
+# on a real machine; and it must never remove a link this project did not
+# write, because the whole reason the migration exists is that the installers'
+# guards refuse to guess.
 #
 # `hermes` is stubbed. The migration calls it to disable plugins, remove a
 # cron job and rename a profile, and none of those should reach a real
@@ -14,9 +16,81 @@ PASS=0; FAIL=0
 t() { if eval "$2"; then echo "ok  - $1"; PASS=$((PASS+1)); else echo "FAIL - $1"; FAIL=$((FAIL+1)); fi; }
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-SCRIPT="$ROOT/scripts/migrate-cuzam.sh"
-TMP="$(mktemp -d "${TMPDIR:-/tmp}/cuzam-migrate-test.XXXXXX")"
+# `pwd -P` and not just mktemp's answer. On macOS $TMPDIR is /var/folders/...,
+# and the migration resolves its own repository with `cd "$(dirname ...)/.." &&
+# pwd`, which reports /private/var — so the two would be different strings for
+# one directory. That is harmless for the fixture as it stands and a trap for
+# the next step added to it: the managed-link branches compare `readlink`
+# output against "$repo/hermes/skills/loop-runner" and "$repo/.venv/bin/...",
+# so a fixture built with the unresolved path takes the "link we did not write"
+# branch while appearing to cover the managed one.
+TMP="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/cuzam-migrate-test.XXXXXX")" && pwd -P)"
 trap 'rm -rf "$TMP"' EXIT
+
+# The migration is run from a COPY of scripts/, and that is the only reason
+# this file is hermetic.
+#
+# Its first act is to refuse while a coding run is live, and it asks
+# scripts/live-runs.sh — which snapshots `ps -eo pid=,command=` and filters,
+# deliberately never `pgrep`, for the reasons its own comments give. So it
+# reads the real machine, and no variable this test sets can reach it: with a
+# real Cuzam run alive on the developer's box, 26 of the 33 assertions below
+# used to fail, on code that passes 33/33 on a quiet one.
+#
+# The guard is right — the migration moves the event store out from under a
+# running flow — so nothing about it is weakened here. The seam is that the
+# migration resolves its own repository from ${BASH_SOURCE[0]} and calls
+# "$repo/scripts/live-runs.sh". Run the real script from a fake repository and
+# the probe it consults is ours, while a real machine has no way to reach the
+# stub: there is no override variable, and nothing in scripts/ changed.
+#
+# Copied rather than symlinked, and that is not fussiness. Writing the stub
+# through a symlink truncates the real scripts/live-runs.sh in the checkout.
+REPO="$TMP/repo"
+mkdir -p "$REPO"
+cp -R "$ROOT/scripts" "$REPO/scripts"
+# Only scripts/. The migration's other repo-relative reads are $repo/.venv and
+# $repo/hermes/SOUL.md, and both are on branches this fixture never reaches —
+# .venv only as a string compared against a readlink, SOUL.md only when
+# $hermes_home/.template-seeds exists, which build_fixture does not create. An
+# earlier draft linked hermes/ in "so it stays reachable", which handed the
+# fake repo a writable handle on the real checkout: the same hazard as the
+# paragraph above, one directory over. A future step that needs those paths
+# copies them the way scripts/ is copied.
+SCRIPT="$REPO/scripts/migrate-cuzam.sh"
+
+# The two answers the stub can give. Both are about what the MACHINE looks
+# like, which is exactly the input this file could not previously control.
+# Each stub records that it ran, and that record is asserted below. Writing a
+# stub is not the same as the migration reading it: rename scripts/live-runs.sh
+# and the call site together and the stub lands at a path nobody consults, the
+# migration falls through to the copied real probe, and this file silently
+# resumes reading host processes — green on a quiet machine, 26 failures on a
+# busy one, with nothing to say which happened. The quiet-machine assertion
+# cannot catch that, because it passes identically either way.
+PROBED="$TMP/probe-consulted"
+STUB="$REPO/scripts/live-runs.sh"
+# `rm -f` first, every time, and the reason is the accident in the paragraph
+# above rather than tidiness. `>` follows a symlink, and `cp -R` copies a
+# symlink AS a symlink — so the day scripts/live-runs.sh becomes one in the
+# checkout, or someone makes this fixture cheaper with `cp -Rs`, the redirect
+# truncates a tracked file in the developer's working tree again. Unlinking
+# first cannot do that, and the assertion below makes the property checked
+# rather than merely intended.
+write_stub() {
+  rm -f "$STUB"
+  printf '%s' "$1" > "$STUB"
+  chmod +x "$STUB"
+}
+quiet_machine() {
+  write_stub "$(printf '#!/usr/bin/env bash\n: > "%s"\nexit 1\n' "$PROBED")"
+}
+live_run() {
+  write_stub "$(printf '#!/usr/bin/env bash\n: > "%s"\n%s\nexit 0\n' "$PROBED" \
+    'echo "4242 bash /x/loop-runner/scripts/run-loop.sh t_live000 ABC-1 --flow classic"')"
+}
+quiet_machine
+t "the stub is a real file, not a link" "[ -f '$STUB' ] && [ ! -L '$STUB' ]"
 
 HH="$TMP/hermes"
 OLD_STATE="$TMP/.ristretto"
@@ -57,6 +131,7 @@ chmod +x "$FAKEBIN/hermes"
 # The fixture: an install as it looks the moment before the release lands.
 build_fixture() {
   rm -rf "$HH" "$OLD_STATE" "$NEW_STATE" "$OLD_CONFIG" "$NEW_CONFIG" "$CRON_LOG" "$TMP/cron-removed"
+  rm -f "$PROBED"
   mkdir -p "$HH/plugins" "$HH/scripts" "$HH/skills/software-development" \
            "$HH/profiles/ris-worker/node/bin" "$OLD_STATE/runtime/hermes" \
            "$OLD_CONFIG" "$TMP/repo-plugins"
@@ -163,6 +238,31 @@ rm "$NEW_STATE/events.db"
 OUT5="$(run 2>&1)"; RC5=$?
 t "resolving the collision unblocks" "[ $RC5 -eq 0 ]"
 t "the real events.db then moves"    "[ \"\$(cat '$NEW_STATE/events.db')\" = events ]"
+
+# The guard itself. Untestable before the fake repository existed, which is
+# why the first thing the migration does was also the only thing this file
+# never checked. It has to refuse BEFORE anything moves: a migration that
+# unlinks the skill a classic loop is executing and then notices the loop has
+# already broken it.
+build_fixture
+live_run
+OUT6="$(run 2>&1)"; RC6=$?
+quiet_machine
+t "a live run blocks the migration"  "[ $RC6 -ne 0 ]"
+t "the live run is named"            "printf '%s' \"\$OUT6\" | grep -q 'run-loop.sh'"
+t "it says why it refused"           "printf '%s' \"\$OUT6\" | grep -q 'refusing while a run is live'"
+t "nothing moved while live"         "[ -f '$OLD_STATE/approvals.db' ] && [ ! -e '$NEW_STATE/approvals.db' ]"
+t "no link was removed while live"   "[ -L '$HH/plugins/ris-approvals' ]"
+t "the profile was not renamed"      "[ -d '$HH/profiles/ris-worker' ] && [ ! -d '$HH/profiles/zam-worker' ]"
+
+# And a quiet machine still migrates, so the assertion above is about the
+# guard rather than about the stub being consulted at all.
+OUT7="$(run 2>&1)"; RC7=$?
+t "a quiet machine then migrates"    "[ $RC7 -eq 0 ] && [ -f '$NEW_STATE/approvals.db' ]"
+
+# The stub, not the real probe, is what answered. Everything above rests on
+# this one assertion, so it is stated rather than assumed.
+t "the stubbed probe was consulted"  "[ -f '$PROBED' ]"
 
 echo; echo "migrate-cuzam.test.sh: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
