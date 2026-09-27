@@ -41,22 +41,33 @@ trap 'rm -rf "$TMP"' EXIT
 REPO="$TMP/repo"
 mkdir -p "$REPO"
 cp -R "$ROOT/scripts" "$REPO/scripts"
-# The migration also reads $repo/hermes/SOUL.md and runs
-# $repo/scripts/template-drift.sh on the one branch where the live SOUL.md
-# still matches its seed. The fixture builds no seed record, so that branch is
-# not taken — but hermes/ is linked in so it stays reachable rather than
-# becoming a second thing to remember.
-ln -s "$ROOT/hermes" "$REPO/hermes"
+# Only scripts/. The migration's other repo-relative reads are $repo/.venv and
+# $repo/hermes/SOUL.md, and both are on branches this fixture never reaches —
+# .venv only as a string compared against a readlink, SOUL.md only when
+# $hermes_home/.template-seeds exists, which build_fixture does not create. An
+# earlier draft linked hermes/ in "so it stays reachable", which handed the
+# fake repo a writable handle on the real checkout: the same hazard as the
+# paragraph above, one directory over. A future step that needs those paths
+# copies them the way scripts/ is copied.
 SCRIPT="$REPO/scripts/migrate-cuzam.sh"
 
 # The two answers the stub can give. Both are about what the MACHINE looks
 # like, which is exactly the input this file could not previously control.
+# Each stub records that it ran, and that record is asserted below. Writing a
+# stub is not the same as the migration reading it: rename scripts/live-runs.sh
+# and the call site together and the stub lands at a path nobody consults, the
+# migration falls through to the copied real probe, and this file silently
+# resumes reading host processes — green on a quiet machine, 26 failures on a
+# busy one, with nothing to say which happened. The quiet-machine assertion
+# cannot catch that, because it passes identically either way.
+PROBED="$TMP/probe-consulted"
 quiet_machine() {
-  printf '#!/usr/bin/env bash\nexit 1\n' > "$REPO/scripts/live-runs.sh"
+  printf '#!/usr/bin/env bash\n: > "%s"\nexit 1\n' "$PROBED" \
+    > "$REPO/scripts/live-runs.sh"
   chmod +x "$REPO/scripts/live-runs.sh"
 }
 live_run() {
-  printf '#!/usr/bin/env bash\n%s\nexit 0\n' \
+  printf '#!/usr/bin/env bash\n: > "%s"\n%s\nexit 0\n' "$PROBED" \
     'echo "4242 bash /x/loop-runner/scripts/run-loop.sh t_live000 ABC-1 --flow classic"' \
     > "$REPO/scripts/live-runs.sh"
   chmod +x "$REPO/scripts/live-runs.sh"
@@ -102,6 +113,7 @@ chmod +x "$FAKEBIN/hermes"
 # The fixture: an install as it looks the moment before the release lands.
 build_fixture() {
   rm -rf "$HH" "$OLD_STATE" "$NEW_STATE" "$OLD_CONFIG" "$NEW_CONFIG" "$CRON_LOG" "$TMP/cron-removed"
+  rm -f "$PROBED"
   mkdir -p "$HH/plugins" "$HH/scripts" "$HH/skills/software-development" \
            "$HH/profiles/ris-worker/node/bin" "$OLD_STATE/runtime/hermes" \
            "$OLD_CONFIG" "$TMP/repo-plugins"
@@ -229,6 +241,10 @@ t "the profile was not renamed"      "[ -d '$HH/profiles/ris-worker' ] && [ ! -d
 # guard rather than about the stub being consulted at all.
 OUT7="$(run 2>&1)"; RC7=$?
 t "a quiet machine then migrates"    "[ $RC7 -eq 0 ] && [ -f '$NEW_STATE/approvals.db' ]"
+
+# The stub, not the real probe, is what answered. Everything above rests on
+# this one assertion, so it is stated rather than assumed.
+t "the stubbed probe was consulted"  "[ -f '$PROBED' ]"
 
 echo; echo "migrate-cuzam.test.sh: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
