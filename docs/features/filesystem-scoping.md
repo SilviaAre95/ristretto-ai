@@ -1,7 +1,7 @@
 ---
 id: filesystem-scoping
 title: Filesystem Scoping
-status: proposed  # proposed | in-progress | implemented | deprecated
+status: in-progress  # proposed | in-progress | implemented | deprecated
 created_at: 2026-09-25
 last_modified: 2026-09-26
 owner: project
@@ -22,6 +22,16 @@ acceptance_criteria:
     committed in the repository being worked on
   - The settings Cuzam supplies deny at least what the discovered settings they
     displace denied
+  - Every `claude` stage carries a deny floor supplied by Cuzam, so a
+    `permissions.allow` committed in the repository being worked on cannot
+    widen the session past it
+  - No path rule is a bare absolute path, which Claude Code accepts and then
+    matches nothing with
+  - The floor is proven in force by a refusal, not by its rules appearing on the
+    argv: a real `claude` refuses a real read under a denied path, and the
+    control case with no rules reads the same file
+  - A settings payload Claude Code would discard fails at the spawn site rather
+    than degrading to no floor
   - No credential is reachable as a path in any stage's scope; model and
     publishing credentials arrive as environment
   - No stage's scope contains a credential directory; the ability to push and
@@ -54,7 +64,15 @@ test_plan:
     runs `claude` without it."
   - "Settings provenance: give a fixture repository a hostile
     `.claude/settings.json` with a wide `permissions.allow`, run a staged
-    stage against it, and assert the session's effective settings are Cuzam's."
+    stage against it, and assert the session's effective settings are Cuzam's.
+    Note that the workspace must be *trusted* for this to test anything — an
+    untrusted one has its allow entries ignored regardless."
+  - "Deny floor, live: `CUZAM_LIVE_CANARY=1 python -m unittest
+    hermes.tests.deny_floor_canary_test`. Each case writes a canary under a
+    configured state home and requires that the shipped payload refuses the
+    read AND that an empty deny list permits it. Run before merging any change
+    to `STAGE_DENY`, `machine_denials` or `stage_settings`. Prove it bites by
+    removing the `*.db-wal` glob and watching the sidecar case fail."
   - "End to end, the incident: drive a classic run on an issue whose context
     exists only outside the scope. Require that the run finishes, that it did not
     spend its hour at prompts, and that the out-of-scope path was never read.
@@ -196,11 +214,18 @@ A stage's scope is built from these parts, and everything not in them is denied.
   failed push;
 - whatever the project declares, below.
 
-**Denied, explicitly, and this is the point:** the rest of `$HOME`, the
-operator's vault, the state home, the primary checkout's working tree, and every
-sibling worktree. And every credential directory — `~/.ssh`, `~/.config/gh`,
-`~/.gitconfig` and `~/.claude/.credentials.json` are outside a `pr` stage's
-scope as much as a `plan` stage's.
+**Denied, explicitly, and this is the point:** the rest of `$HOME`, the state
+home, the primary checkout's working tree, and every sibling worktree.
+
+The operator's vault is **not** denied. That was decided on 2026-09-26 against
+the draft in front of it: a stage may write there, and the vault update a run
+makes when work ships is wanted. The shipped deny floor therefore carries no
+vault rule, and whether the OS layer grants it read-write or read-only is an
+open question below rather than settled here.
+
+**And every credential directory.** `~/.ssh`, `~/.config/gh`, `~/.gitconfig`
+and `~/.claude/.credentials.json` are outside a `pr` stage's scope as much as a
+`plan` stage's.
 
 Denying `~/.gitconfig` takes the commit identity with it, and nothing in Cuzam
 sets one — this checkout happens to carry a local identity, but a repository
@@ -368,7 +393,111 @@ enforcement boundary in the way a matched rule is not. What is genuinely lost is
 whatever the operator's own hooks were doing, and if that matters, the answer is
 a hook set Cuzam ships and tests — named work, not an assumption.
 
-**The two layers arrive in that order, and classic keeps its flag set.** The
+**A deny floor arrives before either layer, and it has shipped.** `--settings`
+alone, carrying `permissions.deny` only, on every `claude` stage a staged flow
+spawns. It is not a layer in the sense above — `cat` is on `READ_ONLY_TOOLS` by
+design and walks under it exactly as the layering argument says — but it is a
+pure tightening with nothing given up, which is what lets it go first:
+
+- `--settings` is *additive* ("load additional settings from"), and a deny rule
+  beats an allow rule whichever source it came from. So the floor holds against
+  a target repository's committed settings without displacing them, and the
+  criterion about displacement is satisfied in advance rather than retired.
+- **How much the provenance argument is worth was measured, and it is less than
+  first written.** A workspace Claude Code has never been trusted in has its
+  `permissions.allow` entries *ignored*, with a warning naming them — so for a
+  freshly cut worktree the allow-widening route is already closed by the trust
+  gate. It still matters where trust exists: the primary checkout is trusted, a
+  worktree path becomes trusted the moment anyone runs Claude Code in it
+  interactively, and a repository's own `deny` applies either way. The refusal-
+  instead-of-approval saving does not depend on trust at all.
+- `--restricted` is what drops discovered settings, and the answer this spec
+  gives for the hooks a stage then loses is the OS layer. Passing it before the
+  kernel layer exists would trade away the only hard enforcement boundary a
+  stage has to buy file-tool confinement the kernel is meant to provide.
+- The broker rework is not a prerequisite of it. A permission rule governs the
+  agent's tool calls, not an MCP subprocess's own file I/O, so denying the state
+  home in `--settings` cannot stop the broker opening `approvals.db`. Which is
+  also why the floor does **not** close the round-2 `sqlite3` hole: that is a
+  Bash call, and only the kernel is below Bash.
+
+**And a rule form that has to be pinned rather than assumed.** Measured against
+2.1.283 with a canary file and a prompt that actually calls the Read tool:
+`Read(~/x/**)`, `Read(//abs/x/**)`, `Read(//abs/x/.env)`,
+`Read(//abs/x/**/*.db)` and bare relative forms like `Read(.env)` and
+`Read(.git/**)` all deny. **`Read(/abs/x/**)` succeeds** — accepted, and
+matching nothing. And `**` is rooted at the project directory, so
+`Read(**/x/**)` does not reach outside it either. A rule of the inert shape
+looks correct in a diff and passes any test asserting it is present, so the
+acceptance criterion above is about the *form* of the rule and
+`test_no_rule_is_a_bare_absolute_path` enforces it.
+
+**A payload the CLI cannot parse is discarded in silence, which is the sharpest
+version of the same problem.** Measured: `deny` given as a string rather than a
+list starts normally, exits 0, warns about nothing, and reads the file. So the
+entire floor can vanish from a typo while every test asserting the JSON is on
+the argv still passes.
+
+Three findings in this one change had that shape — the inert absolute path, the
+hardcoded state homes, and this — and they share one cause: **nothing proved a
+denial actually happens.** The answer is not a longer rule list. It is
+`assert_enforceable` at the spawn site for the shapes that are knowable
+cheaply, and a live canary test that requires a real `claude` to refuse a real
+read for the rest. An acceptance criterion says so, and the test plan carries
+it.
+
+**Which is why the state homes are resolved, not written down.** Both are
+configurable, so `~/.cuzam` and `~/.hermes` in a rule would deny two empty
+directories on a machine that moves them while the real stores stayed
+readable — and every test would still report the floor as present. `runs.py`
+and `dash/control.py` both carry comments about paying for that exact shape.
+
+**Reads into `~/.hermes` are narrowed rather than blanket**, because the
+opposite would contradict a decision already taken: Hermes' source,
+configuration and scripts are deliberately readable as of 2026-09-24, with
+`.env`, the databases and credentials denied. A deny cannot escalate to a
+prompt, so a blanket tree rule would refuse a `plan` stage investigating a
+kanban record outright, and it would route around it with the allowlisted
+`cat`. Writes into either store are denied wholesale, which that decision says
+nothing against.
+
+**The path list stops growing here, and that is a decision.** Four separate
+rules in this floor have now been found present-and-inert: a bare absolute path,
+the two state homes written as literals past their own configuration, a payload
+shape the CLI discards, and `Edit(.git/**)` — which matches nothing in a
+worktree, because there `.git` is a *file* holding
+`gitdir: <primary>/.git/worktrees/<name>` and the hooks run from the primary
+checkout, outside the project directory `**` is rooted at.
+
+Each was fixed by adding or correcting a pattern, and each fix was followed by
+the next instance. That is evidence about the instrument, not the list:
+enumerating path patterns in `permissions.deny` cannot be made complete, and
+this spec says why in its own words — `cat` is on the read-only allowlist, a
+subprocess is invisible to every rule, and only the kernel is below `cat`.
+
+So the resolved git dir is deliberately *not* added, although the mechanism
+exists (`ignore_artifacts` already resolves `--git-common-dir`). Bounding
+`.git` is the OS layer's job; this section names `<repo>/.git` explicitly and
+the floor was never it. What the floor keeps is what has been *proven* to hold:
+the credential paths, the two resolved state homes, the command prefixes, and
+the canary that makes any of it falsifiable.
+
+**Three limits the rules look like they cover and do not.** A read through
+`cat` is bounded by nothing here, so the `Read` rules raise the cost of a read
+and do not prevent one — the audit trail is what they actually buy, since a
+denied Read is visible where an allowlisted `cat` is not. The `Bash` rules are
+prefix matches, so `rm -fr`, `chmod 0777` and `git push origin +main` are the
+same acts unmatched. And `.env.*` wholesale is not mirrored from the committed
+settings: the only `.env.*` file normally committed is the template a stage
+adding a secret has to update, and a deny is terminal, so the stage could not
+even ask.
+
+**Named gap: `classic` gets no floor.** It is spawned through `run-loop.sh`,
+which deliberately cannot read the config, so a floor there would be a second
+copy of the list in bash — the two-places-one-fact shape that has already cost
+this repo a defect. It waits for the OS layer.
+
+**Then the two layers arrive in that order, and classic keeps its flag set.** The
 OS layer goes on all three spawn sites at once, because it is the layer that
 closes the hole. `--restricted` and `--settings` go on staged stages only;
 `classic`'s argv gains the profile path and nothing else.
@@ -606,6 +735,12 @@ rule stays: a flow is only as good as the issue's context being present.
       context assembly reaches `classic` first, or scoping lands on staged flows
       first. Sequencing decision, and the one that most affects whether this is
       an improvement on day one.
+- [ ] **Whether the OS layer grants the vault read-write or read-only.** The
+      owner decided on 2026-09-26 that a stage may write to the vault, which
+      settles the deny floor — it carries no vault rule — but not the kernel
+      profile, where "granted" still has to name a mode. The vault is not a git
+      repository, so a write there has nothing to revert to; that is an
+      argument about which mode, not about whether.
 - [ ] **How the publishing credential resolves is unverified.** The remote is
       HTTPS and no shipped code runs `git push` or `gh pr create` — the model
       does, so `gh` resolves its own token and git resolves a credential helper.
@@ -669,12 +804,22 @@ Not contractual. Where the boundary would land, given what is there today:
   `(worktree, repo, role, project scope)`; nothing else spells a sandbox rule.
   Same discipline as `runs.run_dir()`, which was three places that had drifted.
 - **Four spawn sites exist**, and three need the wrapper:
-  `cuzam/runner.py:411` (`runner_command`, every staged stage),
-  `hermes/skills/loop-runner/scripts/run-loop.sh:308` (classic, which owns the
-  S-3 permission pin), and `cuzam/runner.py:661` (the provider preflight probe,
-  which already runs in a scratch directory and is the cheapest place to prove
-  the wrapper works). The fourth, `cuzam/assistant/loop.py:86`, is out of scope
-  above.
+  `cuzam/runner.py` `runner_command` (every staged stage),
+  `hermes/skills/loop-runner/scripts/run-loop.sh` (classic, which owns the
+  S-3 permission pin), and `cuzam/runner.py` `preflight_provider` (the provider
+  preflight probe, which already runs in a scratch directory and is the
+  cheapest place to prove the wrapper works). The fourth,
+  `cuzam/assistant/loop.py` `_command`, is out of scope above.
+
+  By name rather than by line, deliberately: these pointers were already stale
+  by three lines once, and the deny floor moved both `runner.py` sites by about
+  a hundred. A citation that drifts silently is worse than one that has to be
+  grepped.
+
+  **The deny floor covers two of the three.** `runner_command` and the
+  preflight probe carry `--settings`; classic carries nothing, for the reason
+  given above — `run-loop.sh` cannot read the config, and a copy of the list in
+  bash would be a second place holding one fact.
 - **Classic cannot read the config**, deliberately — it is bash and the
   launcher owns the spawn shape. So the profile path reaches it the way
   everything else does, as argv from `launch.classic_command`, and
@@ -692,5 +837,5 @@ Not contractual. Where the boundary would land, given what is there today:
   this spec in three places: it claims nothing in a flow can read the issue
   tracker, that the stage prompt carries the issue key and nothing else, and
   that local stages run under `--bare`. `context.py` reaches Linear and the
-  vault, `runner.py:274` prepends `context.md` to every stage's inputs, and
+  vault, `runner.py` prepends `context.md` to every stage's inputs, and
   `--bare` is no longer passed anywhere. Correcting it belongs with this change.

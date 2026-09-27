@@ -6,6 +6,7 @@ from __future__ import annotations
 import contextlib
 import copy
 import io
+import json
 import os
 import subprocess
 import tempfile
@@ -34,6 +35,11 @@ from cuzam.config import (
 )
 from cuzam.runner import (
     FlowError,
+    STAGE_DENY,
+    assert_enforceable,
+    machine_denials,
+    preflight_provider,
+    stage_settings,
     heartbeat,
     report_outcome,
     artifact_dir,
@@ -536,6 +542,352 @@ class ConfigTests(unittest.TestCase):
             configured, _ = load_config(target)
             self.assertEqual(configured["instance"]["linear_team"], "DEMO")
             self.assertEqual(configured["repositories"]["Example"], "/tmp/example")
+
+
+class StageDenyFloorTests(unittest.TestCase):
+    """The deny floor every `claude` stage carries.
+
+    Verified against the real CLI before these were written, because the
+    interesting failure here is a rule that is accepted and then matches
+    nothing. Measured on 2.1.283 with a canary file and a prompt that actually
+    calls the Read tool:
+
+        Read(~/.probe/**)             denied
+        Read(//<abs>/.probe/**)       denied   (note the leading //)
+        Read(//<abs>/.probe/.env)     denied
+        Read(//<abs>/.probe/**/*.db)  denied
+        Read(.env), Read(.git/**)     denied   (bare relative is fine)
+        Read(/<abs>/.probe/**)        READ SUCCEEDED — silently inert
+        Read(**/.probe/**)            READ SUCCEEDED — `**` is rooted at the
+                                      project directory, not at /
+
+    So a bare absolute path is a rule that looks right in a diff, passes any
+    test asserting it is present, and denies nothing. An earlier draft of this
+    change built the vault rule that exact way. `test_no_rule_is_a_bare_absolute_path`
+    is the assertion that would have caught it.
+    """
+
+    def test_every_claude_stage_carries_the_settings_payload(self) -> None:
+        provider = {"runner": "claude-code", "model": "m"}
+        for mutates in (True, False):
+            for gated in (True, False):
+                command, _, _ = runner_command(
+                    provider, {"mutates": mutates}, "prompt",
+                    Path("/tmp"), Path("/tmp/out.md"), gated,
+                )
+                self.assertIn("--settings", command)
+                payload = json.loads(command[command.index("--settings") + 1])
+                self.assertEqual(
+                    payload["permissions"]["deny"],
+                    [*STAGE_DENY, *machine_denials()],
+                )
+
+    def test_the_payload_is_inline_json_not_a_path(self) -> None:
+        """A file would have to live somewhere a scoped stage can read.
+
+        Both natural locations are denied by filesystem-scoping, so a file
+        payload would fail every stage at startup once the sandbox exists.
+        """
+        command, _, _ = runner_command(
+            {"runner": "claude-code"}, {"mutates": True}, "prompt",
+            Path("/tmp"), Path("/tmp/out.md"),
+        )
+        value = command[command.index("--settings") + 1]
+        self.assertTrue(value.startswith("{"), value)
+
+    def test_settings_precedes_the_variadic_flags(self) -> None:
+        """--mcp-config and --allowedTools swallow whatever follows them.
+
+        The existing rule is that the single-valued --permission-prompt-tool
+        terminates both. --settings is single-valued too, so it has to sit
+        ahead of them rather than between.
+        """
+        command, _, _ = runner_command(
+            {"runner": "claude-code"}, {"mutates": True}, "prompt",
+            Path("/tmp"), Path("/tmp/out.md"), True,
+        )
+        self.assertLess(command.index("--settings"), command.index("--allowedTools"))
+        self.assertLess(command.index("--settings"), command.index("--mcp-config"))
+
+    def test_the_prompt_is_still_last(self) -> None:
+        command, _, _ = runner_command(
+            {"runner": "claude-code"}, {"mutates": True}, "the prompt",
+            Path("/tmp"), Path("/tmp/out.md"), True,
+        )
+        self.assertEqual(command[-1], "the prompt")
+
+    def test_the_state_homes_are_resolved_not_hardcoded(self) -> None:
+        """`~/.cuzam` and `~/.hermes` are defaults, not facts.
+
+        `CUZAM_STATE_HOME` and `CUZAM_HERMES_HOME`/`HERMES_HOME` move both. A
+        hardcoded rule would deny two empty directories on such a machine while
+        the real stores stayed readable — and every other assertion here would
+        still report the floor as present, which is what makes it worth a test
+        of its own. The same shape has cost this repo twice before.
+        """
+        rules = machine_denials(
+            {"CUZAM_STATE_HOME": "/work/state", "HERMES_HOME": "/work/hermes"}
+        )
+        self.assertIn("Read(//work/hermes/.env*)", rules)
+        self.assertIn("Edit(//work/state/**)", rules)
+        for rule in rules:
+            self.assertNotIn(".cuzam", rule)
+            self.assertNotIn("/.hermes", rule)
+
+    def test_a_relative_or_symlinked_home_is_resolved(self) -> None:
+        """`expanduser()` alone is not enough, and the failure is inert rules.
+
+        A relative `CUZAM_STATE_HOME` yields `Read(//state/*.db)`, which starts
+        with `//` and so slips past the bare-absolute guard while matching
+        nothing. And on macOS `/tmp` and `/var` are symlinks, so a home under
+        either produces rules that do not match the physical path — the same
+        defect as the `$TMP` one fixed in the migration test.
+        """
+        for rule in machine_denials({"CUZAM_STATE_HOME": "state", "HERMES_HOME": "h"}):
+            inner = rule[rule.index("(") + 1 : rule.rindex(")")]
+            self.assertTrue(inner.startswith("//"), rule)
+        under_tmp = machine_denials({"CUZAM_STATE_HOME": "/tmp/s", "HERMES_HOME": "/tmp/h"})
+        # /tmp is a symlink to /private/tmp on macOS; the rules must name the
+        # path the tools will actually see.
+        if Path("/tmp").is_symlink():
+            self.assertTrue(any("/private/tmp/" in rule for rule in under_tmp), under_tmp[:2])
+
+    def test_the_sqlite_sidecars_are_covered(self) -> None:
+        """The WAL is not a detail: it carries recently committed pages.
+
+        Both stores run `PRAGMA journal_mode=WAL`, and `~/.cuzam` holds
+        `events.db-wal` and `events.db-shm` right now — neither matched by
+        `*.db`, so the content the floor claims to deny was readable beside it.
+        """
+        rules = machine_denials({"CUZAM_STATE_HOME": "/work/state", "HERMES_HOME": "/w/h"})
+        for glob in ("*.db", "*.db-wal", "*.db-shm", "*.sqlite*"):
+            self.assertIn(f"Read(//work/state/{glob})", rules)
+
+    def test_hermes_secret_backups_and_auth_are_covered(self) -> None:
+        """Measured against the real directory, which is why it is not `.env`.
+
+        `~/.hermes` holds `.env.bak-2026-08-31-loopmodel` and
+        `.env.env.bak-2026-08-29` — the same secrets, matched by neither an
+        exact `.env` rule. It also holds `auth.json`, which this floor's own
+        docstring and the spec both claimed was covered while nothing named it.
+        """
+        rules = machine_denials({"CUZAM_STATE_HOME": "/w/s", "HERMES_HOME": "/work/hermes"})
+        self.assertIn("Read(//work/hermes/.env*)", rules)
+        self.assertIn("Read(//work/hermes/auth.json)", rules)
+        for glob in ("*credential*", "oauth*", "*.key", "*.pem"):
+            self.assertIn(f"Read(//work/hermes/{glob})", rules)
+
+    def test_a_parenthesis_in_the_home_path_is_refused(self) -> None:
+        """`Tool(pattern)` cannot express it, and the guard's own parse hid it.
+
+        `assert_enforceable` finds the pattern with `index("(")`/`rindex(")")`,
+        so a path holding a parenthesis produced a rule that passed the
+        guard while the CLI may discard the entire payload — the silent
+        floor-loss this whole mechanism exists to prevent. Fail closed instead.
+        """
+        with self.assertRaises(FlowError):
+            stage_settings(
+                {"CUZAM_STATE_HOME": "/mnt/Drive (work)/s", "HERMES_HOME": "/h"}
+            )
+
+    def test_an_unparseable_payload_is_refused_at_the_spawn_site(self) -> None:
+        """Claude Code discards a payload it cannot parse, in silence.
+
+        Measured on 2.1.283: `deny` as a string rather than a list starts
+        normally, exits 0, warns about nothing, and reads the file. So the whole
+        floor can vanish from a typo while every argv assertion still passes.
+        Failing loudly here is the cheap half of the answer;
+        `deny_floor_canary_test.py` is the half that proves a real refusal.
+        """
+        with self.assertRaises(FlowError):
+            assert_enforceable({"permissions": {"deny": "Read(x)"}})
+        with self.assertRaises(FlowError):
+            assert_enforceable({"permissions": {"deny": []}})
+        with self.assertRaises(FlowError):
+            assert_enforceable({"permissions": []})
+        with self.assertRaises(FlowError):
+            assert_enforceable({"permissions": {"deny": ["Read(/abs/x/**)"]}})
+        with self.assertRaises(FlowError):
+            assert_enforceable({"permissions": {"deny": ["not a rule"]}})
+        # And the real one passes.
+        assert_enforceable(stage_settings())
+
+    def test_env_rules_reach_nested_paths_in_both_directions(self) -> None:
+        """`Edit(.env)` was project-root only while `Read(**/.env)` was not.
+
+        A stage could overwrite `packages/api/.env` in a monorepo. It mirrored
+        the committed file, which is wrong there too.
+        """
+        self.assertIn("Read(**/.env)", STAGE_DENY)
+        self.assertIn("Edit(**/.env)", STAGE_DENY)
+        self.assertNotIn("Edit(.env)", STAGE_DENY)
+
+    def test_one_home_for_both_does_not_repeat_a_rule(self) -> None:
+        one = machine_denials(
+            {"CUZAM_STATE_HOME": "/work/both", "HERMES_HOME": "/work/both"}
+        )
+        self.assertEqual(len(one), len(set(one)))
+
+    def test_hermes_source_stays_readable(self) -> None:
+        """A decision on the record, dated 2026-09-24, not an oversight.
+
+        Hermes' source, configuration and scripts are deliberately readable;
+        `.env`, the databases and credentials are not. A blanket tree deny
+        would contradict that — and a deny cannot escalate to a prompt, so a
+        stage refused a kanban record would route around it with the
+        allowlisted `cat` rather than ask.
+        """
+        rules = machine_denials({"HERMES_HOME": "/work/hermes"})
+        self.assertNotIn("Read(//work/hermes/**)", rules)
+        self.assertIn("Read(//work/hermes/.env*)", rules)
+        self.assertIn("Read(//work/hermes/**/*.db)", rules)
+
+    def test_the_committed_env_template_stays_reachable(self) -> None:
+        """`.env.*` wholesale is deliberately not mirrored.
+
+        The only `.env.*` file normally committed is the template, and this
+        repository tracks one. A stage adding a secret has to update it — the
+        project's own contract is a `*_env` declaration plus a line there — and
+        a deny is terminal, so the stage could not ask and would ship the
+        declaration undocumented.
+        """
+        self.assertTrue((ROOT / "hermes" / ".env.example").exists())
+        self.assertNotIn("Read(**/.env.*)", STAGE_DENY)
+        self.assertNotIn("Edit(.env.*)", STAGE_DENY)
+        self.assertIn("Read(**/.env)", STAGE_DENY)
+        self.assertIn("Read(**/.env*.local)", STAGE_DENY)
+        # And NOT the environment names. They are what Next.js documents as
+        # committable defaults, so denying them reproduces this very defect in
+        # most of the configured repositories — a stage unable to read or edit
+        # committed, non-secret config, and unable to ask because a deny is
+        # terminal. `.env*.local` is the convention that means "secret".
+        for name in ("production", "staging", "development", "test"):
+            self.assertNotIn(f"Read(**/.env.{name})", STAGE_DENY)
+            self.assertNotIn(f"Edit(**/.env.{name})", STAGE_DENY)
+
+    def test_the_preflight_probe_carries_the_floor(self) -> None:
+        """The cheapest place the payload is exercised at all.
+
+        A stage that dies on a bad rule dies an hour into a run; the probe
+        answers in seconds. It is also what makes
+        `test_the_model_credential_is_not_denied` a real guard rather than an
+        aspiration — without it, a rule that broke authentication would leave
+        the probe green and fail every stage later.
+        """
+        captured: dict[str, list[str]] = {}
+
+        class Result:
+            returncode = 0
+            stdout = "ok"
+            stderr = ""
+
+        def fake_run(command, **kwargs):
+            captured["command"] = command
+            return Result()
+
+        with mock.patch.object(subprocess, "run", fake_run):
+            preflight_provider({"runner": "claude-code", "model": "m"})
+        command = captured["command"]
+        self.assertIn("--settings", command)
+        payload = json.loads(command[command.index("--settings") + 1])
+        self.assertEqual(
+            payload["permissions"]["deny"], [*STAGE_DENY, *machine_denials()]
+        )
+
+    def test_no_rule_is_a_bare_absolute_path(self) -> None:
+        """A rule that matches nothing is worse than no rule.
+
+        See the class docstring: `Read(/abs/**)` is accepted and inert. Only
+        `~/`-relative, `//`-prefixed absolute, or project-relative patterns
+        actually match, so anything starting with a single `/` is a defect.
+        Covers the computed rules as well, which is where an absolute path is
+        actually built.
+        """
+        for rule in (*STAGE_DENY, *machine_denials()):
+            inner = rule[rule.index("(") + 1 : rule.rindex(")")]
+            if rule.startswith("Bash("):
+                continue
+            self.assertFalse(
+                inner.startswith("/") and not inner.startswith("//"),
+                f"{rule} is a bare absolute path, which Claude Code accepts "
+                f"and then ignores; use ~/ or a // prefix",
+            )
+
+    def test_the_floor_is_at_least_the_committed_settings(self) -> None:
+        """filesystem-scoping: deny at least what the discovered settings denied.
+
+        Read out of `.claude/settings.json` rather than copied here, so the
+        criterion keeps holding when that file gains a rule. `--restricted` is
+        not passed yet, so nothing is displaced today — this is what makes it
+        safe to pass it later.
+        """
+        # Both files, because `--restricted` displaces project AND local
+        # settings, and `settings.local.json` is gitignored — so it can gain a
+        # deny rule invisibly, which is exactly the drift this asks about.
+        discovered: set[str] = set()
+        for name in ("settings.json", "settings.local.json"):
+            path = ROOT / ".claude" / name
+            if not path.exists():
+                continue
+            found = json.loads(path.read_text()).get("permissions", {}).get("deny")
+            discovered |= set(found or [])
+
+        # One deliberate divergence, with its reason. `.env.*` wholesale blocks
+        # the committed template a stage adding a secret has to update, and
+        # protects nothing that exists in a worktree, since real `.env.*` files
+        # are not committed. The specific environment names are in the floor.
+        # See `test_the_committed_env_template_stays_reachable`.
+        DELIBERATE = {"Read(**/.env.*)", "Edit(.env.*)"}
+
+        # And rules the floor states more broadly. Exact-string comparison would
+        # otherwise demand a redundant narrow rule beside its own superset: the
+        # committed file's `Edit(.env)` is project-root only, and the floor
+        # covers nested paths as well, which is strictly more.
+        COVERED_BY = {"Edit(.env)": "Edit(**/.env)"}
+        for narrow, wide in COVERED_BY.items():
+            self.assertIn(
+                wide, STAGE_DENY,
+                f"{narrow} is excused because {wide} covers it, and it does not exist",
+            )
+
+        # And what this test CANNOT say, stated so nobody reads more into a
+        # green: the criterion is about the settings Cuzam's payload displaces,
+        # which are the *target* repository's and unknowable here. Passing means
+        # the floor covers this repository's committed rules, not that
+        # `--restricted` will be safe in any other checkout.
+        missing = discovered - set(STAGE_DENY) - DELIBERATE - set(COVERED_BY)
+        self.assertEqual(
+            missing, set(),
+            f"the discovered settings deny these and the stage floor does not: "
+            f"{sorted(missing)}. Add them, or add a reasoned exception.",
+        )
+
+    def test_the_model_credential_is_not_denied(self) -> None:
+        """The one stated exception, and a test because breaking it is silent.
+
+        This project runs on Claude Code's OAuth session with no API key.
+        Denying the credential file breaks authentication for every cloud
+        stage, and the preflight probe would then report "did not answer" and
+        fail-closed would refuse every launch on the machine.
+        """
+        for rule in STAGE_DENY:
+            self.assertNotIn(".credentials.json", rule)
+        # Narrowed from `~/.claude/` wholesale, which forbade far more than the
+        # exception on the record and locked in a live exposure:
+        # `~/.claude/projects/**` holds the full transcript of every past run on
+        # the machine, and the floor denies `~/.claude.json` for holding
+        # `oauthAccount` while leaving those readable beside it. Adding that rule
+        # should be a decision, not a test failure.
+        self.assertIn("Read(~/.claude.json)", STAGE_DENY)
+
+    def test_codex_stages_get_no_settings_flag(self) -> None:
+        """It is a claude flag. codex is sandboxed by -s instead."""
+        command, _, runner = runner_command(
+            {"runner": "codex"}, {"mutates": True}, "prompt",
+            Path("/tmp"), Path("/tmp/out.md"),
+        )
+        self.assertEqual(runner, "codex")
+        self.assertNotIn("--settings", command)
 
 
 class RunnerCommandTests(unittest.TestCase):

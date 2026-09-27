@@ -12,6 +12,74 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Every coding stage now carries a deny floor Cuzam supplies.** A staged
+  `claude` stage and the provider preflight probe are started with `--settings`
+  holding a `permissions.deny` list: credential directories, `.env` files in the
+  worktree, the secrets and databases in Cuzam's and Hermes' state homes,
+  `sudo`, `rm -rf`, `chmod 777`, force-push, `git reset --hard`, and edits to
+  `.git`. `--settings` is additive and a deny rule beats an allow rule from any
+  source, so the floor holds without displacing anything the target repository
+  set. A denied call is refused outright instead of queued at the permission
+  broker, so a stage no longer spends the hour waiting on approvals that were
+  only ever going to be refusals.
+
+  **The settings-provenance part of that is worth less than it first appeared,
+  and the claim is corrected here rather than left to be discovered.** A
+  workspace Claude Code has never been trusted in has its `permissions.allow`
+  entries ignored anyway, with a warning naming them — so for a freshly cut
+  worktree the "a target repo widens the session" route was already closed by
+  the trust gate. The floor still matters where trust exists, and the
+  refusal-instead-of-approval saving does not depend on trust at all.
+
+  Three limits, stated because the rules look like they might cover them.
+  `cat` is on the read-only allowlist by design, so a read through Bash is not
+  bounded by any of this — only the kernel is, which is what
+  `docs/features/filesystem-scoping.md` is for and it is not built. The
+  approvals store is reachable the same way. And `classic` gets no floor,
+  because `run-loop.sh` deliberately cannot read the configuration and a copy of
+  the list in bash would be a second place holding one fact.
+
+  **The path list is deliberately not exhaustive, and stops here.** Four rules in
+  it were found present-and-inert across three review rounds — a bare absolute
+  path, the state homes written as literals, a payload shape the CLI discards,
+  and `Edit(.git/**)`, which matches nothing in a worktree because `.git` is a
+  file there and the hooks live in the primary checkout. Each fix was followed by
+  the next instance, which is evidence about the instrument rather than the list:
+  `cat` is on the read-only allowlist and only the kernel is below it. So the
+  resolved git dir is not added, the `.env.<environment>` enumeration from the
+  previous round is reverted to `.env` and `.env*.local` — those names are what
+  Next.js documents as committable, so denying them broke committed config in
+  most target repositories — and bounding paths properly is left to the OS layer
+  that `docs/features/filesystem-scoping.md` specifies.
+
+  **Proven by a refusal, not by the rules being present.** A payload Claude Code
+  cannot parse is discarded *in silence* — `deny` as a string rather than a list
+  starts normally, exits 0, warns about nothing and reads the file — so the
+  whole floor can vanish from a typo while every test asserting the JSON is on
+  the argv still passes. Three findings in this change had that shape, and they
+  share one cause: nothing proved a denial happens. So the payload is validated
+  at the spawn site, and `deny_floor_canary_test.py` runs a real `claude`
+  against a real canary and requires the refusal, with a control that must read
+  the same file when the rules are empty. Opt-in via `CUZAM_LIVE_CANARY=1`,
+  because it spends model calls; run it before changing the rules.
+
+  Measured against the CLI rather than assumed, and it changed the rules:
+  `Read(~/x/**)`, `Read(//abs/x/**)` and bare relative forms all deny, while
+  `Read(/abs/x/**)` is accepted and **denies nothing**. `**` is rooted at the
+  project directory. A test pins the form, because a rule of the inert shape
+  reads correctly in a diff and passes any test that only checks it is present.
+
+  The two state homes are *resolved* rather than written down, because both are
+  configurable — `~/.cuzam` and `~/.hermes` as literals would deny two empty
+  directories on a machine that moves them while the real stores stayed
+  readable. Reads into `~/.hermes` are narrowed to `.env` and the databases
+  rather than blanket, which keeps the decision that made its source and
+  configuration readable; writes to either store are denied outright. And
+  `.env.*` wholesale is deliberately not mirrored from the committed settings,
+  because the one `.env.*` file normally committed is the template a stage
+  adding a secret has to update, and a deny is terminal — the stage could not
+  even ask, and would ship the declaration undocumented.
+
 - **Providers declare where they are served.** A new `hosting` field, one of
   `vendor` (the runner's own endpoint on the operator's own subscription),
   `third-party` (someone else's hosted endpoint) or `local` (this machine). It

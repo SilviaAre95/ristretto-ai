@@ -21,6 +21,7 @@ from . import __version__, approvals, broker, context as flow_context, events, r
 from .seam import DEV_CONFIG, VERIFY_GATE
 from .config import (
     ConfigError,
+    hermes_home,
     load_config,
     load_env,
     provider_env,
@@ -370,6 +371,304 @@ READ_ONLY_TOOLS = (
 )
 
 
+# The permission rules every `claude` stage carries, whatever any settings file
+# on the machine or in the repository being worked on says.
+#
+# This is Claude Code's own matching, not the kernel, so it is not the
+# filesystem scope docs/features/filesystem-scoping.md specifies — `cat` is on
+# READ_ONLY_TOOLS by design and a subprocess is invisible to every rule here,
+# which is why that spec puts the load on an OS sandbox. Two things still make
+# it worth having on its own, ahead of that work.
+#
+# It is a floor a target repository cannot raise. Claude Code discovers
+# `.claude/settings.json` from the checkout, so the repository being worked on
+# can speak about its own session's permissions. `--settings` is additive (its
+# own help says "load additional settings from"), and a deny rule beats an allow
+# rule whichever source it came from, so these hold without displacing anything.
+#
+# How much that is worth was measured, and it is less than the first draft of
+# this comment claimed. A workspace Claude Code has never been trusted in has
+# its `permissions.allow` entries **ignored**, with a warning naming them — so
+# for a freshly cut worktree, which no trust dialog has ever seen, the
+# allow-widening route is already closed by the trust gate. The floor still
+# matters where trust exists: the primary checkout is trusted, a worktree path
+# becomes trusted the moment anyone runs Claude Code in it interactively, and a
+# repository's own `deny` applies either way. The two things below do not depend
+# on trust at all.
+#
+# And a denied call is refused outright rather than queued at the broker, so a
+# stage stops spending the operator's hour waiting on approvals that were only
+# ever going to be refusals. One build stage spent 57 of its 60 minutes at
+# permission prompts, one prompt at a time.
+#
+# Deliberately at least as strict as this repository's own committed
+# `.claude/settings.json`. That matters for later rather than now: `--restricted`
+# *does* displace project and local settings, so when it arrives this floor
+# already satisfies filesystem-scoping's "the settings Cuzam supplies deny at
+# least what the discovered settings they displace denied".
+#
+# `--restricted` is not passed here, and that is a decision. It drops discovered
+# settings; hooks come from settings; and the spec's answer for the hooks a
+# stage then loses is the OS layer, which is not built. Passing it now would
+# trade away the only hard enforcement boundary a stage has to buy file-tool
+# confinement the kernel is meant to provide.
+#
+# Two things this does NOT do, stated because the rules look like they might.
+# It does not stop a stage reaching the approvals store through Bash — a
+# permission rule governs the agent's tool calls, and `sqlite3` on
+# `approvals.db` is a Bash call this list does not name. And it does not cover
+# `classic`, which is spawned through run-loop.sh; a floor there would be a
+# second copy of this list in bash, which is the two-places-one-fact shape this
+# repo has already been bitten by. Both wait for the OS layer.
+STAGE_DENY = (
+    # Credentials and identity. The principle filesystem-scoping states is that
+    # a credential a stage needs arrives as environment on the process that
+    # needs it, never as a readable path.
+    #
+    # The model credential is that spec's one stated exception and is NOT
+    # denied here. This project deliberately runs on Claude Code's own OAuth
+    # session with no API key — a test pins that as the reason a Claude
+    # provider must never get `--bare` — so denying
+    # `~/.claude/.credentials.json` would break authentication for every cloud
+    # stage and for `classic`. A named residual exposure, not an oversight.
+    #
+    # `~/.gitconfig` is denied although the spec notes that removing it takes
+    # the commit identity with it. That cost is about the *kernel* profile: a
+    # deny here binds the Read tool, while `git` is a subprocess that reads the
+    # file regardless. So the identity survives and the enumeration does not.
+    #
+    # The rule shapes were measured, not assumed. `~/` is honoured, a
+    # `//`-prefixed absolute path is honoured, a bare relative path is
+    # honoured, and a BARE ABSOLUTE path is accepted and matches nothing. `**`
+    # is rooted at the project directory, so a `**/` rule is about the
+    # repository being worked in and never about the rest of the machine —
+    # which is why the two state homes are resolved in `machine_denials`
+    # instead of written here.
+    "Read(~/.ssh/**)",
+    "Read(~/.aws/**)",
+    "Read(~/.gnupg/**)",
+    "Read(~/.gitconfig)",
+    "Read(~/.netrc)",
+    "Read(~/.npmrc)",
+    "Read(~/.config/gh/**)",
+    "Read(~/.config/gcloud/**)",
+    "Read(~/.docker/config.json)",
+    # `~/.claude.json` is not the file OAuth reads — that is
+    # `~/.claude/.credentials.json` or the keychain — so denying it costs
+    # nothing, and it holds `oauthAccount`, every MCP server definition, the
+    # per-project history and, on some installs, `primaryApiKey`.
+    "Read(~/.claude.json)",
+    # The worktree's own secrets.
+    #
+    # `.env.*` wholesale is deliberately NOT mirrored from the committed file,
+    # and the superset test carries the exception with this reason. The only
+    # `.env.*` file normally *committed* is the template — this repository
+    # tracks `hermes/.env.example` and `getting-started.md` tells you to copy
+    # from it — so a blanket rule protects nothing that exists in a worktree
+    # while blocking the one file a stage adding a secret has to update. A deny
+    # is terminal, so such a stage could not even ask; it would ship the
+    # declaration undocumented instead.
+    # Read and Edit both nested, not only at the project root. `Edit(.env)`
+    # alone left `packages/api/.env` writable in a monorepo, which mirrors the
+    # committed file and was wrong there too.
+    #
+    # `.env` and `.env*.local`, and nothing else — reverting an enumeration of
+    # `.env.production`, `.env.staging`, `.env.development` and `.env.test` that
+    # was both too wide and too narrow. Too wide because those are exactly the
+    # names Next.js documents as *committable* defaults (only `.env*.local` must
+    # be gitignored), so in a Next.js target repo — most of the configured ones —
+    # a stage could neither read nor edit committed, non-secret config, and a
+    # deny is terminal so it could not ask: the same defect as blocking
+    # `hermes/.env.example`, one round later. Too narrow because `.env.prod`,
+    # `.env.dev`, `.env.ci` and any per-customer name went unmatched, so the
+    # list never delivered the coverage that was its excuse.
+    #
+    # `.env*.local` is the one convention that reliably means "secret, not
+    # committed". Everything past it is the kernel layer's job.
+    "Read(**/.env)",
+    "Read(**/.env*.local)",
+    "Edit(**/.env)",
+    "Edit(**/.env*.local)",
+    # Commands, at parity with the committed file. Each reason applies at least
+    # as strongly to a stage nobody is watching.
+    #
+    # Prefix matches, which is a limit rather than a quibble: `rm -fr`,
+    # `rm -r -f`, `chmod 0777` and `git push origin +main` are the same acts
+    # spelled differently and none is matched. It bites exactly in the case
+    # this floor is for — a target repo allowing `Bash(rm:*)` — where
+    # `rm -rf build` is blocked and `rm -fr build` is not. Enumerating
+    # spellings is a game this list cannot win, so the honest claim is that
+    # these raise the cost of the obvious form and the kernel bounds the act.
+    "Bash(sudo:*)",
+    "Bash(rm -rf:*)",
+    "Bash(chmod 777:*)",
+    "Bash(git push --force:*)",
+    "Bash(git push -f:*)",
+    "Bash(git reset --hard:*)",
+    # Rewriting history, or arranging for code to run as the operator later.
+    #
+    # **This rule is inert for a staged stage, and saying so is the point.** A
+    # stage builds in a git worktree, and in a worktree `.git` is a FILE holding
+    # `gitdir: <primary>/.git/worktrees/<name>` — verified, not assumed. So no
+    # path `<cwd>/.git/**` exists for this to match, the real gitdir and the
+    # hooks that run from `<primary>/.git/hooks` are outside the project
+    # directory, and `**` never reaches outside it. `Edit(.git)`, the pointer
+    # file that redirects everything, is not denied either.
+    #
+    # It is kept because the committed settings have it and it does bite outside
+    # a worktree, and it is NOT chased with resolved rules for the common git
+    # dir, because that would be the fifth path pattern added to this list in
+    # answer to the same failure. `ignore_artifacts` above already resolves
+    # `--git-common-dir` for the same reason, so the mechanism exists; what does
+    # not exist is evidence that adding a fifth pattern ends the sequence.
+    # Bounding `.git` is the OS layer's job — docs/features/filesystem-scoping.md
+    # names `<repo>/.git` explicitly and this floor was never it.
+    "Edit(.git/**)",
+)
+
+
+def machine_denials(environ: Mapping[str, str] | None = None) -> tuple[str, ...]:
+    """Deny rules for the two state homes, resolved rather than assumed.
+
+    Both are configurable — `events.state_home()` honours `CUZAM_STATE_HOME`
+    and `hermes_home()` honours `CUZAM_HERMES_HOME`, its legacy spelling and
+    `HERMES_HOME` — so writing `~/.cuzam` and `~/.hermes` into the list would
+    deny two empty directories on any machine that configures them, while the
+    real stores stayed readable and every test still reported the floor as
+    present. This repository has already paid for that shape twice, in
+    `runs.py` and in `dash/control.py`, both of which say so where it happened.
+
+    `.resolve()` and not merely `expanduser()`: a relative `CUZAM_STATE_HOME`
+    would produce `Read(//state/*.db)`, which is inert while still passing the
+    bare-absolute guard, and on macOS `/tmp` and `/var` are symlinks, so a home
+    under either yields rules that do not match the physical path. That is the
+    same defect as the `$TMP` one fixed in the migration test on this branch.
+
+    `//`-prefixed, because a resolved path is absolute and a bare absolute path
+    is the inert form. Measured: `Read(//abs/x/**)`, `Read(//abs/x/**/*.db)`
+    and `Read(//abs/x/.env)` all deny; `Read(/abs/x/**)` does not.
+
+    The patterns are wider than the obvious names, because the obvious names
+    were measured against the real directories and missed:
+
+      - `~/.cuzam` holds `events.db-wal` and `events.db-shm` right now, and
+        both stores run `PRAGMA journal_mode=WAL`, so the WAL carries recently
+        committed pages — the approvals content this docstring claims is denied
+        was readable through a sidecar that `*.db` does not match.
+      - `~/.hermes` holds `.env.bak-2026-08-31-loopmodel` and
+        `.env.env.bak-2026-08-29`: the same secrets, and an exact `.env` rule
+        matches neither.
+      - `~/.hermes/auth.json` exists and nothing named it, although this
+        docstring and the spec both said credentials were covered.
+
+    Reads are still narrowed rather than blanket, which is the decision on the
+    record: Hermes' source, configuration and scripts were made deliberately
+    readable on 2026-09-24, with `.env`, the databases and credentials denied.
+    A blanket tree deny would contradict it — and unlike an allow that is
+    merely absent, a deny cannot escalate to a prompt, so a `plan` stage
+    investigating a kanban record would be refused outright and would route
+    around it with the allowlisted `cat`. Writes are denied wholesale, which
+    that decision says nothing against.
+    """
+    # Secrets and stores, by shape rather than by the names that happen to
+    # exist today. `**/` as well as the top level, because neither form implies
+    # the other.
+    SECRET_GLOBS = (
+        ".env*",
+        "auth.json",
+        "*credential*",
+        "oauth*",
+        "*.key",
+        "*.pem",
+        "*.db",
+        "*.db-wal",
+        "*.db-shm",
+        "*.sqlite*",
+    )
+    rules: list[str] = []
+    for root in (
+        Path(events.state_home(environ)).expanduser().resolve(),
+        Path(hermes_home(environ)).expanduser().resolve(),
+    ):
+        absolute = "//" + str(root).lstrip("/")
+        for glob in SECRET_GLOBS:
+            rules.append(f"Read({absolute}/{glob})")
+            rules.append(f"Read({absolute}/**/{glob})")
+        rules.append(f"Edit({absolute}/**)")
+    # Deduplicated, order kept: the two homes coincide on a machine that points
+    # them at one directory, and a repeated rule is noise in the payload.
+    seen: dict[str, None] = {}
+    for rule in rules:
+        seen.setdefault(rule, None)
+    return tuple(seen)
+
+
+def stage_settings(environ: Mapping[str, str] | None = None) -> dict[str, Any]:
+    """The `--settings` payload for one stage.
+
+    An inline JSON string rather than a file, and that is load-bearing for the
+    OS layer this precedes: both natural places to put a file are paths that
+    spec denies, so a file payload would fail every stage at startup once the
+    sandbox exists.
+
+    **A payload Claude Code cannot parse is discarded in silence.** Measured on
+    2.1.283: `--settings '{"permissions":{"deny":"Read(secret.txt)"}}'` — a
+    string where a list belongs — starts normally, exits 0, prints no warning,
+    and reads the file. So the entire floor can disappear from a typo while
+    every test asserting the JSON is on the argv still passes. That is the
+    third time in this one change that a rule looked present and was not, after
+    the bare absolute path and the hardcoded state homes, and the three share
+    one cause: nothing here proved a denial actually happens.
+
+    `assert_enforceable` is the cheap half of the answer and runs on every
+    call; `deny_floor_canary_test.py` is the other half and proves a real
+    `claude` refuses a real read.
+    """
+    payload = {"permissions": {"deny": [*STAGE_DENY, *machine_denials(environ)]}}
+    assert_enforceable(payload)
+    return payload
+
+
+def assert_enforceable(payload: Mapping[str, Any]) -> None:
+    """Refuse a payload Claude Code would accept and then ignore.
+
+    Fails loudly at the spawn site rather than degrading to no floor at all.
+    This cannot prove the schema is satisfied — only Claude Code knows that —
+    but it pins the shape the measurement above showed silently discarded, so
+    the known way to lose the floor cannot happen unnoticed.
+    """
+    permissions = payload.get("permissions")
+    if not isinstance(permissions, dict):
+        raise FlowError(f"stage settings: permissions must be an object, got {permissions!r}")
+    deny = permissions.get("deny")
+    if not isinstance(deny, list) or not deny:
+        raise FlowError(
+            f"stage settings: permissions.deny must be a non-empty list, got {deny!r}. "
+            "Claude Code discards a payload it cannot parse without saying so, "
+            "so a stage would run with no floor at all."
+        )
+    for rule in deny:
+        if not isinstance(rule, str) or not rule.endswith(")") or "(" not in rule:
+            raise FlowError(f"stage settings: {rule!r} is not a Tool(pattern) rule")
+        inner = rule[rule.index("(") + 1 : rule.rindex(")")]
+        if not rule.startswith("Bash(") and inner.startswith("/") and not inner.startswith("//"):
+            raise FlowError(
+                f"stage settings: {rule!r} is a bare absolute path, which Claude Code "
+                "accepts and then matches nothing with; use ~/ or a // prefix"
+            )
+        # A resolved home containing a parenthesis — `~/Drive (work)/state` — is
+        # interpolated straight into `Tool(pattern)`, and this function's own
+        # `index("(")`/`rindex(")")` parse would wave the result through while
+        # the CLI may discard the whole payload. Fail closed: this guard exists
+        # because a silently dropped floor is the failure mode.
+        if not rule.startswith("Bash(") and ("(" in inner or ")" in inner):
+            raise FlowError(
+                f"stage settings: {rule!r} has a parenthesis in its path, which "
+                "cannot be expressed as a permission rule. Move the state home "
+                "somewhere without one, or a stage would run with no floor."
+            )
+
+
 def attended(task_id: str) -> bool:
     """Whether a person is expected to answer this run's approval prompts.
 
@@ -470,6 +769,14 @@ def runner_command(
             # so no test here exercises it.
             command += ["--strict-mcp-config", "--add-dir", str(cwd)]
             env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
+        # Ahead of the permission mode, because it is the rule the mode operates
+        # inside. --settings is single-valued, so it is safe anywhere before the
+        # prompt, unlike the variadic flags below.
+        #
+        # On every claude stage, not only the gated ones. A read-only stage is
+        # the one that goes looking, and a reviewer reading ~/.ssh is not a
+        # reviewer reviewing.
+        command += ["--settings", json.dumps(stage_settings())]
         mode = "acceptEdits" if stage["mutates"] else "plan"
         command += ["--permission-mode", mode, "--no-session-persistence"]
         if stage["mutates"] and gated:
@@ -694,7 +1001,17 @@ def preflight_provider(provider: Mapping[str, Any]) -> str:
     # --model last because it is single-valued: it terminates any variadic
     # option before it and leaves the prompt as the final argument, which is
     # the same ordering rule runner_command has to obey.
-    command += ["--strict-mcp-config", "--no-session-persistence"]
+    # The floor reaches the probe too. Plan mode refuses edits but leaves Read
+    # and Grep, and this is the cheapest place the payload gets exercised at
+    # all: a stage that dies on it dies an hour into a run, while the probe
+    # answers in seconds. It is also what makes the claim in
+    # `test_the_model_credential_is_not_denied` true rather than aspirational —
+    # a rule that broke authentication surfaces here, as "did not answer",
+    # before any launch proceeds.
+    command += [
+        "--settings", json.dumps(stage_settings()),
+        "--strict-mcp-config", "--no-session-persistence",
+    ]
     if model:
         command += ["--model", model]
     command.append(PREFLIGHT_PROMPT)
