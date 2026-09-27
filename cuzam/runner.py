@@ -381,12 +381,20 @@ READ_ONLY_TOOLS = (
 # it worth having on its own, ahead of that work.
 #
 # It is a floor a target repository cannot raise. Claude Code discovers
-# `.claude/settings.json` from the checkout, so until now the repository being
-# worked on decided its own session's permissions — it could ship a wide
-# `permissions.allow` and widen the session Cuzam started. `--settings` is
-# additive (its own help says "load additional settings from"), and a deny rule
-# beats an allow rule whichever source it came from, so these hold without
-# displacing anything.
+# `.claude/settings.json` from the checkout, so the repository being worked on
+# can speak about its own session's permissions. `--settings` is additive (its
+# own help says "load additional settings from"), and a deny rule beats an allow
+# rule whichever source it came from, so these hold without displacing anything.
+#
+# How much that is worth was measured, and it is less than the first draft of
+# this comment claimed. A workspace Claude Code has never been trusted in has
+# its `permissions.allow` entries **ignored**, with a warning naming them — so
+# for a freshly cut worktree, which no trust dialog has ever seen, the
+# allow-widening route is already closed by the trust gate. The floor still
+# matters where trust exists: the primary checkout is trusted, a worktree path
+# becomes trusted the moment anyone runs Claude Code in it interactively, and a
+# repository's own `deny` applies either way. The two things below do not depend
+# on trust at all.
 #
 # And a denied call is refused outright rather than queued at the broker, so a
 # stage stops spending the operator's hour waiting on approvals that were only
@@ -445,6 +453,11 @@ STAGE_DENY = (
     "Read(~/.config/gh/**)",
     "Read(~/.config/gcloud/**)",
     "Read(~/.docker/config.json)",
+    # `~/.claude.json` is not the file OAuth reads — that is
+    # `~/.claude/.credentials.json` or the keychain — so denying it costs
+    # nothing, and it holds `oauthAccount`, every MCP server definition, the
+    # per-project history and, on some installs, `primaryApiKey`.
+    "Read(~/.claude.json)",
     # The worktree's own secrets.
     #
     # `.env.*` wholesale is deliberately NOT mirrored from the committed file,
@@ -455,12 +468,32 @@ STAGE_DENY = (
     # while blocking the one file a stage adding a secret has to update. A deny
     # is terminal, so such a stage could not even ask; it would ship the
     # declaration undocumented instead.
+    # Read and Edit both nested, not only at the project root. `Edit(.env)`
+    # alone left `packages/api/.env` writable in a monorepo, which mirrors the
+    # committed file and was wrong there too.
+    #
+    # The environment-specific names are enumerated rather than globbed with
+    # `.env.*`. Globbing takes the template with it — this repository tracks
+    # `hermes/.env.example`, `getting-started.md` tells you to copy from it, and
+    # adding a secret here means a `*_env` declaration plus a line in it. A deny
+    # is terminal, so a stage doing that work could not read it, could not edit
+    # it, and could not ask; it would ship the declaration undocumented.
+    # Enumerating covers the uncommitted names that hold secrets while leaving
+    # `.example`, `.sample` and `.template` reachable.
     "Read(**/.env)",
     "Read(**/.env.local)",
     "Read(**/.env.*.local)",
-    "Edit(.env)",
-    "Edit(.env.local)",
-    "Edit(.env.*.local)",
+    "Read(**/.env.production)",
+    "Read(**/.env.staging)",
+    "Read(**/.env.development)",
+    "Read(**/.env.test)",
+    "Edit(**/.env)",
+    "Edit(**/.env.local)",
+    "Edit(**/.env.*.local)",
+    "Edit(**/.env.production)",
+    "Edit(**/.env.staging)",
+    "Edit(**/.env.development)",
+    "Edit(**/.env.test)",
     # Commands, at parity with the committed file. Each reason applies at least
     # as strongly to a stage nobody is watching.
     #
@@ -495,29 +528,63 @@ def machine_denials(environ: Mapping[str, str] | None = None) -> tuple[str, ...]
     present. This repository has already paid for that shape twice, in
     `runs.py` and in `dash/control.py`, both of which say so where it happened.
 
+    `.resolve()` and not merely `expanduser()`: a relative `CUZAM_STATE_HOME`
+    would produce `Read(//state/*.db)`, which is inert while still passing the
+    bare-absolute guard, and on macOS `/tmp` and `/var` are symlinks, so a home
+    under either yields rules that do not match the physical path. That is the
+    same defect as the `$TMP` one fixed in the migration test on this branch.
+
     `//`-prefixed, because a resolved path is absolute and a bare absolute path
     is the inert form. Measured: `Read(//abs/x/**)`, `Read(//abs/x/**/*.db)`
     and `Read(//abs/x/.env)` all deny; `Read(/abs/x/**)` does not.
 
-    Reads are narrowed rather than blanket, and that is a decision on the
+    The patterns are wider than the obvious names, because the obvious names
+    were measured against the real directories and missed:
+
+      - `~/.cuzam` holds `events.db-wal` and `events.db-shm` right now, and
+        both stores run `PRAGMA journal_mode=WAL`, so the WAL carries recently
+        committed pages — the approvals content this docstring claims is denied
+        was readable through a sidecar that `*.db` does not match.
+      - `~/.hermes` holds `.env.bak-2026-08-31-loopmodel` and
+        `.env.env.bak-2026-08-29`: the same secrets, and an exact `.env` rule
+        matches neither.
+      - `~/.hermes/auth.json` exists and nothing named it, although this
+        docstring and the spec both said credentials were covered.
+
+    Reads are still narrowed rather than blanket, which is the decision on the
     record: Hermes' source, configuration and scripts were made deliberately
     readable on 2026-09-24, with `.env`, the databases and credentials denied.
     A blanket tree deny would contradict it — and unlike an allow that is
     merely absent, a deny cannot escalate to a prompt, so a `plan` stage
     investigating a kanban record would be refused outright and would route
     around it with the allowlisted `cat`. Writes are denied wholesale, which
-    that decision says nothing against: a coding stage has no business writing
-    into either store, and the approvals database is one of them.
+    that decision says nothing against.
     """
+    # Secrets and stores, by shape rather than by the names that happen to
+    # exist today. `**/` as well as the top level, because neither form implies
+    # the other.
+    SECRET_GLOBS = (
+        ".env*",
+        "auth.json",
+        "*credential*",
+        "oauth*",
+        "*.key",
+        "*.pem",
+        "*.db",
+        "*.db-wal",
+        "*.db-shm",
+        "*.sqlite*",
+    )
     rules: list[str] = []
-    for root in (str(events.state_home(environ)), str(hermes_home(environ))):
-        absolute = "//" + root.lstrip("/")
-        rules += [
-            f"Read({absolute}/.env)",
-            f"Read({absolute}/*.db)",
-            f"Read({absolute}/**/*.db)",
-            f"Edit({absolute}/**)",
-        ]
+    for root in (
+        Path(events.state_home(environ)).expanduser().resolve(),
+        Path(hermes_home(environ)).expanduser().resolve(),
+    ):
+        absolute = "//" + str(root).lstrip("/")
+        for glob in SECRET_GLOBS:
+            rules.append(f"Read({absolute}/{glob})")
+            rules.append(f"Read({absolute}/**/{glob})")
+        rules.append(f"Edit({absolute}/**)")
     # Deduplicated, order kept: the two homes coincide on a machine that points
     # them at one directory, and a repeated rule is noise in the payload.
     seen: dict[str, None] = {}
@@ -533,8 +600,52 @@ def stage_settings(environ: Mapping[str, str] | None = None) -> dict[str, Any]:
     OS layer this precedes: both natural places to put a file are paths that
     spec denies, so a file payload would fail every stage at startup once the
     sandbox exists.
+
+    **A payload Claude Code cannot parse is discarded in silence.** Measured on
+    2.1.283: `--settings '{"permissions":{"deny":"Read(secret.txt)"}}'` — a
+    string where a list belongs — starts normally, exits 0, prints no warning,
+    and reads the file. So the entire floor can disappear from a typo while
+    every test asserting the JSON is on the argv still passes. That is the
+    third time in this one change that a rule looked present and was not, after
+    the bare absolute path and the hardcoded state homes, and the three share
+    one cause: nothing here proved a denial actually happens.
+
+    `assert_enforceable` is the cheap half of the answer and runs on every
+    call; `deny_floor_canary_test.py` is the other half and proves a real
+    `claude` refuses a real read.
     """
-    return {"permissions": {"deny": [*STAGE_DENY, *machine_denials(environ)]}}
+    payload = {"permissions": {"deny": [*STAGE_DENY, *machine_denials(environ)]}}
+    assert_enforceable(payload)
+    return payload
+
+
+def assert_enforceable(payload: Mapping[str, Any]) -> None:
+    """Refuse a payload Claude Code would accept and then ignore.
+
+    Fails loudly at the spawn site rather than degrading to no floor at all.
+    This cannot prove the schema is satisfied — only Claude Code knows that —
+    but it pins the shape the measurement above showed silently discarded, so
+    the known way to lose the floor cannot happen unnoticed.
+    """
+    permissions = payload.get("permissions")
+    if not isinstance(permissions, dict):
+        raise FlowError(f"stage settings: permissions must be an object, got {permissions!r}")
+    deny = permissions.get("deny")
+    if not isinstance(deny, list) or not deny:
+        raise FlowError(
+            f"stage settings: permissions.deny must be a non-empty list, got {deny!r}. "
+            "Claude Code discards a payload it cannot parse without saying so, "
+            "so a stage would run with no floor at all."
+        )
+    for rule in deny:
+        if not isinstance(rule, str) or not rule.endswith(")") or "(" not in rule:
+            raise FlowError(f"stage settings: {rule!r} is not a Tool(pattern) rule")
+        inner = rule[rule.index("(") + 1 : rule.rindex(")")]
+        if not rule.startswith("Bash(") and inner.startswith("/") and not inner.startswith("//"):
+            raise FlowError(
+                f"stage settings: {rule!r} is a bare absolute path, which Claude Code "
+                "accepts and then matches nothing with; use ~/ or a // prefix"
+            )
 
 
 def attended(task_id: str) -> bool:

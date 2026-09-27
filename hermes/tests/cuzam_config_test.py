@@ -36,6 +36,7 @@ from cuzam.config import (
 from cuzam.runner import (
     FlowError,
     STAGE_DENY,
+    assert_enforceable,
     machine_denials,
     preflight_provider,
     stage_settings,
@@ -627,11 +628,87 @@ class StageDenyFloorTests(unittest.TestCase):
         rules = machine_denials(
             {"CUZAM_STATE_HOME": "/work/state", "HERMES_HOME": "/work/hermes"}
         )
-        self.assertIn("Read(//work/hermes/.env)", rules)
+        self.assertIn("Read(//work/hermes/.env*)", rules)
         self.assertIn("Edit(//work/state/**)", rules)
         for rule in rules:
             self.assertNotIn(".cuzam", rule)
             self.assertNotIn("/.hermes", rule)
+
+    def test_a_relative_or_symlinked_home_is_resolved(self) -> None:
+        """`expanduser()` alone is not enough, and the failure is inert rules.
+
+        A relative `CUZAM_STATE_HOME` yields `Read(//state/*.db)`, which starts
+        with `//` and so slips past the bare-absolute guard while matching
+        nothing. And on macOS `/tmp` and `/var` are symlinks, so a home under
+        either produces rules that do not match the physical path — the same
+        defect as the `$TMP` one fixed in the migration test.
+        """
+        for rule in machine_denials({"CUZAM_STATE_HOME": "state", "HERMES_HOME": "h"}):
+            inner = rule[rule.index("(") + 1 : rule.rindex(")")]
+            self.assertTrue(Path(inner.lstrip("/")).is_absolute() or inner.startswith("//"))
+            self.assertTrue(inner.startswith("//"), rule)
+        under_tmp = machine_denials({"CUZAM_STATE_HOME": "/tmp/s", "HERMES_HOME": "/tmp/h"})
+        # /tmp is a symlink to /private/tmp on macOS; the rules must name the
+        # path the tools will actually see.
+        if Path("/tmp").is_symlink():
+            self.assertTrue(any("/private/tmp/" in rule for rule in under_tmp), under_tmp[:2])
+
+    def test_the_sqlite_sidecars_are_covered(self) -> None:
+        """The WAL is not a detail: it carries recently committed pages.
+
+        Both stores run `PRAGMA journal_mode=WAL`, and `~/.cuzam` holds
+        `events.db-wal` and `events.db-shm` right now — neither matched by
+        `*.db`, so the content the floor claims to deny was readable beside it.
+        """
+        rules = machine_denials({"CUZAM_STATE_HOME": "/work/state", "HERMES_HOME": "/w/h"})
+        for glob in ("*.db", "*.db-wal", "*.db-shm", "*.sqlite*"):
+            self.assertIn(f"Read(//work/state/{glob})", rules)
+
+    def test_hermes_secret_backups_and_auth_are_covered(self) -> None:
+        """Measured against the real directory, which is why it is not `.env`.
+
+        `~/.hermes` holds `.env.bak-2026-08-31-loopmodel` and
+        `.env.env.bak-2026-08-29` — the same secrets, matched by neither an
+        exact `.env` rule. It also holds `auth.json`, which this floor's own
+        docstring and the spec both claimed was covered while nothing named it.
+        """
+        rules = machine_denials({"CUZAM_STATE_HOME": "/w/s", "HERMES_HOME": "/work/hermes"})
+        self.assertIn("Read(//work/hermes/.env*)", rules)
+        self.assertIn("Read(//work/hermes/auth.json)", rules)
+        for glob in ("*credential*", "oauth*", "*.key", "*.pem"):
+            self.assertIn(f"Read(//work/hermes/{glob})", rules)
+
+    def test_an_unparseable_payload_is_refused_at_the_spawn_site(self) -> None:
+        """Claude Code discards a payload it cannot parse, in silence.
+
+        Measured on 2.1.283: `deny` as a string rather than a list starts
+        normally, exits 0, warns about nothing, and reads the file. So the whole
+        floor can vanish from a typo while every argv assertion still passes.
+        Failing loudly here is the cheap half of the answer;
+        `deny_floor_canary_test.py` is the half that proves a real refusal.
+        """
+        with self.assertRaises(FlowError):
+            assert_enforceable({"permissions": {"deny": "Read(x)"}})
+        with self.assertRaises(FlowError):
+            assert_enforceable({"permissions": {"deny": []}})
+        with self.assertRaises(FlowError):
+            assert_enforceable({"permissions": []})
+        with self.assertRaises(FlowError):
+            assert_enforceable({"permissions": {"deny": ["Read(/abs/x/**)"]}})
+        with self.assertRaises(FlowError):
+            assert_enforceable({"permissions": {"deny": ["not a rule"]}})
+        # And the real one passes.
+        assert_enforceable(stage_settings())
+
+    def test_env_rules_reach_nested_paths_in_both_directions(self) -> None:
+        """`Edit(.env)` was project-root only while `Read(**/.env)` was not.
+
+        A stage could overwrite `packages/api/.env` in a monorepo. It mirrored
+        the committed file, which is wrong there too.
+        """
+        self.assertIn("Read(**/.env)", STAGE_DENY)
+        self.assertIn("Edit(**/.env)", STAGE_DENY)
+        self.assertNotIn("Edit(.env)", STAGE_DENY)
 
     def test_one_home_for_both_does_not_repeat_a_rule(self) -> None:
         one = machine_denials(
@@ -650,7 +727,7 @@ class StageDenyFloorTests(unittest.TestCase):
         """
         rules = machine_denials({"HERMES_HOME": "/work/hermes"})
         self.assertNotIn("Read(//work/hermes/**)", rules)
-        self.assertIn("Read(//work/hermes/.env)", rules)
+        self.assertIn("Read(//work/hermes/.env*)", rules)
         self.assertIn("Read(//work/hermes/**/*.db)", rules)
 
     def test_the_committed_env_template_stays_reachable(self) -> None:
@@ -666,7 +743,10 @@ class StageDenyFloorTests(unittest.TestCase):
         self.assertNotIn("Read(**/.env.*)", STAGE_DENY)
         self.assertNotIn("Edit(.env.*)", STAGE_DENY)
         self.assertIn("Read(**/.env)", STAGE_DENY)
-        self.assertIn("Read(**/.env.local)", STAGE_DENY)
+        # The uncommitted environment names are covered by name, so the
+        # template stays reachable without a blanket glob.
+        for name in ("local", "production", "staging", "development", "test"):
+            self.assertIn(f"Read(**/.env.{name})", STAGE_DENY)
 
     def test_the_preflight_probe_carries_the_floor(self) -> None:
         """The cheapest place the payload is exercised at all.
@@ -738,11 +818,27 @@ class StageDenyFloorTests(unittest.TestCase):
         # One deliberate divergence, with its reason. `.env.*` wholesale blocks
         # the committed template a stage adding a secret has to update, and
         # protects nothing that exists in a worktree, since real `.env.*` files
-        # are not committed. The narrower `.env.local` forms are in the floor.
+        # are not committed. The specific environment names are in the floor.
         # See `test_the_committed_env_template_stays_reachable`.
         DELIBERATE = {"Read(**/.env.*)", "Edit(.env.*)"}
 
-        missing = discovered - set(STAGE_DENY) - DELIBERATE
+        # And rules the floor states more broadly. Exact-string comparison would
+        # otherwise demand a redundant narrow rule beside its own superset: the
+        # committed file's `Edit(.env)` is project-root only, and the floor
+        # covers nested paths as well, which is strictly more.
+        COVERED_BY = {"Edit(.env)": "Edit(**/.env)"}
+        for narrow, wide in COVERED_BY.items():
+            self.assertIn(
+                wide, STAGE_DENY,
+                f"{narrow} is excused because {wide} covers it, and it does not exist",
+            )
+
+        # And what this test CANNOT say, stated so nobody reads more into a
+        # green: the criterion is about the settings Cuzam's payload displaces,
+        # which are the *target* repository's and unknowable here. Passing means
+        # the floor covers this repository's committed rules, not that
+        # `--restricted` will be safe in any other checkout.
+        missing = discovered - set(STAGE_DENY) - DELIBERATE - set(COVERED_BY)
         self.assertEqual(
             missing, set(),
             f"the discovered settings deny these and the stage floor does not: "

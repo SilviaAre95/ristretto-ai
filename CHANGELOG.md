@@ -13,17 +13,23 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - **Every coding stage now carries a deny floor Cuzam supplies.** A staged
-  `claude` stage is started with `--settings` holding a `permissions.deny` list:
-  credential directories, `.env` files in the worktree, Cuzam's and Hermes'
-  state homes, `sudo`, `rm -rf`, `chmod 777`, force-push, `git reset --hard`,
-  and edits to `.git`. Until now the repository being worked on decided its own
-  session's permissions — Claude Code discovers `.claude/settings.json` from the
-  checkout, so a target repo could ship a wide `permissions.allow` and widen the
-  session Cuzam started. `--settings` is additive and a deny rule beats an allow
-  rule from any source, so the floor holds without displacing anything the
-  target repo set. A denied call is also refused outright instead of queued at
-  the permission broker, so a stage no longer spends the hour waiting on
-  approvals that were only ever going to be refusals.
+  `claude` stage and the provider preflight probe are started with `--settings`
+  holding a `permissions.deny` list: credential directories, `.env` files in the
+  worktree, the secrets and databases in Cuzam's and Hermes' state homes,
+  `sudo`, `rm -rf`, `chmod 777`, force-push, `git reset --hard`, and edits to
+  `.git`. `--settings` is additive and a deny rule beats an allow rule from any
+  source, so the floor holds without displacing anything the target repository
+  set. A denied call is refused outright instead of queued at the permission
+  broker, so a stage no longer spends the hour waiting on approvals that were
+  only ever going to be refusals.
+
+  **The settings-provenance part of that is worth less than it first appeared,
+  and the claim is corrected here rather than left to be discovered.** A
+  workspace Claude Code has never been trusted in has its `permissions.allow`
+  entries ignored anyway, with a warning naming them — so for a freshly cut
+  worktree the "a target repo widens the session" route was already closed by
+  the trust gate. The floor still matters where trust exists, and the
+  refusal-instead-of-approval saving does not depend on trust at all.
 
   Three limits, stated because the rules look like they might cover them.
   `cat` is on the read-only allowlist by design, so a read through Bash is not
@@ -32,6 +38,17 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   approvals store is reachable the same way. And `classic` gets no floor,
   because `run-loop.sh` deliberately cannot read the configuration and a copy of
   the list in bash would be a second place holding one fact.
+
+  **Proven by a refusal, not by the rules being present.** A payload Claude Code
+  cannot parse is discarded *in silence* — `deny` as a string rather than a list
+  starts normally, exits 0, warns about nothing and reads the file — so the
+  whole floor can vanish from a typo while every test asserting the JSON is on
+  the argv still passes. Three findings in this change had that shape, and they
+  share one cause: nothing proved a denial happens. So the payload is validated
+  at the spawn site, and `deny_floor_canary_test.py` runs a real `claude`
+  against a real canary and requires the refusal, with a control that must read
+  the same file when the rules are empty. Opt-in via `CUZAM_LIVE_CANARY=1`,
+  because it spends model calls; run it before changing the rules.
 
   Measured against the CLI rather than assumed, and it changed the rules:
   `Read(~/x/**)`, `Read(//abs/x/**)` and bare relative forms all deny, while

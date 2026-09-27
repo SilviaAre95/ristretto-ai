@@ -27,6 +27,11 @@ acceptance_criteria:
     widen the session past it
   - No path rule is a bare absolute path, which Claude Code accepts and then
     matches nothing with
+  - The floor is proven in force by a refusal, not by its rules appearing on the
+    argv: a real `claude` refuses a real read under a denied path, and the
+    control case with no rules reads the same file
+  - A settings payload Claude Code would discard fails at the spawn site rather
+    than degrading to no floor
   - No credential is reachable as a path in any stage's scope; model and
     publishing credentials arrive as environment
   - No stage's scope contains a credential directory; the ability to push and
@@ -59,7 +64,15 @@ test_plan:
     runs `claude` without it."
   - "Settings provenance: give a fixture repository a hostile
     `.claude/settings.json` with a wide `permissions.allow`, run a staged
-    stage against it, and assert the session's effective settings are Cuzam's."
+    stage against it, and assert the session's effective settings are Cuzam's.
+    Note that the workspace must be *trusted* for this to test anything — an
+    untrusted one has its allow entries ignored regardless."
+  - "Deny floor, live: `CUZAM_LIVE_CANARY=1 python -m unittest
+    hermes.tests.deny_floor_canary_test`. Each case writes a canary under a
+    configured state home and requires that the shipped payload refuses the
+    read AND that an empty deny list permits it. Run before merging any change
+    to `STAGE_DENY`, `machine_denials` or `stage_settings`. Prove it bites by
+    removing the `*.db-wal` glob and watching the sidecar case fail."
   - "End to end, the incident: drive a classic run on an issue whose context
     exists only outside the scope. Require that the run finishes, that it did not
     spend its hour at prompts, and that the out-of-scope path was never read.
@@ -208,9 +221,11 @@ The operator's vault is **not** denied. That was decided on 2026-09-26 against
 the draft in front of it: a stage may write there, and the vault update a run
 makes when work ships is wanted. The shipped deny floor therefore carries no
 vault rule, and whether the OS layer grants it read-write or read-only is an
-open question below rather than settled here. And every credential directory — `~/.ssh`, `~/.config/gh`,
-`~/.gitconfig` and `~/.claude/.credentials.json` are outside a `pr` stage's
-scope as much as a `plan` stage's.
+open question below rather than settled here.
+
+**And every credential directory.** `~/.ssh`, `~/.config/gh`, `~/.gitconfig`
+and `~/.claude/.credentials.json` are outside a `pr` stage's scope as much as a
+`plan` stage's.
 
 Denying `~/.gitconfig` takes the commit identity with it, and nothing in Cuzam
 sets one — this checkout happens to carry a local identity, but a repository
@@ -388,6 +403,14 @@ pure tightening with nothing given up, which is what lets it go first:
   beats an allow rule whichever source it came from. So the floor holds against
   a target repository's committed settings without displacing them, and the
   criterion about displacement is satisfied in advance rather than retired.
+- **How much the provenance argument is worth was measured, and it is less than
+  first written.** A workspace Claude Code has never been trusted in has its
+  `permissions.allow` entries *ignored*, with a warning naming them — so for a
+  freshly cut worktree the allow-widening route is already closed by the trust
+  gate. It still matters where trust exists: the primary checkout is trusted, a
+  worktree path becomes trusted the moment anyone runs Claude Code in it
+  interactively, and a repository's own `deny` applies either way. The refusal-
+  instead-of-approval saving does not depend on trust at all.
 - `--restricted` is what drops discovered settings, and the answer this spec
   gives for the hooks a stage then loses is the OS layer. Passing it before the
   kernel layer exists would trade away the only hard enforcement boundary a
@@ -408,6 +431,20 @@ matching nothing. And `**` is rooted at the project directory, so
 looks correct in a diff and passes any test asserting it is present, so the
 acceptance criterion above is about the *form* of the rule and
 `test_no_rule_is_a_bare_absolute_path` enforces it.
+
+**A payload the CLI cannot parse is discarded in silence, which is the sharpest
+version of the same problem.** Measured: `deny` given as a string rather than a
+list starts normally, exits 0, warns about nothing, and reads the file. So the
+entire floor can vanish from a typo while every test asserting the JSON is on
+the argv still passes.
+
+Three findings in this one change had that shape — the inert absolute path, the
+hardcoded state homes, and this — and they share one cause: **nothing proved a
+denial actually happens.** The answer is not a longer rule list. It is
+`assert_enforceable` at the spawn site for the shapes that are knowable
+cheaply, and a live canary test that requires a real `claude` to refuse a real
+read for the rest. An acceptance criterion says so, and the test plan carries
+it.
 
 **Which is why the state homes are resolved, not written down.** Both are
 configurable, so `~/.cuzam` and `~/.hermes` in a rule would deny two empty
