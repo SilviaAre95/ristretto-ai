@@ -140,6 +140,9 @@ cuzam configure \
 
 These values are non-secret and live only in the user configuration. Provider
 tokens and `SLACK_ALLOWED_USERS` belong in `~/.hermes/.env`, never here.
+There is also an optional override slot beside the user configuration, read
+*first* and winning on any name it sets. `docs/getting-started.md` § "Where secrets are
+read from" has the precedence and the failure it causes when it is forgotten.
 Custom cloud providers must reference tokens through `auth_token_env`; literal
 credentials in `cuzam.yaml` are rejected.
 

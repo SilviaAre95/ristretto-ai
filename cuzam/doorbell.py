@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from . import events
-from .config import ConfigError, instance_value, load_config
+from .config import ConfigError, hermes_home, instance_value, load_config
 
 # What is worth interrupting someone for. Stage starts and passes are
 # deliberately absent: a run emits six of each, and a channel that pings
@@ -148,7 +148,11 @@ def deliver(text: str, channel: str, timeout: int = 60) -> bool:
             text=True,
             check=False,
             timeout=timeout,
-            env={**_env(), "HERMES_HOME": str(Path.home() / ".hermes")},
+            # hermes_home(), not ~/.hermes: this was the one reader left outside
+            # the contract hermes_home()'s docstring states, so on a machine
+            # setting CUZAM_HERMES_HOME the send failed and the milestone was
+            # dropped silently — a doorbell that does not ring.
+            env={**_env(), "HERMES_HOME": str(hermes_home())},
         )
     except (OSError, subprocess.SubprocessError) as exc:
         print(f"doorbell: send failed: {exc}")

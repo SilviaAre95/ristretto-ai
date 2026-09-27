@@ -38,6 +38,7 @@ elif [ "$("$venv/bin/python" -c 'import sys; print(f"{sys.version_info.major}.{s
   exit 1
 fi
 
+# RISTRETTO_* is the pre-rename spelling, read for one release. Drop in 0.3.0.
 if [ "${CUZAM_UPGRADE_PIP:-${RISTRETTO_UPGRADE_PIP:-0}}" = "1" ]; then
   "$venv/bin/python" -m pip install --upgrade pip
 fi

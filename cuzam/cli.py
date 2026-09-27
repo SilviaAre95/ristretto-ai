@@ -49,7 +49,9 @@ def parser() -> argparse.ArgumentParser:
     )
 
     migrate_command = commands.add_parser(
-        "migrate", help="drop project-layer copies from the user configuration"
+        "migrate",
+        help="drop project-layer copies from the user configuration "
+             "(NOT the Ristretto->Cuzam rename; that is `make migrate-cuzam`)",
     )
     migrate_command.add_argument(
         "--force", action="store_true", help="rewrite the file; without this it only reports"

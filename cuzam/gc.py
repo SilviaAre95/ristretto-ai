@@ -32,7 +32,7 @@ TERMINAL_STATES = frozenset({"done", "archived"})
 # that looks exactly like the guard working. Drop both in 0.3.0.
 IGNORED_DIRT = (
     "\\.cuzam/", "\\.DS_Store", "\\.cc-zam-session",
-    "\\.ristretto/", "\\.cc-ris-session",
+    "\\.ristretto/", "\\.cc-ris-session",  # drop in 0.3.0
 )
 
 

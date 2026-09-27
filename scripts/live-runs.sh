@@ -68,6 +68,7 @@ live="$(printf '%s\n' "$listing" | awk '
     for (i = 2; i < NF; i++) {
       if ($i == "-c") break
       if ($i != "-m") continue
+      # ristretto.runner: drop in 0.3.0, once no run can predate the rename
       if ($(i + 1) == "cuzam.runner" || $(i + 1) == "ristretto.runner") {
         print
         break

@@ -17,6 +17,8 @@ if [[ ! "$BOARD" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
   exit 2
 fi
 # Resolved the way run-loop.sh writes it and install-hermes.sh installs into.
+# RISTRETTO_HERMES_HOME is the rename shim; HERMES_HOME is Hermes' own and
+# stays. Drop the middle one in 0.3.0.
 HERMES_DIR="${CUZAM_HERMES_HOME:-${RISTRETTO_HERMES_HOME:-${HERMES_HOME:-$HOME/.hermes}}}"
 REC="$HERMES_DIR/kanban/$BOARD/pids/$TASK_ID.json"
 

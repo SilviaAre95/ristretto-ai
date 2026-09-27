@@ -139,6 +139,8 @@ fi
 # reader looks: reap.sh, zam-stop.sh and cuzam/runs.py all resolve it this way.
 # It was `$HOME/.hermes` in four places, which agreed until one of them had to
 # change.
+# RISTRETTO_HERMES_HOME is the rename shim; HERMES_HOME is Hermes' own and
+# stays. Drop the middle one in 0.3.0, with RIS_PYTHON below.
 HERMES_DIR="${CUZAM_HERMES_HOME:-${RISTRETTO_HERMES_HOME:-${HERMES_HOME:-$HOME/.hermes}}}"
 PID_DIR="$HERMES_DIR/kanban/$BOARD/pids"
 REC="$PID_DIR/$TASK_ID.json"

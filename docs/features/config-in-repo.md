@@ -3,13 +3,14 @@ id: config-in-repo
 title: Config In Repo
 status: implemented  # proposed | in-progress | implemented | deprecated
 created_at: 2026-07-05
-last_modified: 2026-09-24
+last_modified: 2026-09-27
 owner: project
 depends_on: []
 acceptance_criteria:
   - Public Hermes baselines, skills, scripts, and examples have canonical sources under `hermes/`
   - No unattended execution path resolves to the working checkout
   - "`~/.hermes/.env` is never committed"
+  - "Both secrets files are documented with their precedence: `~/.config/cuzam/env` is read before `~/.hermes/.env` and the first writer wins"
   - "`git grep xoxb-` is clean"
 non_goals:
   - NOT committing secrets
@@ -36,7 +37,7 @@ field-level differences for those that diverge, and rewrites the file with
 A difference cannot distinguish a deliberate change from an out-of-date copy,
 so it is reported rather than guessed at.
 
-`hermes/SOUL.md`, `hermes/config.yaml`, skills, scripts, and `jobs.example.json` are public inputs. Existing user config and persona are never overwritten. Secrets remain only in `~/.hermes/.env`. Live cron state is never tracked.
+`hermes/SOUL.md`, `hermes/config.yaml`, skills, scripts, and `jobs.example.json` are public inputs. Existing user config and persona are never overwritten. Secrets remain in `~/.hermes/.env`, or in the optional `~/.config/cuzam/env` override slot which `load_env` reads first — never in the repository. Both are documented with their precedence in `docs/getting-started.md`, because first-writer-wins across two files makes a stale value in the less-known one look exactly like a bad credential. Live cron state is never tracked.
 
 Three delivery mechanisms, chosen by what happens if the file changes under something already running: skills and plugins are **linked** as managed code, because they are read inside a turn someone is watching and drift from the CLI is the risk; cron scripts and the agent hook are **copied**, because Hermes requires scripts inside `~/.hermes/scripts` and fingerprints an approved hook; and the `loop-runner` skill is **pinned**, linked to `~/.cuzam/runtime` rather than the working checkout, because `run-loop.sh` is the classic loop and runs unattended for an hour. README has the diagram.
 

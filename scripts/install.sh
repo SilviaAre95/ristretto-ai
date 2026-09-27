@@ -3,12 +3,16 @@
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The RISTRETTO_* spellings below are pre-rename names, read for one release
+# so an environment exported before 2026-09-24 keeps working. Drop them all
+# in 0.3.0 — including CUZAM_SKIP_SETUP's fallback further down.
 config_dir="${CUZAM_CONFIG_DIR:-${RISTRETTO_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/cuzam}}"
-bin_dir="${CUZAM_BIN_DIR:-${RISTRETTO_BIN_DIR:-$HOME/.local/bin}}"
+bin_dir="${CUZAM_BIN_DIR:-${RISTRETTO_BIN_DIR:-$HOME/.local/bin}}"  # drop in 0.3.0
 config="$config_dir/config.yaml"
 link="$bin_dir/cuzam"
 target="$repo/.venv/bin/cuzam"
 
+# drop the RISTRETTO_ fallback in 0.3.0
 if [ "${CUZAM_SKIP_SETUP:-${RISTRETTO_SKIP_SETUP:-0}}" != "1" ]; then
   bash "$repo/scripts/setup-dev.sh"
 fi

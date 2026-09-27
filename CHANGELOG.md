@@ -10,6 +10,24 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`CUZAM_CONFIG_DIR` reached the installers and not the package.**
+  `install.sh`, `uninstall.sh` and `migrate-cuzam.sh` all resolve
+  `${CUZAM_CONFIG_DIR:-${RISTRETTO_CONFIG_DIR:-${XDG_CONFIG_HOME:-…}/cuzam}}`,
+  while Python honoured only `XDG_CONFIG_HOME` — so on a machine setting it the
+  installer wrote a user configuration that no reader ever opened, and the
+  symptom was the shipped defaults being used while a perfectly good config sat
+  on disk. Ported faithfully rather than redesigned: `config.config_dir()` is
+  the same chain in the same order, and `user_config_path()`,
+  `default_config_path()` and the secrets override slot all go through it. This
+  is the same installer/package split the `hermes_home()` fix below is about,
+  found while writing the contract down.
+
+- **The doorbell hardcoded `~/.hermes`.** It was the one reader left outside
+  that contract, so on a machine setting `CUZAM_HERMES_HOME` the `hermes send`
+  failed and the milestone was dropped — a doorbell that does not ring.
+
 ### Added
 
 - **Every coding stage now carries a deny floor Cuzam supplies.** A staged
@@ -430,13 +448,18 @@ first. Once, in this order:
 
 ```
 git switch main && git pull
-make migrate          # moves state, unlinks the old names, relabels launchd
+make migrate-cuzam    # moves state, unlinks the old names, relabels launchd
 make install-runtime  # rebuilds ~/.cuzam/runtime; the old one is deleted, never moved
 make update
 ```
 
-`make migrate` is idempotent and refuses while a run is live. Three things it
-cannot do for you:
+`make migrate-cuzam`, not `make migrate`, and not `cuzam migrate`. The target
+is named after its script because `cuzam migrate` is a different command that
+shares only the verb — it reports and adopts config-layer drift between the
+shipped configuration and your copy, and it does not rename anything.
+
+`make migrate-cuzam` is idempotent and refuses while a run is live. Three
+things it cannot do for you:
 
 - **The microphone grant.** The voice app's bundle id changed
   (`com.ristretto.nemo` -> `com.cuzam.zam`), which revokes its TCC grant.

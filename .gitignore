@@ -30,6 +30,13 @@ docs/04-hermes-config-in-repo.md
 docs/05-durable-work-runbook.md
 docs/features/*.CHANGELOG.md
 
+# The secrets override slot, when it lands here. `user_env_path()` derives it
+# from `user_config_path()`, so `CUZAM_CONFIG=$repo/cuzam.yaml` — which
+# scripts/check.sh sets on every run — puts it at `<repo>/env`. Nothing in
+# scan-secrets.sh matches a Linear key, so without this line a credential
+# dropped there would pass both gates.
+/env
+
 # Slack/Linear tokens if ever dropped locally
 *xoxb-*
 *xapp-*

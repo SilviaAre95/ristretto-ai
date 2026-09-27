@@ -84,13 +84,34 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
-def default_config_path(environ: Mapping[str, str] | None = None) -> Path:
+def config_dir(environ: Mapping[str, str] | None = None) -> Path:
+    """The directory the installers write the user configuration into.
+
+    `${CUZAM_CONFIG_DIR:-${RISTRETTO_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/cuzam}}`,
+    which is what `install.sh`, `uninstall.sh` and `migrate-cuzam.sh` resolve.
+
+    Python honoured only `XDG_CONFIG_HOME` until now, so on a machine setting
+    `CUZAM_CONFIG_DIR` the installer wrote a configuration that no reader here
+    ever looked at — the same installer/package split as the one `hermes_home()`
+    documents, with the same symptom of a path built on the wrong answer. Ported
+    faithfully rather than redesigned: same order, same fallbacks.
+
+    `RISTRETTO_CONFIG_DIR` reaches this through `env_value`, so it announces its
+    own deprecation. Drop it in 0.3.0.
+    """
     env = os.environ if environ is None else environ
-    configured = env_value("CUZAM_CONFIG", None, environ)
+    configured = str(env_value("CUZAM_CONFIG_DIR", "", environ) or "").strip()
     if configured:
         return Path(configured).expanduser()
     xdg = Path(env.get("XDG_CONFIG_HOME", Path.home() / ".config"))
-    installed = xdg / "cuzam" / "config.yaml"
+    return xdg / "cuzam"
+
+
+def default_config_path(environ: Mapping[str, str] | None = None) -> Path:
+    configured = env_value("CUZAM_CONFIG", None, environ)
+    if configured:
+        return Path(configured).expanduser()
+    installed = config_dir(environ) / "config.yaml"
     if installed.exists():
         return installed
     source_tree = repo_root() / "cuzam.yaml"
@@ -100,12 +121,10 @@ def default_config_path(environ: Mapping[str, str] | None = None) -> Path:
 
 
 def user_config_path(environ: Mapping[str, str] | None = None) -> Path:
-    env = os.environ if environ is None else environ
     configured = env_value("CUZAM_CONFIG", None, environ)
     if configured:
         return Path(configured).expanduser()
-    xdg = Path(env.get("XDG_CONFIG_HOME", Path.home() / ".config"))
-    return xdg / "cuzam" / "config.yaml"
+    return config_dir(environ) / "config.yaml"
 
 
 def user_env_path(environ: Mapping[str, str] | None = None) -> Path:
@@ -113,21 +132,48 @@ def user_env_path(environ: Mapping[str, str] | None = None) -> Path:
     return user_config_path(environ).parent / "env"
 
 
-# The environment variables `install-hermes.sh` and `link-loop-runner.sh`
-# resolve, in their order. Python honoured only the last of the three, so the
-# installer and the package disagreed about where Hermes lives on any machine
-# that set one of the others — and a path built on the wrong answer fails as
-# "not installed" rather than as a misconfiguration.
-HERMES_HOME_VARS = ("CUZAM_HERMES_HOME", "RISTRETTO_HERMES_HOME", "HERMES_HOME")
-
-
 def hermes_home(environ: Mapping[str, str] | None = None) -> Path:
-    """Where Hermes keeps its own state, resolved the way the installers do."""
+    """Where Hermes keeps its own state, resolved the way the installers do.
+
+    The three names, in the installers' order: `CUZAM_HERMES_HOME`, then its
+    pre-rename spelling, then `HERMES_HOME`. Python honoured only the last of
+    them once — so the installer and the package disagreed about where Hermes
+    lives on any machine that set one of the others, and a path built on the
+    wrong answer fails as "not installed" rather than as a misconfiguration.
+
+    **Changing the set here means changing every script that resolves the same
+    chain.** Not listed, because a list drifts and an earlier version of this
+    docstring named three of them when there were eight —
+    `grep -rn 'RISTRETTO_HERMES_HOME' scripts hermes` is the answer that stays
+    true. It used to be stated as a module constant
+    beside this function, which read as the authoritative version of that
+    contract while nothing consulted it — so editing the constant changed
+    nothing at all, which is the same silent disagreement one level up.
+
+    `env_value` for the renamed pair, so the legacy spelling announces its own
+    deprecation; **drop it in 0.3.0**, at which point this is `env.get` on the
+    new name with `HERMES_HOME` behind it and nothing else changes here.
+    `HERMES_HOME` is Hermes' own name, so it goes through neither.
+
+    One deliberate divergence from those scripts, and it has a cost worth
+    naming. `${A:-${B:-...}}` falls through on an empty value; `env.get` treats
+    an empty `CUZAM_HERMES_HOME` as *set*, because exporting it empty to mean
+    "use the default" should not then be overridden by a stale
+    `RISTRETTO_HERMES_HOME` beside it. So on an environment holding an empty
+    new name AND a populated old one, the shells resolve the old path and this
+    resolves `~/.hermes` — and the symptom is `dash/control.py` failing to find
+    `zam-stop.sh` and reporting "not installed". The old name on its own, which
+    is what the shim exists for, works in both. `env.py`'s semantics are the
+    documented ones and this follows them rather than the shell's.
+    """
     env = os.environ if environ is None else environ
-    for name in HERMES_HOME_VARS:
-        value = str(env.get(name) or "").strip()
-        if value:
-            return Path(value).expanduser()
+    renamed = str(env_value("CUZAM_HERMES_HOME", "", env) or "").strip()
+    if renamed:
+        return Path(renamed).expanduser()
+    # Hermes' own name, so no shim and no notice.
+    own = str(env.get("HERMES_HOME") or "").strip()
+    if own:
+        return Path(own).expanduser()
     return Path.home() / ".hermes"
 
 

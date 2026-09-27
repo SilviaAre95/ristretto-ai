@@ -34,7 +34,7 @@ cuzam-run-flow = "cuzam.runner:main"
 # removes the ~/.local/bin link; these are what keep PATH working until the
 # next install. Remove after 0.3.0.
 ristretto = "cuzam.cli:main"
-nemo = "cuzam.cli:main"
+nemo = "cuzam.cli:main"  # drop in 0.3.0
 
 [tool.setuptools.packages.find]
 include = ["cuzam*"]
