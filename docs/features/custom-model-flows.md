@@ -307,17 +307,23 @@ so must name it through `auth_token_env`.
   unconfigurable without either declaring it `local` — which would be a lie that
   costs it any mutating stage — or putting the literal string `ollama` in an
   environment variable.
-- Why does the assistant loop not need what every flow stage needs? It sets
-  `ANTHROPIC_BASE_URL` for a provider with its own endpoint and passes none of
-  `--strict-mcp-config`, `--add-dir` or
-  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`. The shipped default hides this:
-  `instance.assistant_provider` is unset, so the loop runs on `claude`, the
-  vendor endpoint, and never reaches the configuration described as hanging.
-  Point the key at a non-vendor provider and it does — and where that has been
-  tried it has not hung. So either the hang needs a narrower description than
-  "any non-vendor endpoint", or the assistant loop is one Claude Code release
-  away from the failure that cost `tier1` an hour, and the shipped default is
-  what has been keeping the question quiet rather than an answer to it.
+- **Answered in part, 2026-09-27.** The question was why the assistant loop
+  needs none of what every flow stage gets. It did need some of it. Dogfooding
+  showed the loop inheriting the caller's working directory, and with it that
+  directory's `CLAUDE.md` and Claude Code project memory: asked a memory
+  question from inside this repository it answered from the inherited context
+  and never called its vault tool. It now pins its own working directory and
+  passes `--strict-mcp-config`, so the tool table is the capability boundary
+  rather than whatever the environment offers. `--add-dir` remains unpassed and
+  unneeded, because the loop gives the model no file tools of its own.
+  What is still open is the hang: the shipped default hides it, since
+  `instance.assistant_provider` is unset and the loop runs on `claude`, the
+  vendor endpoint, where no base URL is overridden. Point the key at a
+  non-vendor provider and the configuration described above is reached. So
+  either the hang needs a narrower description than "any non-vendor endpoint",
+  or the loop is one Claude Code release away from the failure that cost
+  `tier1` an hour — and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is the piece
+  that has not been settled either way.
 - Should a future schema version support conditional repair stages based on a
   machine-readable review result?
 - Which local API should the menu-bar editor use to queue and monitor flows?

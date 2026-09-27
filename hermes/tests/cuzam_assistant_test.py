@@ -77,11 +77,14 @@ class SafetyTest(unittest.TestCase):
     def test_empty_input_asks_for_input(self) -> None:
         self.assertFalse(loop.ask("   ").ok)
 
-    def test_a_failed_turn_still_returns_the_session(self) -> None:
+    def test_a_failed_turn_hands_back_no_session(self) -> None:
+        # This used to assert the opposite. That pinned the defect in #80: an
+        # id for a session `claude` may never have created, which a client
+        # stores and then --resumes forever. A failed turn now carries none.
         with mock.patch.object(subprocess, "run", side_effect=OSError("no claude")):
             turn = loop.ask("hi")
         self.assertFalse(turn.ok)
-        self.assertTrue(turn.session)
+        self.assertEqual(turn.session, "")
 
     def test_a_timeout_does_not_raise(self) -> None:
         with mock.patch.object(subprocess, "run", side_effect=subprocess.TimeoutExpired("claude", 180)):
@@ -190,12 +193,24 @@ class ConversationMemoryTest(unittest.TestCase):
         patcher = mock.patch.object(events, "state_home", return_value=self.dir)
         patcher.start(); self.addCleanup(patcher.stop)
 
-    def test_first_turn_is_new_and_the_same_key_resumes(self) -> None:
+    def test_reading_a_name_does_not_claim_it(self) -> None:
+        # _session_for used to WRITE the mapping before the turn ran, which is
+        # the live half of #80: a first turn that failed left the name pointing
+        # at a session that never existed, and every later turn --resumed
+        # nothing. Reading proposes; only a successful turn records.
         s1, new1 = loop._session_for("slack:C1")
-        s2, new2 = loop._session_for("slack:C1")
+        _s2, new2 = loop._session_for("slack:C1")
         self.assertTrue(new1)
+        self.assertTrue(new2, "reading a name must not record it")
+        self.assertFalse(self.dir.joinpath("conversations.json").exists())
+
+    def test_a_remembered_session_then_resumes(self) -> None:
+        s1, new1 = loop._session_for("slack:C1")
+        self.assertTrue(new1)
+        loop._remember_session("slack:C1", s1)
+        s2, new2 = loop._session_for("slack:C1")
+        self.assertEqual(s2, s1)
         self.assertFalse(new2)
-        self.assertEqual(s1, s2)
 
     def test_different_conversations_do_not_share_a_session(self) -> None:
         a, _ = loop._session_for("slack:C1")
@@ -253,6 +268,146 @@ class ProposeMergeTest(unittest.TestCase):
                 out = self._propose(empty)
                 self.assertFalse(out["ok"])
                 self.assertIn("No open PR", out["message"])
+
+
+class FleetCountTest(unittest.TestCase):
+    """Issue #82: the counts are for the whole fleet, the list is capped."""
+
+    class _Run:
+        def __init__(self, i, health):
+            self.issue_key, self.task_id = f"XARI-{i}", f"t_{i}"
+            self.project, self.status, self.stage = "p", "s", "build"
+            self.health = health
+
+    def test_a_live_run_past_the_cap_is_still_counted(self) -> None:
+        # The cap is 20. A live run at index 24 was invisible to the counts, so
+        # the assistant said "0 live" out of a total of 48 and was confidently
+        # wrong about the one thing the question asks.
+        runs = [self._Run(i, "done") for i in range(24)] + [self._Run(99, "running")]
+        with mock.patch("cuzam.runs.fleet", return_value=runs):
+            out = tools.fleet_status()
+        self.assertEqual(out["total"], 25)
+        self.assertEqual(out["live"], 1)
+        self.assertEqual(len(out["runs"]), tools.MAX_RUNS_SHOWN)
+
+    def test_truncation_is_stated_so_the_slice_is_not_read_as_the_fleet(self) -> None:
+        runs = [self._Run(i, "done") for i in range(25)]
+        with mock.patch("cuzam.runs.fleet", return_value=runs):
+            out = tools.fleet_status()
+        self.assertIn("runs_truncated", out)
+        self.assertIn("25", out["runs_truncated"])
+
+    def test_a_small_fleet_says_nothing_about_truncation(self) -> None:
+        runs = [self._Run(i, "running") for i in range(3)]
+        with mock.patch("cuzam.runs.fleet", return_value=runs):
+            out = tools.fleet_status()
+        self.assertNotIn("runs_truncated", out)
+        self.assertEqual(out["live"], 3)
+
+
+class SessionLifecycleTest(unittest.TestCase):
+    """Issue #80: a session is recorded only once a turn has established it."""
+
+    def setUp(self) -> None:
+        import tempfile
+        from cuzam import events
+        self.dir = Path(tempfile.mkdtemp())
+        patcher = mock.patch.object(events, "state_home", return_value=self.dir)
+        patcher.start(); self.addCleanup(patcher.stop)
+        cfgp = mock.patch.object(loop, "load_config", return_value=({}, None))
+        cfgp.start(); self.addCleanup(cfgp.stop)
+        prov = mock.patch.object(loop, "resolved_provider",
+                                 return_value={"runner": "claude-code", "model": "sonnet"})
+        prov.start(); self.addCleanup(prov.stop)
+
+    def _store(self) -> dict:
+        import json
+        path = self.dir / "conversations.json"
+        return json.loads(path.read_text()) if path.is_file() else {}
+
+    def test_a_failed_first_turn_does_not_wedge_the_conversation(self) -> None:
+        # The live bug: one failed !zam mapped a Slack channel to a session
+        # claude never created, and nothing pruned it, so that channel failed
+        # forever. Nothing may be recorded for a turn that did not happen.
+        dead = subprocess.CompletedProcess([], 1, stdout="", stderr="claude exploded")
+        with mock.patch.object(subprocess, "run", return_value=dead):
+            turn = loop.ask("hello", conversation="slack:C123")
+        self.assertFalse(turn.ok)
+        self.assertEqual(self._store(), {}, "a failed turn must record nothing")
+
+    def test_a_successful_turn_records_the_thread(self) -> None:
+        good = subprocess.CompletedProcess([], 0, stdout="hello back", stderr="")
+        with mock.patch.object(subprocess, "run", return_value=good):
+            turn = loop.ask("hello", conversation="slack:C123")
+        self.assertTrue(turn.ok)
+        self.assertEqual(self._store().get("slack:C123"), turn.session)
+
+    def test_a_poisoned_store_heals_instead_of_failing_forever(self) -> None:
+        # Stores written before this fix exist on real machines. A resume that
+        # finds no conversation must recover once, not fail for good.
+        import json
+        (self.dir / "conversations.json").write_text(json.dumps({"slack:C9": "ghost-session"}))
+        calls = []
+
+        def fake_run(command, **_kw):
+            calls.append(command)
+            if "--resume" in command:
+                return subprocess.CompletedProcess(
+                    command, 1, stdout="",
+                    stderr="No conversation found with session ID: ghost-session")
+            return subprocess.CompletedProcess(command, 0, stdout="recovered", stderr="")
+
+        with mock.patch.object(subprocess, "run", side_effect=fake_run):
+            turn = loop.ask("still there?", conversation="slack:C9")
+        self.assertTrue(turn.ok, "a stale mapping must not fail the turn")
+        self.assertEqual(turn.text, "recovered")
+        self.assertIn("--resume", calls[0])
+        self.assertIn("--session-id", calls[1])
+        self.assertNotEqual(self._store().get("slack:C9"), "ghost-session")
+
+    def test_a_supplied_session_is_resumed_not_recreated(self) -> None:
+        seen = {}
+
+        def fake_run(command, **_kw):
+            seen["cmd"] = command
+            return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+
+        with mock.patch.object(subprocess, "run", side_effect=fake_run):
+            turn = loop.ask("go on", session="established-earlier")
+        self.assertTrue(turn.ok)
+        self.assertIn("--resume", seen["cmd"])
+        self.assertNotIn("--session-id", seen["cmd"])
+
+
+class WorkingDirectoryTest(unittest.TestCase):
+    """Issue #81: the loop's context is Zam's, not the caller's directory."""
+
+    def test_claude_does_not_run_in_the_callers_directory(self) -> None:
+        # Measured: run from inside this repo with no cwd, the model answered a
+        # memory question from the inherited CLAUDE.md and asserted nothing
+        # else was stored, while eight vault notes existed.
+        seen = {}
+
+        def fake_run(command, **kwargs):
+            seen["cwd"] = kwargs.get("cwd")
+            return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+
+        with mock.patch.object(loop, "load_config", return_value=({}, None)), \
+             mock.patch.object(loop, "resolved_provider",
+                               return_value={"runner": "claude-code", "model": "sonnet"}), \
+             mock.patch.object(subprocess, "run", side_effect=fake_run):
+            loop.ask("what is running?")
+        self.assertIsNotNone(seen["cwd"], "the loop must pin a working directory")
+        self.assertNotEqual(Path(seen["cwd"]).resolve(), Path.cwd().resolve())
+
+    def test_only_zams_own_mcp_server_is_used(self) -> None:
+        cmd, _e, _s = loop._command({"runner": "claude-code", "model": "sonnet"}, "hi", None)
+        self.assertIn("--strict-mcp-config", cmd)
+
+    def test_the_prompt_says_memory_is_only_what_a_tool_returned(self) -> None:
+        prompt = loop._system_prompt()
+        self.assertIn("search_memory", prompt)
+        self.assertIn("did not come from a tool", prompt)
 
 
 class SystemPromptSurvivesResumeTest(unittest.TestCase):
