@@ -43,8 +43,11 @@ providers:
     runner: claude-code
     model: haiku
   # The local brain: the MoE orchestrator served by Ollama on this machine,
-  # fast, 256k context. It is the target of instance.assistant_provider and
-  # does the bounded-transformation work — summarising, classifying, ranking.
+  # fast, 256k context. It does the bounded-transformation work — summarising,
+  # classifying, ranking. It is what instance.assistant_provider should be set
+  # to in order to keep Zam's own loop on this machine; the key is deliberately
+  # unset here, so that loop runs on `claude` until someone switches it. See
+  # docs/features/local-brain.md and docs/zam-roadmap.md Phase 1.
   # It is deliberately not given a mutating stage in any shipped flow.
   local-brain:
     runner: claude-code

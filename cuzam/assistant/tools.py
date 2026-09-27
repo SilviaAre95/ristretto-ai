@@ -110,11 +110,19 @@ def propose_merge(project: str = "", issue: str = "") -> dict[str, Any]:
         )
     except (OSError, subprocess.SubprocessError) as exc:
         return {"ok": False, "message": f"I couldn't reach GitHub: {exc}"}
+    # `--jq '.[0]'` prints the literal "null" when no PR matched, not an empty
+    # line, so a bare `if not line` never fired and `pr["number"]` raised a
+    # TypeError exactly where this message was meant to be returned. `launch.py`
+    # guards the same gh/--jq shape; see open_pull_request and the cases pinned
+    # in cuzam_launch_direct_test.py.
     line = (found.stdout or "").strip()
-    if not line:
-        return {"ok": False, "message": f"No open PR for {issue} (branch {branch}). Has the run finished?"}
     import json as _json
-    pr = _json.loads(line)
+    try:
+        pr = _json.loads(line) if line else None
+    except ValueError:
+        pr = None
+    if not isinstance(pr, dict) or not pr.get("number"):
+        return {"ok": False, "message": f"No open PR for {issue} (branch {branch}). Has the run finished?"}
     slug = _repo_slug(repo)
     record = actions.record_merge(issue, slug, pr["number"], branch, project=project)
     return {

@@ -13,6 +13,8 @@ acceptance_criteria:
     a local provider is a configuration change and not a code change
   - A named conversation continues across turns, so a surface can keep a
     thread without tracking a session id itself
+  - A caller that supplies a session id resumes that conversation rather than
+    colliding with it
   - The loop answers from its tools rather than from the model's guess - the
     fleet, and the vault, are read through tools
   - `propose_merge` records a pending approval naming one fixed PR number and
@@ -75,14 +77,18 @@ unset the provider is `claude`: the loop is cloud by default, and
 `local-brain`'s boundaries describe the Hermes orchestrator path rather than
 this one.
 
-Continuity has two shapes, because the surfaces differ. A caller that owns a
+Continuity exists on two of the four surfaces. A caller that hands over a
 durable name — the CLI with `--conversation`, the Slack plugin with the
-channel id — hands that name over and the loop maps it to a session it keeps
-on disk, so the thread survives across processes. A caller that owns a client
-session — the dashboard, the desktop face — hands back the session id from the
-previous turn. Both continue a conversation; they do not currently continue
-*the same* conversation, so a thread started on the face is not the thread
-Slack is holding.
+channel id — gets a thread: the loop maps that name to a session it keeps on
+disk, so the conversation survives across processes. They are separate
+threads, so what Slack is holding is not what the CLI is holding.
+
+**The dashboard and the desktop face have no continuity at all.** Both post
+`{message}` and nothing else — `dash/templates/fleet.html` ignores the
+`session` the endpoint returns, and `zam/Zam.swift` never reads or stores it —
+so every turn there is a fresh conversation that remembers nothing. The
+endpoint accepts a `session` and `loop.ask` takes the parameter, which is what
+makes this easy to misread as working; no client has ever sent one.
 
 The tools are the boundary, and they are the same boundary everywhere. The
 loop allowlists the whole table on every call, so there is no read-only slice
@@ -133,10 +139,12 @@ turn that wedges ends on a timeout for the same reason.
       loop holds a useful conversation, calls the right tool, and gets the
       arguments right is unmeasured. That is a different problem from unbuilt
       and it is the reason this is `in-progress` rather than `implemented`.
-- [ ] **Should the four surfaces share one thread?** Today they do not. One
-      continuous conversation across the face, the dashboard and Slack is what
-      the roadmap's Phase 1 asks for, and it needs a durable name for the
-      client-session surfaces before it is possible.
+- [ ] **Should the four surfaces share one thread?** Today two of them have no
+      thread at all. The dashboard and the face need a conversation key before
+      sharing one is even a question; the CLI and Slack have keys and hold
+      separate threads. Phase 1 asks for one continuous conversation across the
+      face, the dashboard and Slack, and the gap is larger than it looks from
+      the endpoint's signature.
 - [ ] **When does the default become local?** The roadmap's sequencing is ship
       on Claude, get the loop correct, then swap and find out what breaks.
       The trigger is unstated. See `local-brain`.
@@ -149,6 +157,14 @@ turn that wedges ends on a timeout for the same reason.
       reviewable PR, and it stops being defensible the moment either changes.
       The mechanism does not exist, so the question is currently answered by
       accident rather than on purpose.
+- [ ] **Should the model be able to choose `unattended`?** It can today: the
+      tool schema invites it ("true for a run nobody will watch"), and a `true`
+      is written into the task body, read by `runner.attended()`, and withholds
+      `--permission-prompt-tool` from every mutating stage of that run. The
+      runner's own comment says what follows — a refusal the permission mode
+      does not cover is "refused on the spot and the stage works around it
+      silently". It fails closed rather than open, so this is not an escalation;
+      it is one sentence in a chat window deciding that nobody is watching.
 - [ ] **Is `launch_run` on the right side of the gate?** It is allowlisted and
       it spends money and starts a process. The argument for executing it
       directly — dev work, ends at a reviewable PR — is written down and looks

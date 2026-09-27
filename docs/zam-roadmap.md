@@ -126,13 +126,15 @@ Answer it — in Slack or to the face — and have it act.
   repositories); **describe new work** ❌ — `look into why the build is slow`
   should scaffold a Linear issue and then dispatch, and there is no Linear
   tool in the table at all
-- 🟡 Same conversation across the face, the dashboard, and Slack — each
-  surface continues *a* conversation, but not the same one. The CLI and Slack
-  hand over a durable name (`--conversation`, the channel id) which the loop
-  maps to a session on disk; the dashboard and the face hand back a client
-  session id per turn, so a thread started on the face is not the thread Slack
-  is holding. One shared thread needs a durable name for the two
-  client-session surfaces.
+- ❌ Same conversation across the face, the dashboard, and Slack — and the gap
+  is bigger than one shared thread. The CLI and Slack hand over a durable name
+  (`--conversation`, the channel id) which the loop maps to a session on disk,
+  so each holds a thread; they are two threads, not one. **The dashboard and
+  the face hold nothing:** both post `{message}` alone and ignore the `session`
+  the endpoint hands back, so every turn there is a fresh conversation. The
+  endpoint takes a `session` and so does `loop.ask`, which is why this reads as
+  working from the Python side alone — it was described that way in this file
+  until the claim was checked against the two clients on 2026-09-27.
 - ~~Launch-from-Slack~~ ✅ done (`!zam-start`) — the deterministic half of the
   reply. What remains below is the conversational half.
 - **Decided: v1 runs on Claude, built provider-configurable.** The loop's hard

@@ -90,8 +90,16 @@ def _command(provider: Mapping[str, Any], prompt: str, session: str | None, is_n
     #   - launch_run does act, and is allowlisted deliberately: it ends at a
     #     pull request a human reviews, and launch.launch carries its own
     #     guards (valid issue key, committed verify gate, busy-fleet refusal)
+    #     — but note it also takes `unattended`, which the MODEL chooses. A
+    #     true there reaches the task body, runner.attended() reads it, and
+    #     every mutating stage then loses --permission-prompt-tool, so a
+    #     refusal is worked around silently instead of reaching a person. It
+    #     fails closed, not open; the cost is that one sentence from a chat
+    #     surface can take the human out of an hour-long run.
     # The gate is not the permission mode; it is what each tool is allowed to
-    # do. A tool that could merge or deploy must never be allowlisted here.
+    # do. There is nothing to withhold a tool from here — the allowlist below is
+    # derived from every key in TOOLS — so a tool that must not be granted has
+    # to be kept out of that table, not out of this list.
     #
     # Persistence stays ON — continuity is the point of a conversation, and
     # --resume needs a persisted session. A fresh conversation gets a new
@@ -104,7 +112,10 @@ def _command(provider: Mapping[str, Any], prompt: str, session: str | None, is_n
     # credentials for a non-vendor provider all come from provider_env.
     if provider.get("context_length"):
         env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = str(provider["context_length"])
-    # The tools, and permission to call the read-only ones without prompting.
+    # The tools, and permission to call every one of them without prompting —
+    # the whole table, reads and acts alike. See the per-tool justification
+    # above; "the read-only ones" is what this line used to say and it was
+    # never true of launch_run or propose_merge.
     # Order matters: --mcp-config and --allowedTools are variadic, so the
     # single-valued flags and the prompt come last (broker.py learned this the
     # hard way).
@@ -169,7 +180,12 @@ def ask(prompt: str, session: str | None = None, conversation: str | None = None
     text = str(prompt or "").strip()
     if not text:
         return Turn(False, "Say something and I'll help.")
-    is_new = True
+    # A session the caller hands in is one it got from an earlier turn, so it
+    # exists and must be --resumed. This was `is_new = True` unconditionally,
+    # which sent an existing id to --session-id instead: the mirror of the trap
+    # _command's docstring warns about, failing with "session already in use".
+    # Invisible so far only because no client has ever sent one back.
+    is_new = session is None
     if session is None and conversation is not None:
         session, is_new = _session_for(conversation)
     try:

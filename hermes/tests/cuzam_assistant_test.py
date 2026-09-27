@@ -207,6 +207,61 @@ class ConversationMemoryTest(unittest.TestCase):
         self.assertTrue(is_new)
 
 
+class CallerSuppliedSessionTest(unittest.TestCase):
+    """A session handed in by a surface is resumed, not created again.
+
+    The dashboard's /chat already passes `session=` straight through, so the
+    moment a client echoes back the id it was given, `ask` must --resume it.
+    Creating an existing id with --session-id fails with "session already in
+    use", which is the mirror of the trap _command's docstring warns about.
+    """
+
+    def _captured(self, **kwargs):
+        seen = {}
+
+        def fake_run(command, **_ignored):
+            seen["command"] = command
+            return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+
+        with mock.patch.object(subprocess, "run", side_effect=fake_run):
+            turn = loop.ask("what is running?", **kwargs)
+        return seen.get("command", []), turn
+
+    def test_a_supplied_session_is_resumed(self) -> None:
+        cmd, turn = self._captured(session="from-a-previous-turn")
+        self.assertTrue(turn.ok)
+        self.assertIn("--resume", cmd)
+        self.assertEqual(cmd[cmd.index("--resume") + 1], "from-a-previous-turn")
+        self.assertNotIn("--session-id", cmd)
+
+    def test_a_turn_with_no_session_still_creates_one(self) -> None:
+        cmd, turn = self._captured()
+        self.assertTrue(turn.ok)
+        self.assertIn("--session-id", cmd)
+        self.assertNotIn("--resume", cmd)
+
+
+class ProposeMergeTest(unittest.TestCase):
+    """`gh ... --jq '.[0]'` prints "null" for no match, not an empty line."""
+
+    def _propose(self, stdout: str):
+        from cuzam import config as cfg
+        done = subprocess.CompletedProcess([], 0, stdout=stdout, stderr="")
+        with mock.patch.object(cfg, "load_config", return_value=({}, None)), \
+             mock.patch.object(cfg, "repository_path", return_value=Path("/tmp/r")), \
+             mock.patch.object(subprocess, "run", return_value=done):
+            return tools.propose_merge(project="Kaffecard", issue="XARI-26")
+
+    def test_no_open_pr_is_reported_not_raised(self) -> None:
+        # The bug: "null" is truthy, so the guard never fired and pr["number"]
+        # raised TypeError exactly where this message belongs.
+        for empty in ("null", "", "   ", "not json"):
+            with self.subTest(stdout=empty):
+                out = self._propose(empty)
+                self.assertFalse(out["ok"])
+                self.assertIn("No open PR", out["message"])
+
+
 class LaunchToolTest(unittest.TestCase):
     """launch_run is a dev action: it executes, guarded by launch.launch."""
 

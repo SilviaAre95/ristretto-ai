@@ -3,7 +3,7 @@ id: custom-model-flows
 title: Custom Model Flows
 status: in-progress  # proposed | in-progress | implemented | deprecated
 created_at: 2026-07-18
-last_modified: 2026-09-26
+last_modified: 2026-09-27
 owner: project
 depends_on: [autonomous-coding]
 acceptance_criteria:
