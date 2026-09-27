@@ -44,8 +44,38 @@ ROOT = Path(__file__).resolve().parents[2]
 # Where a legacy name is *read* — i.e. where a shim actually lives. Tests are
 # not scanned as a class: a test naming an old name is asserting something
 # about it, not shimming it, and several already carry their own markers.
-SOURCES = ("cuzam", "scripts", "hermes/scripts", "hermes/skills")
+SOURCES = ("cuzam", "scripts", "hermes/scripts", "hermes/skills", ".githooks")
 SUFFIXES = (".py", ".sh", ".toml")
+
+
+def _is_source(path: pathlib.Path) -> bool:
+    """A file whose contents this guard should read.
+
+    Extension OR shebang, and the shebang half is not hypothetical: a review
+    found `.githooks/pre-push` — tracked, executable, extensionless, and holding
+    an unmarked `RISTRETTO_PRIVATE_ROOT_COMMIT` fallback that the first version
+    of this scan could not see at all. Its shim failing open matters more than
+    most: at 0.3.0 a grep sweep would drop the fallback from `install.sh` and
+    leave the push guard enforcing a different root commit than the installer
+    validated.
+
+    Keyed on the shebang rather than the executable bit, because a file's mode
+    is not what decides whether it is source.
+    """
+    if not path.is_file() or "__pycache__" in path.parts:
+        return False
+    if path.suffix in SUFFIXES:
+        return True
+    if path.suffix:
+        return False
+    try:
+        with path.open("rb") as handle:
+            first = handle.readline(128)
+    except OSError:  # pragma: no cover - unreadable is not source
+        return False
+    return first.startswith(b"#!") and any(
+        token in first for token in (b"sh", b"python")
+    )
 
 # The spellings that mean "this is here for the old name".
 #
@@ -89,8 +119,9 @@ def shim_sites() -> list[tuple[str, int, str]]:
     paths = [
         path
         for source in SOURCES
+        if (ROOT / source).exists()
         for path in sorted((ROOT / source).rglob("*"))
-        if path.suffix in SUFFIXES and "__pycache__" not in path.parts
+        if _is_source(path)
     ]
     # pyproject.toml ships the legacy console scripts and is not under SOURCES.
     paths.append(ROOT / "pyproject.toml")

@@ -10,6 +10,24 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`CUZAM_CONFIG_DIR` reached the installers and not the package.**
+  `install.sh`, `uninstall.sh` and `migrate-cuzam.sh` all resolve
+  `${CUZAM_CONFIG_DIR:-${RISTRETTO_CONFIG_DIR:-${XDG_CONFIG_HOME:-…}/cuzam}}`,
+  while Python honoured only `XDG_CONFIG_HOME` — so on a machine setting it the
+  installer wrote a user configuration that no reader ever opened, and the
+  symptom was the shipped defaults being used while a perfectly good config sat
+  on disk. Ported faithfully rather than redesigned: `config.config_dir()` is
+  the same chain in the same order, and `user_config_path()`,
+  `default_config_path()` and the secrets override slot all go through it. This
+  is the same installer/package split the `hermes_home()` fix below is about,
+  found while writing the contract down.
+
+- **The doorbell hardcoded `~/.hermes`.** It was the one reader left outside
+  that contract, so on a machine setting `CUZAM_HERMES_HOME` the `hermes send`
+  failed and the milestone was dropped — a doorbell that does not ring.
+
 ### Added
 
 - **Providers declare where they are served.** A new `hosting` field, one of

@@ -153,11 +153,21 @@ Two files, in this order, and **the first one to set a name wins**:
 | 1 | `<config dir>/env` | Cuzam's own override slot, beside its config. Optional, and nothing creates it for you. |
 | 2 | `~/.hermes/.env` | Where secrets normally live. This is the one the rest of this guide means. |
 
-`<config dir>` is `~/.config/cuzam` by default, but it follows the config file:
-`CUZAM_CONFIG` names it outright, and `XDG_CONFIG_HOME` moves it. On a machine
-that sets either, the override slot is somewhere else, so resolve it rather than
-assuming — `python -c 'from cuzam.config import user_env_path;
-print(user_env_path())'` prints the path actually read.
+`<config dir>` is `~/.config/cuzam` by default, and three things move it, in
+this order: `CUZAM_CONFIG` names the config file outright, `CUZAM_CONFIG_DIR`
+names the directory, and `XDG_CONFIG_HOME` moves its parent. So resolve it
+rather than assuming:
+
+```bash
+python -c 'from cuzam.config import user_env_path; print(user_env_path())'
+```
+
+One consequence worth knowing before you use the slot: because it follows
+`CUZAM_CONFIG`, running with `CUZAM_CONFIG=$repo/cuzam.yaml` — which
+`scripts/check.sh` sets on every run — resolves it to `<repo>/env`, inside the
+checkout. `/env` is gitignored for that reason, but do not put a credential
+there expecting the secret scanner to catch it: it matches Slack token shapes,
+not a Linear key.
 
 Any **non-empty** value already exported beats both files. The wording matters:
 the guard is a truthiness check, so an intentionally blank export does *not*

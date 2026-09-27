@@ -157,5 +157,54 @@ class HermesHomeTest(unittest.TestCase):
         self.assertEqual(config.hermes_home({}), Path.home() / ".hermes")
 
 
+class ConfigDirTest(unittest.TestCase):
+    """The other installer/package split, found while fixing the first one.
+
+    `install.sh`, `uninstall.sh` and `migrate-cuzam.sh` all resolve
+    `${CUZAM_CONFIG_DIR:-${RISTRETTO_CONFIG_DIR:-${XDG_CONFIG_HOME:-...}/cuzam}}`.
+    Python honoured only `XDG_CONFIG_HOME`, so on a machine setting
+    `CUZAM_CONFIG_DIR` the installer wrote a configuration no reader here ever
+    opened — and the symptom is the shipped defaults being used while a
+    perfectly good user config sits on disk.
+    """
+
+    def setUp(self) -> None:
+        env._announced.clear()
+
+    def test_the_installers_chain_is_honoured_in_order(self) -> None:
+        self.assertEqual(config.config_dir({"CUZAM_CONFIG_DIR": "/c"}), Path("/c"))
+        self.assertEqual(
+            config.config_dir({"XDG_CONFIG_HOME": "/x"}), Path("/x/cuzam")
+        )
+        self.assertEqual(
+            config.config_dir({"CUZAM_CONFIG_DIR": "/c", "XDG_CONFIG_HOME": "/x"}),
+            Path("/c"),
+        )
+        self.assertEqual(config.config_dir({}), Path.home() / ".config" / "cuzam")
+
+    def test_the_legacy_directory_name_still_works_and_says_so(self) -> None:
+        stream = io.StringIO()
+        with contextlib.redirect_stderr(stream):
+            found = config.config_dir({"RISTRETTO_CONFIG_DIR": "/r"})
+        self.assertEqual(found, Path("/r"))
+        self.assertIn("RISTRETTO_CONFIG_DIR is deprecated", stream.getvalue())
+        self.assertIn("0.3.0", stream.getvalue())
+
+    def test_the_config_and_secrets_paths_both_follow_it(self) -> None:
+        """The whole point: a reader that ignored it read the wrong file."""
+        self.assertEqual(
+            config.user_config_path({"CUZAM_CONFIG_DIR": "/c"}), Path("/c/config.yaml")
+        )
+        self.assertEqual(
+            config.user_env_path({"CUZAM_CONFIG_DIR": "/c"}), Path("/c/env")
+        )
+
+    def test_an_explicit_config_file_still_wins(self) -> None:
+        self.assertEqual(
+            config.user_config_path({"CUZAM_CONFIG": "/f.yaml", "CUZAM_CONFIG_DIR": "/c"}),
+            Path("/f.yaml"),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

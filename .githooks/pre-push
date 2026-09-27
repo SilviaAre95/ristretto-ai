@@ -2,6 +2,10 @@
 # Refuse to push any ref descended from Cuzam's private-history root.
 set -euo pipefail
 
+# RISTRETTO_PRIVATE_ROOT_COMMIT is the pre-rename spelling. Drop it in 0.3.0 —
+# and drop it here and in scripts/install.sh in the SAME change: this guard
+# and the installer that validates the root commit must agree, and a sweep
+# that removes one fallback leaves the other enforcing a different root.
 private_root="${CUZAM_PRIVATE_ROOT_COMMIT:-${RISTRETTO_PRIVATE_ROOT_COMMIT:-4ebdb7a3919a48cba84bf39ccd424fcdd9221210}}"
 zero=0000000000000000000000000000000000000000
 
