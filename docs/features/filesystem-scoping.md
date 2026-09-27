@@ -461,6 +461,27 @@ kanban record outright, and it would route around it with the allowlisted
 `cat`. Writes into either store are denied wholesale, which that decision says
 nothing against.
 
+**The path list stops growing here, and that is a decision.** Four separate
+rules in this floor have now been found present-and-inert: a bare absolute path,
+the two state homes written as literals past their own configuration, a payload
+shape the CLI discards, and `Edit(.git/**)` — which matches nothing in a
+worktree, because there `.git` is a *file* holding
+`gitdir: <primary>/.git/worktrees/<name>` and the hooks run from the primary
+checkout, outside the project directory `**` is rooted at.
+
+Each was fixed by adding or correcting a pattern, and each fix was followed by
+the next instance. That is evidence about the instrument, not the list:
+enumerating path patterns in `permissions.deny` cannot be made complete, and
+this spec says why in its own words — `cat` is on the read-only allowlist, a
+subprocess is invisible to every rule, and only the kernel is below `cat`.
+
+So the resolved git dir is deliberately *not* added, although the mechanism
+exists (`ignore_artifacts` already resolves `--git-common-dir`). Bounding
+`.git` is the OS layer's job; this section names `<repo>/.git` explicitly and
+the floor was never it. What the floor keeps is what has been *proven* to hold:
+the credential paths, the two resolved state homes, the command prefixes, and
+the canary that makes any of it falsifiable.
+
 **Three limits the rules look like they cover and do not.** A read through
 `cat` is bounded by nothing here, so the `Read` rules raise the cost of a read
 and do not prevent one — the audit trail is what they actually buy, since a

@@ -39,6 +39,19 @@ and releases use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   because `run-loop.sh` deliberately cannot read the configuration and a copy of
   the list in bash would be a second place holding one fact.
 
+  **The path list is deliberately not exhaustive, and stops here.** Four rules in
+  it were found present-and-inert across three review rounds — a bare absolute
+  path, the state homes written as literals, a payload shape the CLI discards,
+  and `Edit(.git/**)`, which matches nothing in a worktree because `.git` is a
+  file there and the hooks live in the primary checkout. Each fix was followed by
+  the next instance, which is evidence about the instrument rather than the list:
+  `cat` is on the read-only allowlist and only the kernel is below it. So the
+  resolved git dir is not added, the `.env.<environment>` enumeration from the
+  previous round is reverted to `.env` and `.env*.local` — those names are what
+  Next.js documents as committable, so denying them broke committed config in
+  most target repositories — and bounding paths properly is left to the OS layer
+  that `docs/features/filesystem-scoping.md` specifies.
+
   **Proven by a refusal, not by the rules being present.** A payload Claude Code
   cannot parse is discarded *in silence* — `deny` as a string rather than a list
   starts normally, exits 0, warns about nothing and reads the file — so the

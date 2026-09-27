@@ -645,7 +645,6 @@ class StageDenyFloorTests(unittest.TestCase):
         """
         for rule in machine_denials({"CUZAM_STATE_HOME": "state", "HERMES_HOME": "h"}):
             inner = rule[rule.index("(") + 1 : rule.rindex(")")]
-            self.assertTrue(Path(inner.lstrip("/")).is_absolute() or inner.startswith("//"))
             self.assertTrue(inner.startswith("//"), rule)
         under_tmp = machine_denials({"CUZAM_STATE_HOME": "/tmp/s", "HERMES_HOME": "/tmp/h"})
         # /tmp is a symlink to /private/tmp on macOS; the rules must name the
@@ -677,6 +676,19 @@ class StageDenyFloorTests(unittest.TestCase):
         self.assertIn("Read(//work/hermes/auth.json)", rules)
         for glob in ("*credential*", "oauth*", "*.key", "*.pem"):
             self.assertIn(f"Read(//work/hermes/{glob})", rules)
+
+    def test_a_parenthesis_in_the_home_path_is_refused(self) -> None:
+        """`Tool(pattern)` cannot express it, and the guard's own parse hid it.
+
+        `assert_enforceable` finds the pattern with `index("(")`/`rindex(")")`,
+        so a path holding a parenthesis produced a rule that passed the
+        guard while the CLI may discard the entire payload — the silent
+        floor-loss this whole mechanism exists to prevent. Fail closed instead.
+        """
+        with self.assertRaises(FlowError):
+            stage_settings(
+                {"CUZAM_STATE_HOME": "/mnt/Drive (work)/s", "HERMES_HOME": "/h"}
+            )
 
     def test_an_unparseable_payload_is_refused_at_the_spawn_site(self) -> None:
         """Claude Code discards a payload it cannot parse, in silence.
@@ -743,10 +755,15 @@ class StageDenyFloorTests(unittest.TestCase):
         self.assertNotIn("Read(**/.env.*)", STAGE_DENY)
         self.assertNotIn("Edit(.env.*)", STAGE_DENY)
         self.assertIn("Read(**/.env)", STAGE_DENY)
-        # The uncommitted environment names are covered by name, so the
-        # template stays reachable without a blanket glob.
-        for name in ("local", "production", "staging", "development", "test"):
-            self.assertIn(f"Read(**/.env.{name})", STAGE_DENY)
+        self.assertIn("Read(**/.env*.local)", STAGE_DENY)
+        # And NOT the environment names. They are what Next.js documents as
+        # committable defaults, so denying them reproduces this very defect in
+        # most of the configured repositories — a stage unable to read or edit
+        # committed, non-secret config, and unable to ask because a deny is
+        # terminal. `.env*.local` is the convention that means "secret".
+        for name in ("production", "staging", "development", "test"):
+            self.assertNotIn(f"Read(**/.env.{name})", STAGE_DENY)
+            self.assertNotIn(f"Edit(**/.env.{name})", STAGE_DENY)
 
     def test_the_preflight_probe_carries_the_floor(self) -> None:
         """The cheapest place the payload is exercised at all.
@@ -855,7 +872,13 @@ class StageDenyFloorTests(unittest.TestCase):
         """
         for rule in STAGE_DENY:
             self.assertNotIn(".credentials.json", rule)
-            self.assertNotIn("~/.claude/", rule)
+        # Narrowed from `~/.claude/` wholesale, which forbade far more than the
+        # exception on the record and locked in a live exposure:
+        # `~/.claude/projects/**` holds the full transcript of every past run on
+        # the machine, and the floor denies `~/.claude.json` for holding
+        # `oauthAccount` while leaving those readable beside it. Adding that rule
+        # should be a decision, not a test failure.
+        self.assertIn("Read(~/.claude.json)", STAGE_DENY)
 
     def test_codex_stages_get_no_settings_flag(self) -> None:
         """It is a claude flag. codex is sandboxed by -s instead."""

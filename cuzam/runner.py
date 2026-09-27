@@ -472,28 +472,23 @@ STAGE_DENY = (
     # alone left `packages/api/.env` writable in a monorepo, which mirrors the
     # committed file and was wrong there too.
     #
-    # The environment-specific names are enumerated rather than globbed with
-    # `.env.*`. Globbing takes the template with it — this repository tracks
-    # `hermes/.env.example`, `getting-started.md` tells you to copy from it, and
-    # adding a secret here means a `*_env` declaration plus a line in it. A deny
-    # is terminal, so a stage doing that work could not read it, could not edit
-    # it, and could not ask; it would ship the declaration undocumented.
-    # Enumerating covers the uncommitted names that hold secrets while leaving
-    # `.example`, `.sample` and `.template` reachable.
+    # `.env` and `.env*.local`, and nothing else — reverting an enumeration of
+    # `.env.production`, `.env.staging`, `.env.development` and `.env.test` that
+    # was both too wide and too narrow. Too wide because those are exactly the
+    # names Next.js documents as *committable* defaults (only `.env*.local` must
+    # be gitignored), so in a Next.js target repo — most of the configured ones —
+    # a stage could neither read nor edit committed, non-secret config, and a
+    # deny is terminal so it could not ask: the same defect as blocking
+    # `hermes/.env.example`, one round later. Too narrow because `.env.prod`,
+    # `.env.dev`, `.env.ci` and any per-customer name went unmatched, so the
+    # list never delivered the coverage that was its excuse.
+    #
+    # `.env*.local` is the one convention that reliably means "secret, not
+    # committed". Everything past it is the kernel layer's job.
     "Read(**/.env)",
-    "Read(**/.env.local)",
-    "Read(**/.env.*.local)",
-    "Read(**/.env.production)",
-    "Read(**/.env.staging)",
-    "Read(**/.env.development)",
-    "Read(**/.env.test)",
+    "Read(**/.env*.local)",
     "Edit(**/.env)",
-    "Edit(**/.env.local)",
-    "Edit(**/.env.*.local)",
-    "Edit(**/.env.production)",
-    "Edit(**/.env.staging)",
-    "Edit(**/.env.development)",
-    "Edit(**/.env.test)",
+    "Edit(**/.env*.local)",
     # Commands, at parity with the committed file. Each reason applies at least
     # as strongly to a stage nobody is watching.
     #
@@ -511,8 +506,23 @@ STAGE_DENY = (
     "Bash(git push -f:*)",
     "Bash(git reset --hard:*)",
     # Rewriting history, or arranging for code to run as the operator later.
-    # `.git/hooks` and `core.hooksPath` are why this one is not merely tidiness.
-    # The flow's whole contract is a feature branch and a pull request.
+    #
+    # **This rule is inert for a staged stage, and saying so is the point.** A
+    # stage builds in a git worktree, and in a worktree `.git` is a FILE holding
+    # `gitdir: <primary>/.git/worktrees/<name>` — verified, not assumed. So no
+    # path `<cwd>/.git/**` exists for this to match, the real gitdir and the
+    # hooks that run from `<primary>/.git/hooks` are outside the project
+    # directory, and `**` never reaches outside it. `Edit(.git)`, the pointer
+    # file that redirects everything, is not denied either.
+    #
+    # It is kept because the committed settings have it and it does bite outside
+    # a worktree, and it is NOT chased with resolved rules for the common git
+    # dir, because that would be the fifth path pattern added to this list in
+    # answer to the same failure. `ignore_artifacts` above already resolves
+    # `--git-common-dir` for the same reason, so the mechanism exists; what does
+    # not exist is evidence that adding a fifth pattern ends the sequence.
+    # Bounding `.git` is the OS layer's job — docs/features/filesystem-scoping.md
+    # names `<repo>/.git` explicitly and this floor was never it.
     "Edit(.git/**)",
 )
 
@@ -645,6 +655,17 @@ def assert_enforceable(payload: Mapping[str, Any]) -> None:
             raise FlowError(
                 f"stage settings: {rule!r} is a bare absolute path, which Claude Code "
                 "accepts and then matches nothing with; use ~/ or a // prefix"
+            )
+        # A resolved home containing a parenthesis — `~/Drive (work)/state` — is
+        # interpolated straight into `Tool(pattern)`, and this function's own
+        # `index("(")`/`rindex(")")` parse would wave the result through while
+        # the CLI may discard the whole payload. Fail closed: this guard exists
+        # because a silently dropped floor is the failure mode.
+        if not rule.startswith("Bash(") and ("(" in inner or ")" in inner):
+            raise FlowError(
+                f"stage settings: {rule!r} has a parenthesis in its path, which "
+                "cannot be expressed as a permission rule. Move the state home "
+                "somewhere without one, or a stage would run with no floor."
             )
 
 
